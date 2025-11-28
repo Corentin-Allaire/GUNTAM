@@ -42,6 +42,7 @@ class FourierPositionalEncoding(nn.Module):
     def __init__(
         self,
         input_dim: int = 3,
+        high_level_dim: int = 3,
         num_frequencies: int = 6,
         dim_max: list = [200.0, 200.0, 1000.0],
         device_acc: str = "cpu",
@@ -58,7 +59,7 @@ class FourierPositionalEncoding(nn.Module):
 
         self.input_dim = input_dim
         self.num_frequencies = num_frequencies
-        self.output_dim = input_dim * num_frequencies * 2 + 3  # Fourier + cos(phi) + sin(phi) + eta
+        self.output_dim = input_dim * num_frequencies * 2 + high_level_dim  # Fourier + cos(phi) + sin(phi) + eta
         self.dim_max = torch.tensor(dim_max, device=device_acc)
 
         # Create frequency matrix B with powers of 2: [2^0, 2^1, 2^2, ..., 2^(num_frequencies-1)]
