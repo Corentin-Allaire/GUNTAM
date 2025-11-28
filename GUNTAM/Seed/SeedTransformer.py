@@ -4,9 +4,9 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from GUNTAM.Transformer import MultiHeadAttention
-from GUNTAM.Transformer import TransformerEncoder
-from GUNTAM.Transformer import FourierPositionalEncoding
+from GUNTAM.Transformer.Transformer import MultiHeadAttention
+from GUNTAM.Transformer.Transformer import TransformerEncoder
+from GUNTAM.Transformer.Embeding import FourierPositionalEncoding
 
 
 class SeedTransformer(nn.Module):

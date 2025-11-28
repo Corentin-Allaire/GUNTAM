@@ -18,5 +18,6 @@ build-backend = "pdm.backend"
 distribution = true
 
 [tool.flake8]
-max-line-length = 100
+max-line-length = 120
+ignore = ["W293"]
 exclude = [".venv", "__pycache__"]
