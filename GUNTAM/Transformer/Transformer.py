@@ -99,13 +99,29 @@ class MultiHeadAttention(nn.Module):
                 f"Input tensor dimension must be the same as the transformer dim: {self.input_dim}, got {x.size(-1)}"
             )
 
+        if mask is not None:
+            if mask.dim() == 2:
+                key_mask = mask.unsqueeze(1).unsqueeze(2)
+            elif mask.dim() == 3:
+                key_mask = mask.unsqueeze(1)
+                if torch.any(torch.all(key_mask, dim=-1)):
+                    raise ValueError("All positions are masked for at least one query position.")
+            else:
+                raise ValueError(
+                    "Mask tensor must have 2 or 3 dimensions (batch_size, seq_len) or (batch_size, seq_len, seq_len)"
+                )
+        else:
+            key_mask = None
+
         if self.use_pytorch:
             # Use multi-head splitting for flash attention
             qkv = self.qkv_linear(x)
-            qkv = qkv.view(batch_size, -1, self.num_heads, 3 * self.head_dim)
-            q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)
-            key_mask = mask.unsqueeze(1).unsqueeze(2)
+            qkv = qkv.view(batch_size, -1, self.num_heads, 3 * self.head_dim) # (batch_size, seq_len, num_heads, 3 * head_dim)
+            q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1) # each: (batch_size, num_heads, seq_len, head_dim)
             
+            # Invert mask for PyTorch flash attention (True = keep, False = mask)
+            key_mask = ~key_mask if key_mask is not None else None
+
             #  Use torch's flash attention (no attn weights returned!)
             attn_output = F.scaled_dot_product_attention(
                 q, k, v, attn_mask=key_mask, dropout_p=self.dropout.p if self.training else 0.0
@@ -124,17 +140,13 @@ class MultiHeadAttention(nn.Module):
             # (batch_size, seq_len, num_heads, 3 * head_dim)
             q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)
 
-            # Mask broadcast to (batch_size, num_heads, seq_len, seq_len)
-            key_mask = mask.unsqueeze(1).unsqueeze(2) if mask is not None else None
-
             attn_output, attn_weights = manual_scaled_dot_product_attention(
                 q, k, v, key_mask
             )
 
-            # If multiple heads, average attention weights over heads dimension
+            # If multiple heads, extracting the attention weights doesn't make sense
             if self.num_heads > 1:
-                # (batch_size, num_heads, seq_len, seq_len) -> (batch_size, seq_len, seq_len)
-                attn_weights = attn_weights.mean(dim=1)
+                attn_weights = None
 
             # Concatenate heads back: (batch_size, seq_len, model_dim)
             output = (
