@@ -60,7 +60,7 @@ class TestScaledDotProductAttention:
 
         # Mask last 2 query positions (True = masked)
         mask = torch.zeros(batch_size, num_heads, seq_len, seq_len, dtype=torch.bool)
-        mask[:, :, -2:, :] = True
+        mask[:, :, :, -2:] = True
 
         output, logits = manual_scaled_dot_product_attention(q, k, v, mask)
 
@@ -69,21 +69,52 @@ class TestScaledDotProductAttention:
         assert logits.shape == (batch_size, num_heads, seq_len, seq_len)
 
         # Masked query rows in logits should be -inf everywhere
-        assert torch.isinf(logits[:, :, -2:, :]).all()
+        assert torch.isinf(logits[:, :, :, -2:]).all()
 
         # Unmasked query rows should be finite
-        assert torch.isfinite(logits[:, :, :-2, :]).all()
+        assert torch.isfinite(logits[:, :, :, :-2]).all()
 
         # For unmasked rows, softmax(logits) should be valid distributions
-        probs = torch.softmax(logits[:, :, :-2, :], dim=-1)
+        probs = torch.softmax(logits, dim=-1)
         assert torch.allclose(
             probs.sum(dim=-1),
-            torch.ones(batch_size, num_heads, seq_len - 2),
+            torch.ones(batch_size, num_heads, seq_len),
             atol=1e-6,
         )
 
         # Sanity: no NaNs in outputs
         assert not torch.isnan(logits).any(), "Attention logits contain NaN values"
+
+    def test_manual_vs_pytorch_attention_equivalence(self):
+        """Manual attention should match PyTorch scaled_dot_product_attention."""
+        batch_size, num_heads, seq_len, d_k = 2, 3, 7, 16
+
+        torch.manual_seed(123)
+        q = torch.randn(batch_size, num_heads, seq_len, d_k)
+        k = torch.randn(batch_size, num_heads, seq_len, d_k)
+        v = torch.randn(batch_size, num_heads, seq_len, d_k)
+
+        # Build a boolean mask: True = masked (blocked) for the manual implementation
+        mask = torch.zeros(batch_size, num_heads, seq_len, seq_len, dtype=torch.bool)
+        mask[:, :, :, -2:] = True  # mask last 2 query rows
+
+        # Manual implementation
+        out_manual, logits_manual = manual_scaled_dot_product_attention(q, k, v, mask)
+
+        # PyTorch implementation expects inverted boolean (True = keep)
+        attn_mask = ~mask
+        out_torch = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, dropout_p=0.0
+        )
+
+        # Compare outputs
+        assert torch.allclose(out_manual, out_torch, atol=1e-6)
+
+        # Recompute expected logits to compare explicitly
+        scale = 1.0 / math.sqrt(d_k)
+        logits_expected = torch.matmul(q, k.transpose(-2, -1)) * scale
+        logits_expected = logits_expected.masked_fill(mask, float("-inf"))
+        assert torch.allclose(logits_manual, logits_expected, atol=1e-6)
 
 class TestMultiHeadAttention:
     """Test suite for multi-head attention layer."""

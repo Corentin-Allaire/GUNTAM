@@ -50,7 +50,7 @@ class TestSeedTransformerForward:
         assert output.shape == (3, 7, 64)
         # Attention weights from matching_attention single head -> (B, 1, S, S)
         assert attn_weights is not None
-        assert attn_weights.shape == (3, 1, 7, 7)
+        assert attn_weights.shape == (3, 7, 7)
         assert not torch.isnan(output).any(), "Output contains NaN values"
         assert not torch.isnan(attn_weights).any(), "Attention weights contain NaN values"
 
@@ -62,10 +62,10 @@ class TestSeedTransformerForward:
         output, attn_weights = model(hits, mask)
 
         assert output.shape == (2, 6, 32)
-        assert attn_weights.shape == (2, 1, 6, 6)
+        assert attn_weights.shape == (2, 6, 6)
         # Masked rows in attn_weights should be -inf (matching manual attention behavior)
         # Only check if any inf appears in masked rows
-        assert torch.isinf(attn_weights[:, :, :, -2:]).all(), "Masked query rows not set to -inf"
+        assert torch.isinf(attn_weights[:, :, -2:]).all(), "Masked query rows not set to -inf"
 
     def test_reproducibility(self):
         torch.manual_seed(123)

@@ -133,4 +133,7 @@ class SeedTransformer(nn.Module):
         transformer_output = self.encodeSpacePoint(hits, mask)
         _, attn_weights = self.matching_attention(transformer_output, mask)
 
+        # The number of heads is 1 for matching attention, so we can squeeze that dimension
+        attn_weights = attn_weights.squeeze(1)
+
         return transformer_output, attn_weights
