@@ -1,13 +1,13 @@
-import sys
-from typing import Dict, Tuple, Any
+from typing import Dict
 import torch
 import torch.nn.functional as F
 
+
 def attention_loss(
-    attention_map_bin: torch.Tensor, # [seq_len, seq_len] attention map logits
-    pairs1: torch.Tensor, # [N_pairs] first hit indices of each pair
-    pairs2: torch.Tensor, # [N_pairs] second hit indices of each pair
-    target: torch.Tensor, # [N_pairs] target labels (-1 or 1)
+    attention_map_bin: torch.Tensor,  # [seq_len, seq_len] attention map logits
+    pairs1: torch.Tensor,  # [N_pairs] first hit indices of each pair
+    pairs2: torch.Tensor,  # [N_pairs] second hit indices of each pair
+    target: torch.Tensor,  # [N_pairs] target labels (-1 or 1)
 ) -> torch.Tensor:
     """
     Compute the attention loss using binary cross-entropy.
@@ -38,18 +38,17 @@ def attention_loss(
     logits = attention_map_bin[pairs1, pairs2]
 
     # Targets: map {-1, +1} -> {0, 1}
-    targets = ((target.float() + 1.0) * 0.5)
+    targets = (target.float() + 1.0) * 0.5
 
-    return F.binary_cross_entropy_with_logits(logits, targets, reduction="mean")
-
+    return F.binary_cross_entropy_with_logits(logits, targets, reduction="sum")
 
 
 def full_attention_loss(
-    attention_map_bin: torch.Tensor, # [seq_len, seq_len] attention map logits
-    pairs1: torch.Tensor, # [N_pairs] first hit indices of each pair
-    pairs2: torch.Tensor, # [N_pairs] second hit indices of each pair
-    target: torch.Tensor, # [N_pairs] target labels (-1 or 1)
-    ) -> torch.Tensor:
+    attention_map_bin: torch.Tensor,  # [seq_len, seq_len] attention map logits
+    pairs1: torch.Tensor,  # [N_pairs] first hit indices of each pair
+    pairs2: torch.Tensor,  # [N_pairs] second hit indices of each pair
+    target: torch.Tensor,  # [N_pairs] target labels (-1 or 1)
+) -> torch.Tensor:
     """
     Compute the attention loss using only the last transformer layer's attention.
 
@@ -81,7 +80,6 @@ def full_attention_loss(
     pos_hits = torch.unique(torch.cat([pairs1[pos_mask], pairs2[pos_mask]]))
     num_valid_hits = int(torch.max(pos_hits).item()) + 1
 
-
     # Build a target matrix
     target = torch.zeros_like(attention_map_bin, device=device)
     target[pairs1[pos_mask], pairs2[pos_mask]] = 1.0
@@ -94,7 +92,6 @@ def full_attention_loss(
     inactive_cols = torch.ones(attention_map_bin.shape[0], dtype=torch.bool, device=device)
     inactive_cols[pos_hits] = False
     full_mask[:, inactive_cols] = False
-
 
     logits = attention_map_bin[full_mask]
     targets = target[full_mask]
@@ -109,11 +106,11 @@ def full_attention_loss(
 
 
 def top_attention_loss(
-    attention_map_bin: torch.Tensor, # [seq_len, seq_len] attention map logits
-    pairs1: torch.Tensor, # [N_pairs] first hit indices of each pair
-    pairs2: torch.Tensor, # [N_pairs] second hit indices of each pair
-    target: torch.Tensor, # [N_pairs] target labels (-1 or 1)
-    ) -> torch.Tensor:
+    attention_map_bin: torch.Tensor,  # [seq_len, seq_len] attention map logits
+    pairs1: torch.Tensor,  # [N_pairs] first hit indices of each pair
+    pairs2: torch.Tensor,  # [N_pairs] second hit indices of each pair
+    target: torch.Tensor,  # [N_pairs] target labels (-1 or 1)
+) -> torch.Tensor:
     """
     Top-k attention loss using BCE-with-logits on masked entries, styled like full_attention_loss.
 
@@ -166,10 +163,13 @@ def top_attention_loss(
     top_neg_scores, _ = torch.topk(neg_scores, k=k, largest=True, sorted=False)
 
     logits = torch.cat([pos_scores, top_neg_scores], dim=0)
-    targets = torch.cat([
-        torch.ones(num_pos, device=device),
-        torch.zeros(top_neg_scores.numel(), device=device)
-    ], dim=0)
+    targets = torch.cat(
+        [
+            torch.ones(num_pos, device=device),
+            torch.zeros(top_neg_scores.numel(), device=device),
+        ],
+        dim=0,
+    )
     # Class-balanced weights
     pos_weight = 1.0 / max(num_pos, 1)
     neg_weight = 1.0 / max(top_neg_scores.numel(), 1)
@@ -178,14 +178,14 @@ def top_attention_loss(
 
 
 def attention_next_loss(
-    attention_map_bin: torch.Tensor, # [seq_len, seq_len] attention map logits
-    pairs1: torch.Tensor, # [N_pairs] first hit indices of each pair
-    pairs2: torch.Tensor, # [N_pairs] second hit indices of each pair
-    target: torch.Tensor, # [N_pairs] target labels (-1 or 1)
-    ) -> torch.Tensor:
+    attention_map_bin: torch.Tensor,  # [seq_len, seq_len] attention map logits
+    pairs1: torch.Tensor,  # [N_pairs] first hit indices of each pair
+    pairs2: torch.Tensor,  # [N_pairs] second hit indices of each pair
+    target: torch.Tensor,  # [N_pairs] target labels (-1 or 1)
+) -> torch.Tensor:
     """
     Attention loss using cross-entropy for sequential pairs.
-    
+
     For each hit i in the sequence, if there exists a positive pair (i, i+1),
     we use the attention distribution from hit i as logits and apply cross-entropy
     loss with target = i+1. This encourages the model to attend to the next hit
@@ -199,7 +199,7 @@ def attention_next_loss(
 
         Note:
             Pairs should be symmetric across direction `(i, j)` and `(j, i)` and must not include `(i, i)`.
-    
+
     """
     device = attention_map_bin.device
     pos_mask = target == 1
@@ -227,7 +227,7 @@ def attention_next_loss(
         source_eq = unique_sources.view(-1, 1) == sources.view(1, -1)  # [S, M]
 
         # Pair-wise forward/backward masks (per pair, relative to its own source)
-        forward_pairs_mask = targets > sources   # [M]
+        forward_pairs_mask = targets > sources  # [M]
         backward_pairs_mask = targets <= sources  # [M]
 
         # Broadcast to [S, M]
@@ -237,16 +237,12 @@ def attention_next_loss(
         targets_row = targets.view(1, -1)
 
         # For forward: take min target; use sentinel = num_valid_hits when absent
-        fwd_candidates = torch.where(
-            fwd_mask, targets_row, torch.full_like(targets_row, num_valid_hits)
-        )
+        fwd_candidates = torch.where(fwd_mask, targets_row, torch.full_like(targets_row, num_valid_hits))
         fwd_min, _ = torch.min(fwd_candidates, dim=1)  # [S]
-        fwd_exists = fwd_mask.any(dim=1)               # [S]
+        fwd_exists = fwd_mask.any(dim=1)  # [S]
 
         # For backward: take max target; use sentinel = -1 when absent
-        back_candidates = torch.where(
-            back_mask, targets_row, torch.full_like(targets_row, -1)
-        )
+        back_candidates = torch.where(back_mask, targets_row, torch.full_like(targets_row, -1))
         back_max, _ = torch.max(back_candidates, dim=1)  # [S]
 
         # Prefer forward if exists, else backward
@@ -255,9 +251,10 @@ def attention_next_loss(
 
     # Restrict logits to valid hits (slice the attention map, not the function)
     attention_logits = attention_map_bin[:num_valid_hits, :num_valid_hits]
-    loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="mean")
+    loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="sum")
 
     return loss
+
 
 def reconstruction_loss(
     reconstructed_particle: torch.Tensor,
@@ -321,27 +318,27 @@ def reconstruction_loss(
     loss_z_part = loss_function(
         reconstructed_particle[:, :, 0][valid_hits_mask],
         particles_data[:, :, 0][valid_hits_mask],
-        reduction="mean",
+        reduction="sum",
     )
     loss_eta_part = loss_function(
         reconstructed_particle[:, :, 1][valid_hits_mask],
         particles_data[:, :, 1][valid_hits_mask],
-        reduction="mean",
+        reduction="sum",
     )
-    loss_sin_phi_part =  loss_function(
+    loss_sin_phi_part = loss_function(
         reconstructed_particle[:, :, 2][valid_hits_mask],
         torch.sin(particles_data[:, :, 2][valid_hits_mask]),
-        reduction="mean",
+        reduction="sum",
     )
     loss_cos_phi_part = loss_function(
         reconstructed_particle[:, :, 3][valid_hits_mask],
         torch.cos(particles_data[:, :, 2][valid_hits_mask]),
-        reduction="mean",
+        reduction="sum",
     )
     loss_phi_part = loss_sin_phi_part + loss_cos_phi_part
     loss_pt_part = loss_function(
         (1.0 / pred_pt_clamped),
-        (1.0 /  particles_data[:, :, 3][valid_hits_mask]),
+        (1.0 / particles_data[:, :, 3][valid_hits_mask]),
         reduction="mean",
     )
 
@@ -354,6 +351,7 @@ def reconstruction_loss(
     }
 
     return rec_loss
+
 
 def hit_classification_loss(
     seed_hit_scores: torch.Tensor,
@@ -410,11 +408,9 @@ def hit_classification_loss(
             torch.full_like(target_labels, w_pos),
             torch.full_like(target_labels, w_neg),
         )
-        hit_bce_loss = F.binary_cross_entropy(
-            valid_probs, target_labels, weight=sample_weights, reduction="mean"
-        )
+        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, weight=sample_weights, reduction="sum")
     else:
         # Fallback to unweighted if a class is absent to avoid instability
-        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, reduction="mean")
+        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, reduction="sum")
 
     return hit_bce_loss

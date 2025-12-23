@@ -1,10 +1,62 @@
 import math
-from typing import Tuple, Optional
-
+from typing import Tuple, Optional, Dict, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+
+def load_state_dict_flex(model: torch.nn.Module, raw_state_dict: Dict[str, Any], desc: str = "model") -> None:
+    """
+    Attempt to load a raw state_dict handling compile / DP prefixes.
+
+    Order of operations:
+      1. Normalize key prefixes.
+      2. Try strict load.
+      3. If strict load fails, fall back to non-strict with a warning listing missing/unexpected keys.
+
+    Args:
+        model: The model to load the state_dict into.
+        raw_state_dict: The raw state_dict to load.
+        desc: Description of the model for logging purposes.
+    """
+    normalized = _normalize_state_dict_keys(raw_state_dict)
+    try:
+        model.load_state_dict(normalized, strict=True)
+        print(f"Loaded {desc} state_dict (strict)")
+    except RuntimeError as e:
+        print(f"Warning: strict load failed for {desc}: {e}. Retrying non-strict...")
+        missing_unexpected = model.load_state_dict(normalized, strict=False)
+        # missing_unexpected is a namedtuple (missing_keys, unexpected_keys)
+        print(
+            f"Non-strict load results for {desc}: missing={missing_unexpected.missing_keys}, "
+            f"unexpected={missing_unexpected.unexpected_keys}"
+        )
+
+
+def _normalize_state_dict_keys(state_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Strip torch.compile ('_orig_mod.') and optional DataParallel ('module.') prefixes.
+
+    We iteratively strip known prefixes so that models saved from compiled or DP-wrapped
+    modules can load into a plain, uncompiled instance. Saving code is left untouched
+    per user request; we only normalize on load.
+
+    Args:
+        state_dict: The original state_dict with potential prefixes.
+    Returns:
+        A new state_dict with prefixes stripped.
+    """
+    prefixes = ["_orig_mod.", "module."]
+    changed = True
+    # Iterate until no further prefix stripping occurs (handles nested cases).
+    while changed:
+        changed = False
+        for p in prefixes:
+            if any(k.startswith(p) for k in state_dict.keys()):
+                state_dict = {(k[len(p) :] if k.startswith(p) else k): v for k, v in state_dict.items()}
+                changed = True
+    return state_dict
 
 
 def manual_scaled_dot_product_attention(
@@ -116,18 +168,24 @@ class MultiHeadAttention(nn.Module):
         if self.use_pytorch:
             # Use multi-head splitting for flash attention
             qkv = self.qkv_linear(x)
-            qkv = qkv.view(batch_size, -1, self.num_heads, 3 * self.head_dim) # (batch_size, seq_len, num_heads, 3 * head_dim)
-            q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1) # each: (batch_size, num_heads, seq_len, head_dim)
-            
+            qkv = qkv.view(
+                batch_size, -1, self.num_heads, 3 * self.head_dim
+            )  # (batch_size, seq_len, num_heads, 3 * head_dim)
+            q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)  # each: (batch_size, num_heads, seq_len, head_dim)
+
             # Invert mask for PyTorch flash attention (True = keep, False = mask)
             key_mask = ~key_mask if key_mask is not None else None
 
             #  Use torch's flash attention (no attn weights returned!)
             attn_output = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=key_mask, dropout_p=self.dropout.p if self.training else 0.0
+                q,
+                k,
+                v,
+                attn_mask=key_mask,
+                dropout_p=self.dropout.p if self.training else 0.0,
             )
             attn_weights = None  # no weights available
-            
+
             # Concatenate heads: transpose back and reshape to combine heads
             output = (
                 attn_output.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
@@ -140,20 +198,14 @@ class MultiHeadAttention(nn.Module):
             # (batch_size, seq_len, num_heads, 3 * head_dim)
             q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)
 
-            attn_output, attn_weights = manual_scaled_dot_product_attention(
-                q, k, v, key_mask
-            )
+            attn_output, attn_weights = manual_scaled_dot_product_attention(q, k, v, key_mask)
 
             # If multiple heads, extracting the attention weights doesn't make sense
             if self.num_heads > 1:
                 attn_weights = None
 
             # Concatenate heads back: (batch_size, seq_len, model_dim)
-            output = (
-                attn_output.transpose(1, 2)
-                .contiguous()
-                .view(batch_size, -1, self.model_dim)
-            )
+            output = attn_output.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
 
         output = self.out_linear(output)
         output = self.dropout(output)
@@ -257,11 +309,14 @@ class EncoderLayer(nn.Module):
             attn_dropout = ff_dropout = dropout
 
         self.self_attn = MultiHeadAttention(
-            input_dim, model_dim, num_heads, attn_dropout, device=device, use_pytorch=use_pytorch
+            input_dim,
+            model_dim,
+            num_heads,
+            attn_dropout,
+            device=device,
+            use_pytorch=use_pytorch,
         )
-        self.feed_forward = TransformerFeedForward(
-            input_dim, 4 * input_dim, ff_dropout, device=device
-        )
+        self.feed_forward = TransformerFeedForward(input_dim, 4 * input_dim, ff_dropout, device=device)
         self.layer_norm1 = nn.LayerNorm(input_dim)
         self.layer_norm2 = nn.LayerNorm(input_dim)
         self._init_weights()
@@ -280,9 +335,7 @@ class EncoderLayer(nn.Module):
 
         return x_ff
 
-    def encode(
-        self, x: Tensor, mask: Optional[Tensor] = None
-    ) -> Tuple[Tensor, Tensor]:
+    def encode(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         """
         Path trough the encoder layer that returns attention weights.
         Args:
@@ -347,7 +400,7 @@ class TransformerEncoder(nn.Module):
         super(TransformerEncoder, self).__init__()
         if n_layers <= 0:
             raise ValueError("Number of layers must be greater than 0")
-        
+
         self.layers = nn.ModuleList()
 
         # Normalize num_heads to a per-layer list

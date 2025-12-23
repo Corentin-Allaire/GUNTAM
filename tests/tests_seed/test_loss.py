@@ -1,15 +1,14 @@
 import torch
-import torch.nn.functional as F
-import pytest
 
 from GUNTAM.Seed.SeedLoss import (
-	attention_loss,
-	full_attention_loss,
-	top_attention_loss,
-	attention_next_loss,
-	reconstruction_loss,
-	hit_classification_loss,
+    attention_loss,
+    full_attention_loss,
+    top_attention_loss,
+    attention_next_loss,
+    reconstruction_loss,
+    hit_classification_loss,
 )
+
 
 class TestAttentionLoss:
     def test_basic_and_empty(self):
@@ -36,8 +35,8 @@ class TestAttentionLoss:
 
         # Perfect case: positives very large, negatives very small -> loss ~ 0
         perfect_logits = torch.zeros_like(attention_logits)
-        perfect_logits[pairs1[target==1], pairs2[target==1]] = 10000.0
-        perfect_logits[pairs1[target==-1], pairs2[target==-1]] = -10000.0
+        perfect_logits[pairs1[target == 1], pairs2[target == 1]] = 10000.0
+        perfect_logits[pairs1[target == -1], pairs2[target == -1]] = -10000.0
         perfect_loss = attention_loss(perfect_logits, pairs1, pairs2, target)
         assert torch.isclose(perfect_loss, torch.tensor(0.0), atol=1e-6)
 
@@ -76,7 +75,7 @@ class TestFullAttentionLoss:
         # Zero positives returns 0
         zero_res = full_attention_loss(attention_logits, pairs1, pairs2, torch.tensor([-1, -1, -1, -1]))
         assert zero_res.item() == 0.0
-	
+
 
 class TestTopAttentionLoss:
     def test_selection_and_zero(self):
@@ -108,7 +107,7 @@ class TestTopAttentionLoss:
 
         zero_res = top_attention_loss(attention_logits, pairs1, pairs2, torch.tensor([-1, -1, -1, -1]))
         assert zero_res.item() == 0.0
-	
+    
 
 class TestAttentionNextLoss:
     def test_forward_and_backward(self):
@@ -139,15 +138,16 @@ class TestAttentionNextLoss:
         assert torch.equal(unique_sources, torch.tensor([0, 1, 3, 4]))
         assert torch.equal(expected_selected, torch.tensor([2, 0, 4, 3]))
 
-        # Since logits are zeros, cross entropy = log(num_valid_hits) where num_valid_hits = max(pos_hits)+1 = 5
-        # Each row uniform => CE = ln(5)
+        # Since logits are zeros, cross entropy per line = log(num_valid_hits)
+        # where num_valid_hits = max(pos_hits)+1 = 5
+        # Each row uniform => CE = ln(5) * pos_hits
         num_valid_hits = 5
-        expected_loss = torch.log(torch.tensor(float(num_valid_hits)))  # mean of identical entries
+        expected_loss = 4 * torch.log(torch.tensor(float(num_valid_hits)))  # mean of identical entries
         assert torch.isclose(loss, expected_loss, atol=1e-6)
 
         zero_res = attention_next_loss(attention_logits, pairs1, pairs2, torch.tensor([-1, -1, -1, -1, -1]))
         assert zero_res.item() == 0.0
-	
+    
 
 class TestReconstructionLoss:
     def test_valid_and_empty(self):
@@ -158,16 +158,24 @@ class TestReconstructionLoss:
         phi_vals = torch.tensor([0.0, 1.0])
         sin_phi = torch.sin(phi_vals)
         cos_phi = torch.cos(phi_vals)
-        reconstructed = torch.tensor([
-            [[1.0, 0.5, sin_phi[0], cos_phi[0], 10.0],
-            [2.0, 1.5, sin_phi[1], cos_phi[1], 20.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0]]
-        ])
-        particles = torch.tensor([
-            [[1.0, 0.5, phi_vals[0], 10.0],
-            [2.0, 1.5, phi_vals[1], 20.0],
-            [0.0, 0.0, 0.0, 0.0]]
-        ])
+        reconstructed = torch.tensor(
+            [
+                [
+                    [1.0, 0.5, sin_phi[0], cos_phi[0], 10.0],
+                    [2.0, 1.5, sin_phi[1], cos_phi[1], 20.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0]
+                ]
+            ]
+        )
+        particles = torch.tensor(
+            [
+                [
+                    [1.0, 0.5, phi_vals[0], 10.0],
+                    [2.0, 1.5, phi_vals[1], 20.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                ]
+            ]
+        )
         padded_mask = torch.tensor([[False, False, True]])
         losses = reconstruction_loss(reconstructed, particles, padded_mask, loss_type="MSE")
         for k in ["z", "eta", "phi", "pt"]:
@@ -186,7 +194,7 @@ class TestReconstructionLoss:
         reconstructed_shift[0, 0, 0] += 1.0  # z shift
         losses_l1 = reconstruction_loss(reconstructed_shift, particles, padded_mask, loss_type="L1")
         assert losses_l1["z"] > 0
-	
+
 
 class TestHitClassificationLoss:
     def test_balanced_and_edge(self):
@@ -208,13 +216,15 @@ class TestHitClassificationLoss:
         assert zero_loss.item() == 0.0
 
         # Single class present (only positives)
-        particles_pos_only = torch.tensor([[
-            [0.0, 0.0, 0.0, 5.0],
-            [0.0, 0.0, 0.0, 6.0],
-            [0.0, 0.0, 0.0, 7.0],
-            [0.0, 0.0, 0.0, 8.0],
-        ]])
+        particles_pos_only = torch.tensor(
+            [
+                [
+                    [0.0, 0.0, 0.0, 5.0],
+                    [0.0, 0.0, 0.0, 6.0],
+                    [0.0, 0.0, 0.0, 7.0],
+                    [0.0, 0.0, 0.0, 8.0],
+                ]
+            ]
+        )
         loss_single_class = hit_classification_loss(seed_scores, particles_pos_only, padded_mask)
         assert loss_single_class > 0
-
-

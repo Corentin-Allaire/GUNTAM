@@ -2,12 +2,13 @@ import numpy as np
 import torch
 from typing import List, Tuple
 
+
 def topk_seed_reconstruction(
-        attention_map: torch.Tensor,
-        reconstructed_parameters: torch.Tensor,
-        threshold: float = 0.8,
-        max_selection: int = 4
-    ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], List[Tuple[np.ndarray, np.ndarray]]]:
+    attention_map: torch.Tensor,
+    reconstructed_parameters: torch.Tensor,
+    threshold: float = 0.8,
+    max_selection: int = 4,
+) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], List[Tuple[np.ndarray, np.ndarray]]]:
     """
     K-nearest seeding with threshold: for each valid hit, create a seed consisting of the hit
     itself plus up to "max_selection" other hits with the highest attention values from that hit,
@@ -24,12 +25,11 @@ def topk_seed_reconstruction(
         seeds: Empty list (kept for signature compatibility)
     """
     device = attention_map.device
-    clusters: List[Tuple[np.ndarray, np.ndarray]] = []
     seeds: List[Tuple[np.ndarray, np.ndarray]] = []
 
     num_hits = attention_map.size(0)
     if num_hits == 0:
-        return clusters, seeds
+        return seeds
 
     # Use all hits (remove selection on scores)
     allowed_indices = torch.arange(num_hits, device=device)
@@ -48,12 +48,10 @@ def topk_seed_reconstruction(
         if common[0].numel() > 0:
             att_allowed[common] = float("-inf")
 
-    clusters: List[Tuple[np.ndarray, np.ndarray]] = []
-
     if k > 0:
         # Get top-k attention scores and indices per row
         topk_vals, topk_idx = torch.topk(att_allowed, k, dim=1, largest=True, sorted=True)  # [N, k]
-        topk_global = allowed_indices[topk_idx]   # [N, k]
+        topk_global = allowed_indices[topk_idx]  # [N, k]
     else:
         topk_vals = torch.empty((num_hits, 0), dtype=attention_map.dtype, device=device)
         topk_global = torch.empty((num_hits, 0), dtype=torch.long, device=device)
@@ -68,25 +66,23 @@ def topk_seed_reconstruction(
         kept_neighbors = neighbor_indices[keep_mask]
 
         # Cluster = hit itself + kept neighbors (could be only the hit if none kept)
-        cluster_idx = torch.cat([
-            torch.tensor([i], device=device, dtype=torch.long),
-            kept_neighbors
-        ], dim=0)
+        cluster_idx = torch.cat([torch.tensor([i], device=device, dtype=torch.long), kept_neighbors], dim=0)
 
         # Compute average reconstructed parameters for this cluster
-        cluster_params = reconstructed_parameters[cluster_idx].mean(dim=0)
+        seed_params = reconstructed_parameters[cluster_idx].mean(dim=0)
 
         # Append as numpy arrays
-        clusters.append((cluster_idx.cpu().numpy(), cluster_params.cpu().numpy()))
+        seeds.append((cluster_idx.cpu().numpy(), seed_params.cpu().numpy()))
 
-    return clusters, seeds
+    return seeds
+
 
 def chained_seed_reconstruction(
-        attention_map: torch.Tensor,
-        reconstructed_parameters: torch.Tensor,
-        score_threshold: float = 0.001,
-        max_chain_length: int = 5
-    ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], List[Tuple[np.ndarray, np.ndarray]]]:
+    attention_map: torch.Tensor,
+    reconstructed_parameters: torch.Tensor,
+    score_threshold: float = 0.001,
+    max_chain_length: int = 5,
+) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], List[Tuple[np.ndarray, np.ndarray]]]:
     """
     Chain-based seeding: starting from each hit, iteratively add the highest-attention
     neighbor with a greater index above a score threshold to form a chain of hits.
@@ -105,7 +101,6 @@ def chained_seed_reconstruction(
     if num_hits == 0:
         return [], []
 
-    clusters: List[Tuple[np.ndarray, np.ndarray]] = []
     seeds: List[Tuple[np.ndarray, np.ndarray]] = []
 
     # Precompute things
@@ -139,6 +134,6 @@ def chained_seed_reconstruction(
         if len(chain) >= 3:
             chain_indices = torch.tensor(chain, device=device)
             chain_params = reconstructed_parameters[chain_indices].mean(dim=0)
-            clusters.append((chain_indices.cpu().numpy(), chain_params.cpu().numpy()))
+            seeds.append((chain_indices.cpu().numpy(), chain_params.cpu().numpy()))
 
-    return clusters, seeds
+    return seeds

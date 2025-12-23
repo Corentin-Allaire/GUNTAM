@@ -8,7 +8,60 @@ from GUNTAM.Transformer.Transformer import (
     TransformerFeedForward,
     EncoderLayer,
     TransformerEncoder,
+    _normalize_state_dict_keys,
+    load_state_dict_flex,
+
+
 )
+
+
+class TestNormalizeStateDictKeys:
+    """Tests for normalization of state_dict keys."""
+
+    def test_strips_compile_and_dp_prefixes(self):
+        sd = {
+            "_orig_mod.module.layer.weight": torch.randn(3, 3),
+            "_orig_mod.module.layer.bias": torch.randn(3),
+            "module.other": torch.tensor(1.0),
+            "regular": torch.tensor(2.0),
+        }
+        norm = _normalize_state_dict_keys(sd)
+        assert "layer.weight" in norm
+        assert "layer.bias" in norm
+        assert "other" in norm
+        assert "regular" in norm
+        # Ensure original prefixed keys removed
+        assert not any(k.startswith("_orig_mod.") or k.startswith("module.") for k in norm)
+
+
+class TestLoadStateDictFlex:
+    """Tests for flexible state_dict loading utility."""
+
+    class Tiny(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer = torch.nn.Linear(4, 4)
+
+    def test_strict_success_after_normalization(self, capsys):
+        m = self.Tiny()
+        # Create a state_dict with prefixes that match the internal parameter names
+        raw = {}
+        for name, param in m.named_parameters():
+            raw[f"_orig_mod.module.{name}"] = param.detach().clone()
+
+        load_state_dict_flex(m, raw, desc="tiny")
+        out = capsys.readouterr().out
+        assert "Loaded tiny state_dict (strict)" in out
+
+    def test_non_strict_when_missing_key(self, capsys):
+        m = self.Tiny()
+        # Provide only weight, miss bias
+        raw = {"_orig_mod.module.layer.weight": torch.randn_like(m.layer.weight)}
+
+        load_state_dict_flex(m, raw, desc="tiny")
+        out = capsys.readouterr().out
+        assert "Warning: strict load failed" in out
+        assert "Non-strict load results" in out
 
 
 class TestScaledDotProductAttention:
@@ -115,6 +168,7 @@ class TestScaledDotProductAttention:
         logits_expected = torch.matmul(q, k.transpose(-2, -1)) * scale
         logits_expected = logits_expected.masked_fill(mask, float("-inf"))
         assert torch.allclose(logits_manual, logits_expected, atol=1e-6)
+
 
 class TestMultiHeadAttention:
     """Test suite for multi-head attention layer."""
@@ -372,7 +426,6 @@ class TestEncoderLayer:
         # The outputs should be close (may not be exactly equal due to numerical precision)
         assert torch.allclose(actual_output, expected_output, atol=1e-6)
 
-
     def test_dropout_tuple_applied_to_submodules(self):
         input_dim, model_dim, num_heads = 32, 16, 4
         encoder = EncoderLayer(input_dim, model_dim, num_heads, dropout=(0.1, 0.2), use_pytorch=False)
@@ -384,6 +437,7 @@ class TestEncoderLayer:
         input_dim, model_dim, num_heads = 32, 16, 4
         with pytest.raises(ValueError):
             EncoderLayer(input_dim, model_dim, num_heads, dropout=(0.1, 0.2, 0.3), use_pytorch=False)
+
 
 class TestTransformerEncoder:
     """Test suite for transformer encoder."""
@@ -594,6 +648,7 @@ class TestIntegration:
         for name, param in encoder.named_parameters():
             if param.grad is not None:
                 assert not torch.isnan(param.grad).any(), f"Parameter {name} gradients contain NaN"
+
 
 if __name__ == "__main__":
     # Run all tests

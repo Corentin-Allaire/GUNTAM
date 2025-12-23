@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Dict, Any
 
 import torch
 import torch.nn as nn
@@ -6,6 +6,7 @@ from torch import Tensor
 
 from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
+from GUNTAM.Transformer.Transformer import load_state_dict_flex
 from GUNTAM.Transformer.Embeding import FourierPositionalEncoding
 
 
@@ -66,11 +67,7 @@ class SeedTransformer(nn.Module):
         # Set input dimension for projection
         embedding_input_dim = 3 * nfreq * 2 + 3
 
-        self.embedding_projection = nn.Linear(
-            embedding_input_dim,
-            dim_embedding,
-            device=device_acc
-        )
+        self.embedding_projection = nn.Linear(embedding_input_dim, dim_embedding, device=device_acc)
 
         # Transformer model
         self.transformer = TransformerEncoder(
@@ -102,9 +99,10 @@ class SeedTransformer(nn.Module):
         """
 
         coord = hits[..., :3]
-        high_level = torch.cat([torch.cos(hits[..., 3:4]),
-                                torch.sin(hits[..., 3:4]),
-                                hits[..., 4:5]], dim=-1)
+        high_level = torch.cat(
+            [torch.cos(hits[..., 3:4]), torch.sin(hits[..., 3:4]), hits[..., 4:5]],
+            dim=-1,
+        )
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
         # Apply generic projection if needed
@@ -137,3 +135,78 @@ class SeedTransformer(nn.Module):
         attn_weights = attn_weights.squeeze(1)
 
         return transformer_output, attn_weights
+
+    def print_model_info(self) -> None:
+        """
+        Print model information including number of layers and parameters.
+        """
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print("SeedTransformer Model Info:")
+        print(f"  - Number of Transformer layers: {self.nb_layers_t}")
+        print(f"  - Total parameters: {total_params}")
+        print(f"  - Trainable parameters: {trainable_params}")
+
+    def save(
+        self,
+        epoch: int,
+        path: str,
+        optimizer: torch.optim.Optimizer = None,
+        scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+    ) -> None:
+        """
+        Save the model state to a file.
+        Args:
+            - path (str): File path to save the model.
+        """
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": self.state_dict(),
+                "optimizer_state_dict": (optimizer.state_dict() if optimizer is not None else None),
+                "scheduler_state_dict": (scheduler.state_dict() if scheduler is not None else None),
+                # Save model architecture parameters from config
+                "model_config": {
+                    "nb_layers_t": self.nb_layers_t,
+                    "dim_embedding": self.dim_embedding,
+                    "nb_heads": self.nb_heads,
+                    "dropout": self.dropout,
+                    "num_frequencies": self.fourier_num_frequencies,
+                },
+            },
+            path,
+        )
+
+    def load(
+        self,
+        path: str,
+        device: torch.device,
+        opt: torch.optim.Optimizer = None,
+        scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+    ) -> Dict[str, Any]:
+        """
+        Load the model state from a file.
+        Args:
+            - path (str): File path to load the model from.
+        Returns:
+            - checkpoint (Dict[str, Any]): Loaded checkpoint dictionary.
+        """
+        try:
+            checkpoint = torch.load(path, weights_only=False, map_location=device)
+            state_dict = checkpoint.get("model_state_dict")
+            if state_dict is None:
+                print("Checkpoint missing 'model_state_dict'; starting from scratch.")
+            else:
+                load_state_dict_flex(self, state_dict, desc="resume")
+                if "optimizer_state_dict" in checkpoint and opt is not None:
+                    opt.load_state_dict(checkpoint["optimizer_state_dict"])
+                if "scheduler_state_dict" in checkpoint and scheduler is not None:
+                    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                if "epoch" in checkpoint:
+                    start_epoch = checkpoint["epoch"] + 1
+                    print(f"Resumed training from epoch {start_epoch}")
+        except FileNotFoundError:
+            print(f"Error: No checkpoint found at {path}. Starting training from scratch.")
+        except Exception as e:
+            print(f"Failed to load checkpoint ({e}); starting from scratch.")
+        return start_epoch

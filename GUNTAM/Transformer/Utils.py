@@ -1,7 +1,8 @@
 import math
-from typing import Any, Dict
 from datetime import datetime
 import torch
+from torch.optim.lr_scheduler import LRScheduler
+
 
 def ts_print(*args, **kwargs) -> None:
     """Timestamped print for logging."""
@@ -35,7 +36,7 @@ def log_gradients(model, writer=None, step=None):
 def sync_device(dev: torch.device):
     """
     Synchronize CUDA if cfg.device_acc is CUDA; CPU is a no-op.
-    
+
     Args:
         dev: The device to synchronize.
     """
@@ -44,65 +45,10 @@ def sync_device(dev: torch.device):
             torch.cuda.synchronize(device=dev)
 
 
-def load_state_dict_flex(model: torch.nn.Module, raw_state_dict: Dict[str, Any], desc: str = "model") -> None:
-    """
-    Attempt to load a raw state_dict handling compile / DP prefixes.
-
-    Order of operations:
-      1. Normalize key prefixes.
-      2. Try strict load.
-      3. If strict load fails, fall back to non-strict with a warning listing missing/unexpected keys.
-
-    Args:
-        model: The model to load the state_dict into.
-        raw_state_dict: The raw state_dict to load.
-        desc: Description of the model for logging purposes.
-    """
-    normalized = _normalize_state_dict_keys(raw_state_dict)
-    try:
-        model.load_state_dict(normalized, strict=True)
-        ts_print(f"Loaded {desc} state_dict (strict)")
-    except RuntimeError as e:
-        ts_print(f"Warning: strict load failed for {desc}: {e}. Retrying non-strict...")
-        missing_unexpected = model.load_state_dict(normalized, strict=False)
-        # missing_unexpected is a namedtuple (missing_keys, unexpected_keys)
-        ts_print(
-            f"Non-strict load results for {desc}: missing={missing_unexpected.missing_keys}, "
-            f"unexpected={missing_unexpected.unexpected_keys}"
-        )
-
-
-def _normalize_state_dict_keys(state_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Strip torch.compile ('_orig_mod.') and optional DataParallel ('module.') prefixes.
-
-    We iteratively strip known prefixes so that models saved from compiled or DP-wrapped
-    modules can load into a plain, uncompiled instance. Saving code is left untouched
-    per user request; we only normalize on load.
-
-    Args:
-        state_dict: The original state_dict with potential prefixes.
-    Returns:
-        A new state_dict with prefixes stripped.
-    """
-    prefixes = ["_orig_mod.", "module."]
-    changed = True
-    # Iterate until no further prefix stripping occurs (handles nested cases).
-    while changed:
-        changed = False
-        for p in prefixes:
-            if any(k.startswith(p) for k in state_dict.keys()):
-                state_dict = {
-                    (k[len(p):] if k.startswith(p) else k): v for k, v in state_dict.items()
-                }
-                changed = True
-    return state_dict
-
-
-class CosineScheduleWithMinLR:
+class CosineScheduleWithMinLR(LRScheduler):
     """
     Custom scheduler with warmup, cosine annealing, and minimum learning rate
-    
+
     Args:
         optimizer: The optimizer to schedule.
         num_warmup_steps: Number of warmup steps.
@@ -123,7 +69,7 @@ class CosineScheduleWithMinLR:
     def get_lr_ratio(self, current_step):
         """
         Calculate the learning rate ratio for the current step
-        
+
         Args:
             current_step: The current training step.
         Returns:
@@ -144,6 +90,10 @@ class CosineScheduleWithMinLR:
 
         # Ensure learning rate doesn't go below min_lr_ratio
         return max(self.min_lr_ratio, cosine_factor)
+
+    def get_last_lr(self):
+        """Get the last learning rates"""
+        return self.optimizer.param_groups[0]["lr"]
 
     def get_lr(self):
         """Get the current learning rates"""
@@ -183,9 +133,7 @@ class CosineScheduleWithMinLR:
         self.base_lrs = state_dict["base_lrs"]
 
 
-def create_cosine_schedule_with_min_lr(
-    optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.01
-):
+def create_cosine_schedule_with_min_lr(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.01):
     """
     Create a cosine schedule with warmup and minimum learning rate.
 
