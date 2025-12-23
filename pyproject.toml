@@ -26,6 +26,11 @@ exclude = [".venv", "__pycache__"]
 line-length = 120
 
 [project.optional-dependencies]
-# Compatibility option for Torch 2.2.x on macOS: install NumPy 1.x
+# Compatibility option for Torch 2.2.x on macOS intel: install NumPy 1.x
 # Use `pdm install -G torch22` when using Torch < 2.3
 torch22 = ["numpy<2", "torch==2.2.2"]
+
+[tool.pdm.source]
+# PyTorch CPU wheels to be used when installing on systems with low disk space
+# such as for example CI runners
+torch-cpu = { url = "https://download.pytorch.org/whl/cpu", verify_ssl = true }
