@@ -1,0 +1,103 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PDM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pdm
+            .venv
+          key: pdm-${{ runner.os }}-${{ hashFiles('pdm.lock') }}
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Install dependencies
+        run: pdm install --source torch-cpu
+
+  lint:
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore PDM cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pdm
+            .venv
+          key: pdm-${{ runner.os }}-${{ hashFiles('pdm.lock') }}  
+          
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Ensure deps
+        run: pdm install --source torch-cpu
+
+      - name: Black
+        id: black
+        run: |
+          pdm run black GUNTAM/
+          if ! git diff --quiet; then
+            git diff > black.patch
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Fail on formating
+        if: steps.black.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: black-formatting-patch
+          path: black.patch
+      
+      - name: Flake8
+        run: pdm run flake8        
+      
+      - name: Fail on black reformating
+        if: steps.black.outputs.changed == 'true'
+        run: exit 1
+        
+  test:
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore PDM cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pdm
+            .venv
+          key: pdm-${{ runner.os }}-${{ hashFiles('pdm.lock') }}
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Ensure deps (fast if cached)
+        run: pdm install --source torch-cpu
+
+      - name: Run tests
+        run: pdm run pytest
