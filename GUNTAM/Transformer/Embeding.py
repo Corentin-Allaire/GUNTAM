@@ -64,8 +64,10 @@ class FourierPositionalEncoding(nn.Module):
 
         # Create frequency matrix B with powers of 2: [2^0, 2^1, 2^2, ..., 2^(num_frequencies-1)]
         frequencies = 2.0 ** torch.arange(num_frequencies, device=device_acc).float()
-        B = frequencies.unsqueeze(0).expand(input_dim, -1).clone()  # Expand and clone to avoid memory aliasing
-        self.register_buffer("B", B)  # Register as buffer so it moves with model
+        self.freq_matrix = (
+            frequencies.unsqueeze(0).expand(input_dim, -1).clone()
+        )  # Expand and clone to avoid memory aliasing
+        self.register_buffer("freq_matrix", self.freq_matrix)  # Register as buffer so it moves with model
 
     def forward(self, x_sampled: Tensor, x_high_level: Tensor) -> Tensor:
         """Apply Fourier positional encoding.
@@ -89,7 +91,7 @@ class FourierPositionalEncoding(nn.Module):
         coord = coord.unsqueeze(-1)  # (batch, seq_len, 3, 1)
 
         # B: (3, num_frequencies) -> broadcast to (batch, seq_len, 3, num_frequencies)
-        B_expanded = self.B.unsqueeze(0).unsqueeze(0)  # (1, 1, 3, num_frequencies)
+        B_expanded = self.freq_matrix.unsqueeze(0).unsqueeze(0)  # (1, 1, 3, num_frequencies)
 
         # Element-wise multiplication: each coordinate gets its own frequency
         proj = 2 * math.pi * coord * B_expanded  # (batch, seq_len, 3, num_frequencies)
