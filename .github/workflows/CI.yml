@@ -55,7 +55,7 @@ jobs:
       - name: Install PDM
         run: pip install pdm
 
-      - name: Ensure deps (fast if cached)
+      - name: Ensure deps
         run: pdm install
 
       - name: Run tests
@@ -74,7 +74,7 @@ jobs:
       - name: Install PDM
         run: pip install pdm
 
-      - name: Ensure deps (fast if cached)
+      - name: Ensure deps
         run: pdm install
 
       - name: Run mypy
