@@ -130,7 +130,7 @@ class PerformanceMonitor:
         event_seeds = seeds_test[event_idx]
         event_ID = ID_test[event_idx]
         event_mask = padding_mask_hit_test[event_idx]
-        event_map = attention_maps[event_idx]
+        event_map = attention_maps[event_idx] if attention_maps is not None else None
 
         return (
             event_hits,
@@ -142,53 +142,6 @@ class PerformanceMonitor:
             event_map,
             event_mask,
         )
-
-    def _validate_inputs(
-        self,
-        hits_test,
-        particles_test,
-        ID_test,
-        padding_mask_hit_test,
-        seeds_test,
-        reconstructed_parameters,
-        all_pairs_test,
-        attention_maps,
-    ) -> None:
-        """Validate shapes and per-event bin counts for inputs.
-
-        Ensures: same number of events across all inputs; same number of bins
-        for tensor-like arrays; and consistent per-event bin lengths for
-        nested-list inputs.
-        """
-        test_size = len(hits_test)
-        if (
-            len(particles_test) != test_size
-            or len(ID_test) != test_size
-            or len(padding_mask_hit_test) != test_size
-            or len(seeds_test) != test_size
-            or len(reconstructed_parameters) != test_size
-            or len(all_pairs_test) != test_size
-            or len(attention_maps) != test_size
-        ):
-            raise ValueError(f"All inputs must have the same number of events ({test_size})")
-
-        expected_bins = hits_test.shape[1] if test_size > 0 else 0
-        if (
-            expected_bins == 0
-            or particles_test.shape[1] != expected_bins
-            or ID_test.shape[1] != expected_bins
-            or padding_mask_hit_test.shape[1] != expected_bins
-        ):
-            raise ValueError("hits/particles/ID/mask must have the same number of bins per event")
-
-        for ev in range(test_size):
-            if (
-                len(seeds_test[ev]) != expected_bins
-                or len(reconstructed_parameters[ev]) != expected_bins
-                or len(all_pairs_test[ev]) != expected_bins
-                or len(attention_maps[ev]) != expected_bins
-            ):
-                raise ValueError(f"Event {ev}: list inputs must have {expected_bins} bins")
 
     def _get_bin(self, event_data, bin_idx: int) -> tuple:
         """
@@ -221,7 +174,7 @@ class PerformanceMonitor:
         bin_pairs = event_pairs[bin_idx]
         bin_seed = event_seeds[bin_idx]
         bin_IDs = event_ID[bin_idx][bin_mask]
-        bin_map = event_map[bin_idx]
+        bin_map = event_map[bin_idx] if event_map is not None else None
 
         return (
             bin_hits,
@@ -232,6 +185,53 @@ class PerformanceMonitor:
             bin_seed,
             bin_map,
         )
+
+    def _validate_inputs(
+        self,
+        hits_test,
+        particles_test,
+        ID_test,
+        padding_mask_hit_test,
+        seeds_test,
+        reconstructed_parameters,
+        all_pairs_test,
+        attention_maps,
+    ) -> None:
+        """Validate shapes and per-event bin counts for inputs.
+
+        Ensures: same number of events across all inputs; same number of bins
+        for tensor-like arrays; and consistent per-event bin lengths for
+        nested-list inputs.
+        """
+        test_size = len(hits_test)
+        if (
+            len(particles_test) != test_size
+            or len(ID_test) != test_size
+            or len(padding_mask_hit_test) != test_size
+            or len(seeds_test) != test_size
+            or len(reconstructed_parameters) != test_size
+            or len(all_pairs_test) != test_size
+            or (len(attention_maps) != test_size and attention_maps is not None)
+        ):
+            raise ValueError(f"All inputs must have the same number of events ({test_size})")
+
+        expected_bins = hits_test.shape[1] if test_size > 0 else 0
+        if (
+            expected_bins == 0
+            or particles_test.shape[1] != expected_bins
+            or ID_test.shape[1] != expected_bins
+            or padding_mask_hit_test.shape[1] != expected_bins
+        ):
+            raise ValueError("hits/particles/ID/mask must have the same number of bins per event")
+
+        for ev in range(test_size):
+            if (
+                len(seeds_test[ev]) != expected_bins
+                or len(reconstructed_parameters[ev]) != expected_bins
+                or len(all_pairs_test[ev]) != expected_bins
+                or (len(attention_maps[ev]) != expected_bins and attention_maps is not None)
+            ):
+                raise ValueError(f"Event {ev}: list inputs must have {expected_bins} bins")
 
     def analyze_event_bins(
         self,
@@ -348,7 +348,7 @@ class PerformanceMonitor:
 
         print("=" * 120)
 
-    def seeding_performance(
+    def analyze_events(
         self,
         hits_test,
         particles_test,
@@ -358,6 +358,76 @@ class PerformanceMonitor:
         reconstructed_parameters,
         all_pairs_test,
         attention_maps,
+    ):
+        """
+        Optional function letting us run the event analysis independently of the seeding performance function.
+        In the futur this could be use to minimise the ammount of attention maps to be stored during inference.
+
+        Args:
+            hits_test, particles_test, ID_test, padding_mask_hit_test: arrays with per-event
+            seeds_test, reconstructed_parameters, all_pairs_test, attention_maps: nested lists `[events][bins]`
+
+        Returns:
+            None
+        """
+        # Validate inputs and derive test sizes
+        self._validate_inputs(
+            hits_test,
+            particles_test,
+            ID_test,
+            padding_mask_hit_test,
+            seeds_test,
+            reconstructed_parameters,
+            all_pairs_test,
+            attention_maps,
+        )
+
+        test_size = len(hits_test)
+        print(f"\nAnalyzing {len(self.event_idx_list)} events for monitoring...")
+
+        for event_idx in self.event_idx_list:
+            if event_idx < 0 or event_idx >= test_size:
+                raise IndexError(f"Event index {event_idx} is out of range (0 to {test_size - 1})")
+
+            # Load event data via helper
+            event = self._get_event(
+                hits_test,
+                particles_test,
+                ID_test,
+                padding_mask_hit_test,
+                seeds_test,
+                reconstructed_parameters,
+                all_pairs_test,
+                attention_maps,
+                event_idx,
+            )
+
+            # === Loop over bins ===
+            for bin_idx in range(event[0].shape[0]):
+                hits, particles, IDs, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
+                # If in the event/bin selection lists run the detailed analysis
+                if attn_map is not None and event_idx in self.event_idx_list and bin_idx in self.bin_idx_list:
+                    self.analyze_event_bins(
+                        event_idx,
+                        bin_idx,
+                        hits,
+                        particles,
+                        reconstructed_params,
+                        seeds,
+                        pair,
+                        attn_map,
+                    )
+
+    def seeding_performance(
+        self,
+        hits_test,
+        particles_test,
+        ID_test,
+        padding_mask_hit_test,
+        seeds_test,
+        reconstructed_parameters,
+        all_pairs_test,
+        attention_maps=None,
     ):
         """
         Evaluate seeding performance by analyzing the relationship between reconstructed seeds and true particles.
@@ -429,7 +499,7 @@ class PerformanceMonitor:
 
                 hits, particles, IDs, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
                 # If in the event/bin selection lists run the detailed analysis
-                if event_idx in self.event_idx_list and bin_idx in self.bin_idx_list:
+                if attn_map is not None and event_idx in self.event_idx_list and bin_idx in self.bin_idx_list:
                     self.analyze_event_bins(
                         event_idx,
                         bin_idx,
