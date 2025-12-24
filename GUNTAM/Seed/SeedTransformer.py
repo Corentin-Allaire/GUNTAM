@@ -151,8 +151,8 @@ class SeedTransformer(nn.Module):
         self,
         epoch: int,
         path: str,
-        optimizer: torch.optim.Optimizer = None,
-        scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+        optimizer: torch.optim.Optimizer | None = None,
+        scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
     ) -> None:
         """
         Save the model state to a file.
@@ -181,8 +181,8 @@ class SeedTransformer(nn.Module):
         self,
         path: str,
         device: torch.device,
-        opt: torch.optim.Optimizer = None,
-        scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+        opt: torch.optim.Optimizer | None = None,
+        scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
     ) -> Dict[str, Any]:
         """
         Load the model state from a file.

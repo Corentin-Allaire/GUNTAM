@@ -14,7 +14,7 @@ class DataLoader:
         self,
         dataset_dir: str = ".",
         dataset_name: str = "seeding_data",
-        tensor_names: List[str] = None,
+        tensor_names: List[str] | None = None,
         device: torch.device = torch.device("cpu"),
     ) -> None:
         self.device = device
@@ -126,7 +126,7 @@ class DataLoader:
 
         result["start_event"] = file_data["start_event"]
         result["end_event"] = file_data["end_event"]
-        result[file_idx] = file_idx
+        result["file_idx"] = file_idx
         return result
 
     def get_file_number(self) -> int:

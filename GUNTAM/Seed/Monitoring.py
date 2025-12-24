@@ -996,7 +996,7 @@ class PerformanceMonitor:
             return
 
         # Group by event
-        by_event = {}
+        by_event: dict[int, list[dict]] = {}
         for p in eligible_particles:
             by_event.setdefault(p["event_idx"], []).append(p)
 

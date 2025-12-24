@@ -130,7 +130,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.out_linear = nn.Linear(self.model_dim, self.input_dim, device=device)
 
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor | None]:
         """Forward pass through multi-head attention layer.
 
         Args:

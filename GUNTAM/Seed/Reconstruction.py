@@ -8,7 +8,7 @@ def topk_seed_reconstruction(
     reconstructed_parameters: torch.Tensor,
     threshold: float = 0.8,
     max_selection: int = 4,
-) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], List[Tuple[np.ndarray, np.ndarray]]]:
+) -> List[Tuple[np.ndarray, np.ndarray]]:
     """
     K-nearest seeding with threshold: for each valid hit, create a seed consisting of the hit
     itself plus up to "max_selection" other hits with the highest attention values from that hit,
@@ -82,7 +82,7 @@ def chained_seed_reconstruction(
     reconstructed_parameters: torch.Tensor,
     score_threshold: float = 0.001,
     max_chain_length: int = 5,
-) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], List[Tuple[np.ndarray, np.ndarray]]]:
+) -> List[Tuple[np.ndarray, np.ndarray]]:
     """
     Chain-based seeding: starting from each hit, iteratively add the highest-attention
     neighbor with a greater index above a score threshold to form a chain of hits.
@@ -98,10 +98,10 @@ def chained_seed_reconstruction(
     """
     device = attention_map.device
     num_hits = attention_map.size(0)
-    if num_hits == 0:
-        return [], []
-
     seeds: List[Tuple[np.ndarray, np.ndarray]] = []
+
+    if num_hits == 0:
+        return seeds
 
     # Precompute things
     all_indices = torch.arange(num_hits, device=device)
@@ -122,7 +122,7 @@ def chained_seed_reconstruction(
                 break
 
             # Get best next index directly
-            next_idx = torch.argmax(att_scores * valid_mask.float()).item()
+            next_idx = int(torch.argmax(att_scores * valid_mask.float()).item())
             if att_scores[next_idx] < score_threshold:
                 break
 

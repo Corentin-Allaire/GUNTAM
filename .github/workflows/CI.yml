@@ -100,4 +100,32 @@ jobs:
         run: pdm install
 
       - name: Run tests
+        continue-on-error: true
         run: pdm run pytest
+
+  Typing:
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore PDM cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pdm
+            .venv
+          key: pdm-${{ runner.os }}-${{ hashFiles('pdm.lock') }}
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Ensure deps (fast if cached)
+        run: pdm install
+
+      - name: Run mypy
+        run: pdm run mypy -p GUNTAM

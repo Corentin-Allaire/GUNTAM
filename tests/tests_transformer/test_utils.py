@@ -92,8 +92,6 @@ class TestSyncDevice:
         dev = torch.device("mps")
         sync_device(dev)
         
-    
-
 
 class TestCosineScheduleWithMinLR:
     """Tests for the custom cosine scheduler with warmup and min LR."""
