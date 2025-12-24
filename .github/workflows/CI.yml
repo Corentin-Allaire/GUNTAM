@@ -24,7 +24,7 @@ jobs:
         run: pip install pdm
 
       - name: Install dependencies
-        run: pdm install --source torch-cpu
+        run: pdm install
 
   lint:
     needs: install
@@ -48,7 +48,7 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install --source torch-cpu
+        run: pdm install
 
       - name: Black
         id: black
@@ -97,7 +97,7 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps (fast if cached)
-        run: pdm install --source torch-cpu
+        run: pdm install
 
       - name: Run tests
         run: pdm run pytest
