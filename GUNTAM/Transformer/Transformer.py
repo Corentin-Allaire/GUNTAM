@@ -230,7 +230,11 @@ class TransformerFeedForward(nn.Module):
     """
 
     def __init__(
-        self, d_model: int, d_ff: int, dropout: float = 0.1, device: torch.device = torch.device("cpu"),
+        self,
+        d_model: int,
+        d_ff: int,
+        dropout: float = 0.1,
+        device: torch.device = torch.device("cpu"),
     ) -> None:
         super(TransformerFeedForward, self).__init__()
 
