@@ -1,17 +1,10 @@
+from typing import Any, Mapping, Optional, Sequence, Tuple
+
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 
-# Optional matplotlib import with non-interactive backend
-
-try:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    print("Warning: matplotlib not available. Visualization disabled.")
-    MATPLOTLIB_AVAILABLE = False
+plt.switch_backend("Agg")
 
 
 class PlotUtility:
@@ -19,17 +12,17 @@ class PlotUtility:
 
     @staticmethod
     def create_histogram(
-        ax,
-        data,
-        title,
-        xlabel,
-        ylabel,
-        bins=600,
-        color="skyblue",
-        stats_text=None,
-        reference_lines=None,
-        density=False,
-    ):
+        ax: Axes,
+        data: np.ndarray,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        bins: int = 600,
+        color: str = "skyblue",
+        stats_text: Optional[str] = None,
+        reference_lines: Optional[Sequence[Mapping[str, Any]]] = None,
+        density: bool = False,
+    ) -> None:
         if len(data) == 0:
             ax.text(
                 0.5,
@@ -88,18 +81,18 @@ class PlotUtility:
 
     @staticmethod
     def create_scatter_2d(
-        ax,
-        x,
-        y,
-        title,
-        xlabel,
-        ylabel,
-        c=None,
-        cmap="viridis",
-        s=30,
-        alpha=0.7,
-        colorbar_label=None,
-    ):
+        ax: Axes,
+        x: np.ndarray,
+        y: np.ndarray,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        c: Optional[np.ndarray] = None,
+        cmap: str = "viridis",
+        s: float = 30,
+        alpha: float = 0.7,
+        colorbar_label: Optional[str] = None,
+    ) -> None:
         if c is not None:
             scatter = ax.scatter(
                 x,
@@ -124,22 +117,22 @@ class PlotUtility:
 
     @staticmethod
     def create_2d_histogram(
-        ax,
-        x,
-        y,
-        title,
-        xlabel,
-        ylabel,
-        bins=[15, 20],
-        cmap="viridis",
-        overlay_scatter=True,
-    ):
+        ax: Axes,
+        x: np.ndarray,
+        y: np.ndarray,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        bins: Sequence[int] = (15, 20),
+        cmap: str = "viridis",
+        overlay_scatter: bool = True,
+    ) -> Any:
         hist, xbins, ybins = np.histogram2d(x, y, bins=bins)
 
         im = ax.imshow(
             hist.T,
             origin="lower",
-            extent=[xbins[0], xbins[-1], ybins[0], ybins[-1]],
+            extent=(float(xbins[0]), float(xbins[-1]), float(ybins[0]), float(ybins[-1])),
             aspect="auto",
             cmap=cmap,
             alpha=0.8,
@@ -159,7 +152,15 @@ class PlotUtility:
         return im
 
     @staticmethod
-    def create_bar_plot(ax, values, counts, title, xlabel, ylabel, color="lightgreen"):
+    def create_bar_plot(
+        ax: Axes,
+        values: np.ndarray,
+        counts: np.ndarray,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        color: str = "lightgreen",
+    ) -> None:
         ax.bar(values, counts, alpha=0.7, color=color, edgecolor="black")
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
@@ -167,7 +168,13 @@ class PlotUtility:
         ax.grid(True, alpha=0.3)
 
     @staticmethod
-    def add_stats_text(ax, data, position=(0.95, 0.95), ha="right", va="top"):
+    def add_stats_text(
+        ax: Axes,
+        data: np.ndarray,
+        position: Tuple[float, float] = (0.95, 0.95),
+        ha: str = "right",
+        va: str = "top",
+    ) -> None:
         if len(data) == 0:
             return
 
@@ -190,25 +197,24 @@ class PlotUtility:
 
 
 def visualize_attention_map(
-    attention_weights,
-    pair_info,
-    valid_hits,
-    event_idx,
-    bin_idx,
-    max_hits=None,
-    layer_idx=None,
-):
+    attention_weights: np.ndarray,
+    pair_info: Mapping[Tuple[int, int], Mapping[str, Any]],
+    valid_hits: np.ndarray,
+    event_idx: int,
+    bin_idx: int,
+    max_hits: Optional[int] = None,
+    layer_idx: Optional[int] = None,
+) -> None:
     """
     Visualize an attention-weight matrix for a bin, annotating positive pairs.
 
     Inputs
     - attention_weights: numpy.ndarray, shape (N, N), dtype float
         Square attention matrix for `N` hits in the bin. Values typically in [0, 1].
-    - pair_info: dict[((int, int), dict)]
-        Mapping from hit index pairs `(i, j)` to metadata. Expected keys include
-        `"is_good"` (bool) indicating a positive/valid pair.
-    - valid_hits: Sequence[int] or numpy.ndarray, shape (N,)
-        Hit indices (or IDs) considered valid in the bin; used for axis ticks.
+    - pair_info: Mapping[(int, int), Mapping[str, Any]]
+        Metadata per hit index pair `(i, j)`; uses `"is_good"` to mark positives.
+    - valid_hits: numpy.ndarray
+        Zero-based hit indices aligned with the attention matrix (same order/length as its axes).
     - event_idx: int
         Event identifier for the figure title and output filename.
     - bin_idx: int
@@ -328,20 +334,25 @@ def visualize_attention_map(
             pass
 
 
-def create_seeding_performance_plots(results, seed_metrics, error_arrays, bin_summaries):
+def create_seeding_performance_plots(
+    results: Mapping[str, Any],
+    seed_metrics: Sequence[Mapping[str, Any]],
+    error_arrays: Mapping[str, Sequence[float]],
+    bin_summaries: Sequence[Mapping[str, Any]],
+) -> None:
     """
     Visualize seed-level resolution, efficiency per bin, and hits-in-common stats.
 
     Inputs
-    - results: dict
+    - results: Mapping[str, Any]
         Analysis results; if it contains `"bin_complexity_analysis"`, a
         complexity subplot collection is generated.
-    - seed_metrics: list[dict]
+    - seed_metrics: Sequence[Mapping[str, Any]]
         Seed-particle association metrics; uses `"n_hits_common"` for distribution.
-    - error_arrays: list[Sequence[float]] length 4
-        Seed resolution errors for `[z, eta, phi, pT]` respectively. Units:
-        `z` [mm], `eta` (unitless), `phi` [rad], `pT` [GeV]. Each array is shape (S,).
-    - bin_summaries: list[dict]
+    - error_arrays: Mapping[str, Sequence[float]]
+        Seed resolution errors keyed by parameter (`"z"`, `"eta"`, `"phi"`, `"pt"`).
+        Units: `z` [mm], `eta` (unitless), `phi` [rad], `pt` [GeV]. Each array is shape (S,).
+    - bin_summaries: Sequence[Mapping[str, Any]]
         Per-bin summaries including keys `"seeding_efficiency"`,
         optional `"pure_seeding_efficiency"`, `"n_particles"`, and `"n_seeds"`.
 
@@ -354,54 +365,61 @@ def create_seeding_performance_plots(results, seed_metrics, error_arrays, bin_su
     """
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    param_names = ["z", "eta", "phi", "pT"]
-    param_units = ["[mm]", "", "[rad]", "[GeV]"]
 
-    for i, (param_name, unit, errors) in enumerate(zip(param_names, param_units, error_arrays)):
-        if i < 4:
-            row, col = i // 2, i % 2
-            ax = axes[row, col]
-            if len(errors) > 0:
-                errors_array = np.array(errors)
-                stats_text = f"Mean: {np.mean(errors_array):.4f}\n"
-                stats_text += f"Std: {np.std(errors_array):.4f}\n"
-                stats_text += f"RMS: {np.sqrt(np.mean(errors_array**2)):.4f}\n"
-                stats_text += f"Seeds: {len(errors_array)}"
-                reference_lines = [
-                    {
-                        "value": 0,
-                        "color": "green",
-                        "style": "-",
-                        "label": "Perfect Reconstruction",
-                    },
-                    {
-                        "value": np.mean(errors_array),
-                        "color": "red",
-                        "style": "--",
-                        "label": "Mean Error",
-                    },
-                ]
-                PlotUtility.create_histogram(
-                    ax,
-                    errors_array,
-                    title=f"{param_name.upper()} Seed Resolution",
-                    xlabel=f"Seed Error: {param_name} {unit}",
-                    ylabel="Number of Seeds",
-                    color="lightcoral",
-                    stats_text=stats_text,
-                    reference_lines=reference_lines,
-                )
-            else:
-                ax.text(
-                    0.5,
-                    0.5,
-                    "No data available",
-                    transform=ax.transAxes,
-                    ha="center",
-                    va="center",
-                    fontsize=14,
-                )
-                ax.set_title(f"{param_name.upper()} Seed Resolution")
+    params = [
+        {"key": "z", "label": "Z", "unit": "[mm]"},
+        {"key": "eta", "label": "ETA", "unit": ""},
+        {"key": "phi", "label": "PHI", "unit": "[rad]"},
+        {"key": "pt", "label": "pT", "unit": "[GeV]"},
+    ]
+
+    error_map = {str(k).lower(): np.asarray(v) for k, v in error_arrays.items()}
+
+    for i, meta in enumerate(params):
+        row, col = i // 2, i % 2
+        ax = axes[row, col]
+        errors_array = np.asarray(error_map.get(meta["key"], []))
+
+        if errors_array.size > 0:
+            stats_text = f"Mean: {np.mean(errors_array):.4f}\n"
+            stats_text += f"Std: {np.std(errors_array):.4f}\n"
+            stats_text += f"RMS: {np.sqrt(np.mean(errors_array**2)):.4f}\n"
+            stats_text += f"Seeds: {len(errors_array)}"
+            reference_lines = [
+                {
+                    "value": 0,
+                    "color": "green",
+                    "style": "-",
+                    "label": "Perfect Reconstruction",
+                },
+                {
+                    "value": np.mean(errors_array),
+                    "color": "red",
+                    "style": "--",
+                    "label": "Mean Error",
+                },
+            ]
+            PlotUtility.create_histogram(
+                ax,
+                errors_array,
+                title=f"{meta['label']} Seed Resolution",
+                xlabel=f"Seed Error: {meta['label']} {meta['unit']}",
+                ylabel="Number of Seeds",
+                color="lightcoral",
+                stats_text=stats_text,
+                reference_lines=reference_lines,
+            )
+        else:
+            ax.text(
+                0.5,
+                0.5,
+                "No data available",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=14,
+            )
+            ax.set_title(f"{meta['label']} Seed Resolution")
 
     ax = axes[1, 2]
     efficiencies = [b["seeding_efficiency"] for b in bin_summaries]
@@ -480,15 +498,18 @@ def create_seeding_performance_plots(results, seed_metrics, error_arrays, bin_su
         create_bin_complexity_plots(results["bin_complexity_analysis"], bin_summaries)
 
 
-def create_bin_complexity_plots(complexity_analysis, bin_summaries):
+def create_bin_complexity_plots(
+    complexity_analysis: Mapping[str, Any],
+    bin_summaries: Sequence[Mapping[str, Any]],
+) -> None:
     """
     Explore relationships between bin complexity and seeding efficiency.
 
     Inputs
-    - complexity_analysis: dict
+    - complexity_analysis: Mapping[str, Any]
         Contains correlations, e.g.,
         `{"correlations": {"particle_seed_ratio_vs_efficiency": float}}`.
-    - bin_summaries: list[dict]
+    - bin_summaries: Sequence[Mapping[str, Any]]
         Per-bin metrics with keys `"n_particles"`, `"n_seeds"`, `"seeding_efficiency"`.
 
     Plots
@@ -665,13 +686,13 @@ def create_bin_complexity_plots(complexity_analysis, bin_summaries):
     plt.close()
 
 
-def create_particle_reconstruction_comparison_plots(eligible_particles):
+def create_particle_reconstruction_comparison_plots(eligible_particles: Sequence[Mapping[str, Any]]) -> None:
     """
     Compare distributions of truth parameters for particles with vs without seeds.
 
     Inputs
-    - eligible_particles: list[dict]
-        Each dict must include `"true_params"` (array-like of length 4: `[z0, eta, phi, pT]`),
+    - eligible_particles: Sequence[Mapping[str, Any]]
+        Each mapping must include `"true_params"` (array-like length 4 `[z0, eta, phi, pT]`),
         `"n_hits"` (int), and `"had_seed"` (bool).
 
     Plots
@@ -840,12 +861,12 @@ def create_particle_reconstruction_comparison_plots(eligible_particles):
     plt.close()
 
 
-def create_efficiency_vs_truth_param_plots(eligible_particles):
+def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[str, Any]]) -> None:
     """
     Plot seeding efficiency (regular and pure) versus truth parameters.
 
     Inputs
-    - eligible_particles: list[dict]
+    - eligible_particles: Sequence[Mapping[str, Any]]
         Required keys per particle:
         - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
         - `"had_seed"`: bool flag for at least one seed.
@@ -864,7 +885,7 @@ def create_efficiency_vs_truth_param_plots(eligible_particles):
         print("No eligible particles for efficiency-vs-parameter plots")
         return
 
-    truth_params = np.array([p.get("true_params") for p in eligible_particles])
+    truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     has_seed_flags = np.array([bool(p.get("had_seed", False)) for p in eligible_particles], dtype=bool)
     has_pure_seed_flags = np.array([bool(p.get("had_pure_seed", False)) for p in eligible_particles], dtype=bool)
 
@@ -874,7 +895,12 @@ def create_efficiency_vs_truth_param_plots(eligible_particles):
     pt = truth_params[:, 3]
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
 
-    def compute_efficiency(xvals, has_seed, has_pure, bins):
+    def compute_efficiency(
+        xvals: np.ndarray,
+        has_seed: np.ndarray,
+        has_pure: np.ndarray,
+        bins: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         counts_all, edges = np.histogram(xvals, bins=bins)
         counts_seed, _ = np.histogram(xvals[has_seed], bins=edges)
         counts_pure, _ = np.histogram(xvals[has_pure], bins=edges)
@@ -887,11 +913,12 @@ def create_efficiency_vs_truth_param_plots(eligible_particles):
         half_widths = 0.5 * (edges[1:] - edges[:-1])
         return centers, eff, err_eff, eff_pure, err_eff_pure, counts_all, half_widths
 
-    def pct_bounds(arr):
+    def pct_bounds(arr: np.ndarray) -> tuple[float, float]:
         if len(arr) == 0:
             return (0.0, 1.0)
-        lo = np.percentile(arr, 0)
-        hi = np.percentile(arr, 100)
+        arr_f = np.asarray(arr, dtype=float)
+        lo = float(np.percentile(arr_f, 0.0))
+        hi = float(np.percentile(arr_f, 100.0))
         if lo == hi:
             lo -= 1e-6
             hi += 1e-6
@@ -908,9 +935,9 @@ def create_efficiency_vs_truth_param_plots(eligible_particles):
         dr_hi = np.percentile(deltaR[finite_dr], 99)
         if not np.isfinite(dr_hi) or dr_hi <= 0:
             dr_hi = float(np.max(deltaR[finite_dr])) if np.any(finite_dr) else 1.0
-        bins_dr = np.linspace(0.0, dr_hi, num=20)
+        bins_dr = np.linspace(0.0, float(dr_hi), num=20)
         if np.unique(bins_dr).size < 2:
-            bins_dr = np.linspace(0.0, dr_hi + 1e-6, num=20)
+            bins_dr = np.linspace(0.0, float(dr_hi) + 1e-6, num=20)
     else:
         bins_dr = None
 
@@ -927,11 +954,12 @@ def create_efficiency_vs_truth_param_plots(eligible_particles):
         pt, has_seed_flags, has_pure_seed_flags, bins_pt
     )
     if bins_dr is not None:
+        plot_dr = True
         c_dr, e_dr, e_dr_err, ep_dr, ep_dr_err, n_dr, w_dr = compute_efficiency(
             deltaR, has_seed_flags, has_pure_seed_flags, bins_dr
         )
     else:
-        c_dr = e_dr = e_dr_err = ep_dr = ep_dr_err = n_dr = w_dr = None
+        plot_dr = False
 
     try:
         ncols = 3
@@ -1038,7 +1066,7 @@ def create_efficiency_vs_truth_param_plots(eligible_particles):
             "Truth pT [GeV]",
             "Efficiency vs pT",
         )
-        if c_dr is not None:
+        if plot_dr:
             plot_ax(
                 axes[4],
                 c_dr,
@@ -1061,12 +1089,14 @@ def create_efficiency_vs_truth_param_plots(eligible_particles):
         print(f"Error while plotting efficiency vs parameters: {e}")
 
 
-def create_seeds_per_particle_vs_truth_param_plots(eligible_particles):
+def create_seeds_per_particle_vs_truth_param_plots(
+    eligible_particles: Sequence[Mapping[str, Any]],
+) -> None:
     """
     Plot the mean number of seeds per particle versus truth parameters.
 
     Inputs
-    - eligible_particles: list[dict]
+    - eligible_particles: Sequence[Mapping[str, Any]]
         Required keys per particle:
         - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
         - `"n_seeds"`: int number of seeds created for the particle.
@@ -1082,7 +1112,7 @@ def create_seeds_per_particle_vs_truth_param_plots(eligible_particles):
         print("No eligible particles for seeds-per-particle-vs-parameter plots")
         return
 
-    truth_params = np.array([p.get("true_params") for p in eligible_particles])
+    truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     n_seeds = np.array([int(p.get("n_seeds", 0)) for p in eligible_particles])
     z0 = truth_params[:, 0]
     eta = truth_params[:, 1]
@@ -1090,11 +1120,12 @@ def create_seeds_per_particle_vs_truth_param_plots(eligible_particles):
     pt = truth_params[:, 3]
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
 
-    def pct_bounds(arr):
+    def pct_bounds(arr: np.ndarray) -> tuple[float, float]:
         if len(arr) == 0:
             return (0.0, 1.0)
-        lo = np.percentile(arr, 1)
-        hi = np.percentile(arr, 99)
+        arr_f = np.asarray(arr, dtype=float)
+        lo = float(np.percentile(arr_f, 1))
+        hi = float(np.percentile(arr_f, 99))
         if lo == hi:
             lo -= 1e-6
             hi += 1e-6

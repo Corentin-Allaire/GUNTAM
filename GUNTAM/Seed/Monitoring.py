@@ -1,6 +1,7 @@
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+
 import numpy as np
 import torch
-
 from GUNTAM.Seed.MonitoringPlot import (
     visualize_attention_map,
     create_seeding_performance_plots,
@@ -9,8 +10,22 @@ from GUNTAM.Seed.MonitoringPlot import (
     create_seeds_per_particle_vs_truth_param_plots,
 )
 
+SeedErrors = Dict[str, List[float]]
+SeedMetrics = List[Dict[str, Any]]
+BinSummary = Dict[str, Any]
+EventData = Tuple[
+    np.ndarray,  # event_hits
+    np.ndarray,  # event_particles
+    np.ndarray,  # event_reconstructed
+    Sequence[Any],  # event_pairs
+    Sequence[Any],  # event_seeds
+    np.ndarray,  # event_ID
+    Optional[np.ndarray],  # event_map
+    np.ndarray,  # event_mask
+]
 
-def _to_numpy(x) -> np.ndarray:
+
+def _to_numpy(x: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
     """Safely convert inputs to NumPy arrays.
 
     Handles CUDA/CPU torch.Tensors by detaching and moving to CPU.
@@ -73,14 +88,14 @@ class PerformanceMonitor:
 
     def __init__(
         self,
-        event_idx_list=None,
-        bin_idx_list=None,
-        full_print=False,
-        save_plots=True,
-        min_common_hits=3,
-        min_truth_hits=3,
-        truth_r_tol=1e-3,
-    ):
+        event_idx_list: Optional[Sequence[int]] = None,
+        bin_idx_list: Optional[Sequence[int]] = None,
+        full_print: bool = False,
+        save_plots: bool = True,
+        min_common_hits: int = 3,
+        min_truth_hits: int = 3,
+        truth_r_tol: float = 1e-3,
+    ) -> None:
         """
         Initialize the PerformanceMonitor with configuration only.
 
@@ -103,34 +118,40 @@ class PerformanceMonitor:
 
     def _get_event(
         self,
-        hits_test,
-        particles_test,
-        ID_test,
-        padding_mask_hit_test,
-        seeds_test,
-        reconstructed_parameters,
-        all_pairs_test,
-        attention_maps,
+        hits_test: np.ndarray,
+        particles_test: np.ndarray,
+        ID_test: np.ndarray,
+        padding_mask_hit_test: np.ndarray,
+        seeds_test: Sequence[Sequence[Any]],
+        reconstructed_parameters: Sequence[Sequence[Any]],
+        all_pairs_test: Sequence[Sequence[Any]],
+        attention_maps: Optional[Sequence[Sequence[Any]]],
         event_idx: int,
-    ) -> tuple:
+    ) -> EventData:
         """
-        Retrieve data for a specific event index.
+        Retrieve and package one event into an EventData tuple.
 
         Args:
-            event_idx: Index of the event to retrieve
+            event_idx: Index of the event to retrieve.
+
+        Returns:
+            EventData: (
+                event_hits, event_particles, event_reconstructed,
+                event_pairs, event_seeds, event_ID, event_map, event_mask
+            )
         """
         test_size = len(hits_test)
         if event_idx < 0 or event_idx >= test_size:
             raise IndexError(f"Event index {event_idx} is out of range (0 to {test_size - 1})")
 
-        event_hits = hits_test[event_idx]
-        event_particles = particles_test[event_idx]
-        event_reconstructed = reconstructed_parameters[event_idx]
-        event_pairs = all_pairs_test[event_idx]
-        event_seeds = seeds_test[event_idx]
-        event_ID = ID_test[event_idx]
-        event_mask = padding_mask_hit_test[event_idx]
-        event_map = attention_maps[event_idx] if attention_maps is not None else None
+        event_hits: np.ndarray = np.asarray(hits_test[event_idx])
+        event_particles: np.ndarray = np.asarray(particles_test[event_idx])
+        event_reconstructed: np.ndarray = np.asarray(reconstructed_parameters[event_idx])
+        event_pairs: Sequence[Any] = all_pairs_test[event_idx]
+        event_seeds: Sequence[Any] = seeds_test[event_idx]
+        event_ID: np.ndarray = np.asarray(ID_test[event_idx])
+        event_mask: np.ndarray = np.asarray(padding_mask_hit_test[event_idx])
+        event_map: Optional[np.ndarray] = np.asarray(attention_maps[event_idx]) if attention_maps is not None else None
 
         return (
             event_hits,
@@ -143,14 +164,29 @@ class PerformanceMonitor:
             event_mask,
         )
 
-    def _get_bin(self, event_data, bin_idx: int) -> tuple:
+    def _get_bin(
+        self,
+        event_data: EventData,
+        bin_idx: int,
+    ) -> Tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        Tuple[np.ndarray, np.ndarray, np.ndarray],
+        Sequence[Any],
+        Optional[np.ndarray],
+    ]:
         """
-        Retrieve data for a specific bin index within an event.
+        Retrieve per-bin slices from an EventData tuple.
 
         Args:
-            event_data: Tuple of (event_hits, event_particles, event_mask)
-            bin_idx: Index of the bin to retrieve
+            event_data: EventData produced by `_get_event`.
+            bin_idx: Index of the bin to retrieve.
 
+        Returns:
+            Tuple of (bin_hits, bin_particles, bin_IDs, bin_reconstructed,
+            bin_pairs, bin_seed, bin_map).
         """
         (
             event_hits,
@@ -188,14 +224,14 @@ class PerformanceMonitor:
 
     def _validate_inputs(
         self,
-        hits_test,
-        particles_test,
-        ID_test,
-        padding_mask_hit_test,
-        seeds_test,
-        reconstructed_parameters,
-        all_pairs_test,
-        attention_maps,
+        hits_test: np.ndarray,
+        particles_test: np.ndarray,
+        ID_test: np.ndarray,
+        padding_mask_hit_test: np.ndarray,
+        seeds_test: Sequence[Sequence[Any]],
+        reconstructed_parameters: Sequence[Sequence[Any]],
+        all_pairs_test: Sequence[Sequence[Any]],
+        attention_maps: Optional[Sequence[Sequence[Any]]],
     ) -> None:
         """Validate shapes and per-event bin counts for inputs.
 
@@ -211,7 +247,7 @@ class PerformanceMonitor:
             or len(seeds_test) != test_size
             or len(reconstructed_parameters) != test_size
             or len(all_pairs_test) != test_size
-            or (len(attention_maps) != test_size and attention_maps is not None)
+            or (attention_maps is not None and len(attention_maps) != test_size)
         ):
             raise ValueError(f"All inputs must have the same number of events ({test_size})")
 
@@ -229,21 +265,21 @@ class PerformanceMonitor:
                 len(seeds_test[ev]) != expected_bins
                 or len(reconstructed_parameters[ev]) != expected_bins
                 or len(all_pairs_test[ev]) != expected_bins
-                or (len(attention_maps[ev]) != expected_bins and attention_maps is not None)
+                or (attention_maps is not None and len(attention_maps[ev]) != expected_bins)
             ):
                 raise ValueError(f"Event {ev}: list inputs must have {expected_bins} bins")
 
     def analyze_event_bins(
         self,
-        event_idx,
-        bin_idx,
-        hits,
-        particles,
-        reco_params,
-        seeds,
-        pairs,
-        attention_map,
-    ):
+        event_idx: int,
+        bin_idx: int,
+        hits: np.ndarray,
+        particles: np.ndarray,
+        reco_params: np.ndarray,
+        seeds: Sequence[Any],
+        pairs: Tuple[np.ndarray, np.ndarray, np.ndarray],
+        attention_map: np.ndarray,
+    ) -> None:
         """Detailed, optional analysis for a specific event/bin.
 
         Prints summary statistics, per-hit diagnostics (when `full_print=True`),
@@ -350,15 +386,15 @@ class PerformanceMonitor:
 
     def analyze_events(
         self,
-        hits_test,
-        particles_test,
-        ID_test,
-        padding_mask_hit_test,
-        seeds_test,
-        reconstructed_parameters,
-        all_pairs_test,
-        attention_maps,
-    ):
+        hits_test: np.ndarray,
+        particles_test: np.ndarray,
+        ID_test: np.ndarray,
+        padding_mask_hit_test: np.ndarray,
+        seeds_test: Sequence[Sequence[Any]],
+        reconstructed_parameters: Sequence[Sequence[Any]],
+        all_pairs_test: Sequence[Sequence[Any]],
+        attention_maps: Sequence[Sequence[Any]],
+    ) -> None:
         """
         Optional function letting us run the event analysis independently of the seeding performance function.
         In the futur this could be use to minimise the ammount of attention maps to be stored during inference.
@@ -420,15 +456,15 @@ class PerformanceMonitor:
 
     def seeding_performance(
         self,
-        hits_test,
-        particles_test,
-        ID_test,
-        padding_mask_hit_test,
-        seeds_test,
-        reconstructed_parameters,
-        all_pairs_test,
-        attention_maps=None,
-    ):
+        hits_test: np.ndarray,
+        particles_test: np.ndarray,
+        ID_test: np.ndarray,
+        padding_mask_hit_test: np.ndarray,
+        seeds_test: Sequence[Sequence[Any]],
+        reconstructed_parameters: Sequence[Sequence[Any]],
+        all_pairs_test: Sequence[Sequence[Any]],
+        attention_maps: Optional[Sequence[Sequence[Any]]] = None,
+    ) -> Dict[str, Any]:
         """
         Evaluate seeding performance by analyzing the relationship between reconstructed seeds and true particles.
 
@@ -469,17 +505,19 @@ class PerformanceMonitor:
 
         # Global accumulators
         total_seeds = 0
-        eligible_particles = []  # unified list with flags: had_seed, had_pure_seed
+        eligible_particles: List[Dict[str, Any]] = []  # unified list with flags: had_seed, had_pure_seed
 
-        seed_errors = {"z": [], "eta": [], "phi": [], "pt": []}
-        all_seed_metrics = []
-        bin_summaries = []
+        seed_errors: SeedErrors = {"z": [], "eta": [], "phi": [], "pt": []}
+        all_seed_metrics: SeedMetrics = []
+        bin_summaries: List[BinSummary] = []
 
         # === Loop over events ===
         for event_idx in range(test_size):
 
-            event_particle_best_seeds = {}  # track per event best seed for each particle
-            event_particle_bins = {}  # track bins where each particle appears, seed status, and hit stats
+            event_particle_best_seeds: Dict[int, Dict[str, Any]] = {}  # track per event best seed for each particle
+            event_particle_bins: Dict[int, Dict[str, Any]] = (
+                {}
+            )  # track bins where each particle appears, seed status, and hit stats
 
             # Load event data via helper
             event = self._get_event(
@@ -652,9 +690,9 @@ class PerformanceMonitor:
 
     def _build_bin_particles(
         self,
-        particles,
-        IDs,
-    ):
+        particles: np.ndarray,
+        IDs: np.ndarray,
+    ) -> Dict[int, Dict[str, Any]]:
         """Build per-bin particle dictionary from valid hits and IDs.
 
         Returns a dict mapping particle_id -> {
@@ -666,6 +704,10 @@ class PerformanceMonitor:
         - Skips Orphan hits (ID < 0 or pT <= 0)
         - Assumes reconstructed_params is aligned with hits
         """
+        # Normalize shapes: expect flat per-hit IDs aligned with particles
+        IDs = np.asarray(IDs).reshape(-1)
+        particles = np.asarray(particles)
+
         # Apply mask to select non orphan hits
         pt = particles[:, 3]
         mask = (IDs > 0) & (pt > 0.0)
@@ -697,7 +739,13 @@ class PerformanceMonitor:
 
         return bin_particles
 
-    def _associate_seeds_to_particles(self, bin_seeds, bin_particles, IDs, min_common_hits=3):
+    def _associate_seeds_to_particles(
+        self,
+        bin_seeds: Sequence[Tuple[Sequence[int], Sequence[float]]],
+        bin_particles: Dict[int, Dict[str, Any]],
+        IDs: np.ndarray,
+        min_common_hits: int = 3,
+    ) -> Dict[int, List[Dict[str, Any]]]:
         """
         Associate seeds to particles based on most hits in common.
 
@@ -719,7 +767,7 @@ class PerformanceMonitor:
                     "is_pure": bool,    # True if ALL hits of the seed belong to this particle
                 }
         """
-        seeded_particle = {}
+        seeded_particle: Dict[int, List[Dict[str, Any]]] = {}
 
         # Precompute available particle IDs in this bin
         bin_particle_ids = set(bin_particles.keys())
@@ -751,7 +799,11 @@ class PerformanceMonitor:
 
         return seeded_particle
 
-    def _select_best_seed_for_particles(self, seeded_particle, bin_particles):
+    def _select_best_seed_for_particles(
+        self,
+        seeded_particle: Dict[int, List[Dict[str, Any]]],
+        bin_particles: Dict[int, Dict[str, Any]],
+    ) -> Dict[int, Dict[str, Any]]:
         """
         For each particle, select the best associated seed.
 
@@ -817,8 +869,8 @@ class PerformanceMonitor:
 
     def _update_event_particle_bins(
         self,
-        event_particle_bins: dict,
-        bin_particles: dict,
+        event_particle_bins: Dict[int, Dict[str, Any]],
+        bin_particles: Dict[int, Dict[str, Any]],
         hits: np.ndarray,
         bin_idx: int,
         truth_r_tol: float,
@@ -874,7 +926,12 @@ class PerformanceMonitor:
             # Record number of seeds associated to this particle in this bin
             event_particle_bins[particle_id]["n_seeds_in_bins"].append(pdata.get("nb_seed", 0))
 
-    def _update_best_seed_selection(self, event_particle_best_seeds: dict, particle_id: int, data: dict) -> None:
+    def _update_best_seed_selection(
+        self,
+        event_particle_best_seeds: Dict[int, Dict[str, Any]],
+        particle_id: int,
+        data: Dict[str, Any],
+    ) -> None:
         """Update per-event best seed for a particle.
 
         Selection rule:
@@ -900,11 +957,11 @@ class PerformanceMonitor:
 
     def _process_bin_best_associations(
         self,
-        best_associations: dict,
+        best_associations: Dict[int, Dict[str, Any]],
         event_idx: int,
         bin_idx: int,
-        seed_errors: dict,
-        all_seed_metrics: list,
+        seed_errors: SeedErrors,
+        all_seed_metrics: SeedMetrics,
     ) -> None:
         """Record per-bin seed metrics for best associations.
 
@@ -944,10 +1001,10 @@ class PerformanceMonitor:
 
     def _finalize_event_particle_status(
         self,
-        event_particle_bins: dict,
+        event_particle_bins: Dict[int, Dict[str, Any]],
         event_idx: int,
         min_truth_hits: int,
-        eligible_particles: list,
+        eligible_particles: List[Dict[str, Any]],
     ) -> None:
         """Finalize per-event particle status and append to a unified list.
 
@@ -961,9 +1018,11 @@ class PerformanceMonitor:
             if not is_eligible:
                 continue
 
+            true_params = np.asarray(info["true_params"], dtype=float)
+
             # Particle has seed globally if it has seed in ANY bin
-            has_seed_globally = any(info.get("has_seed_in_bins", []))
-            has_pure_seed_globally = any(info.get("has_pure_seed_in_bins", []))
+            has_seed_globally = any(bool(x) for x in info.get("has_seed_in_bins", []))
+            has_pure_seed_globally = any(bool(x) for x in info.get("has_pure_seed_in_bins", []))
 
             # Aggregate seed counts across all bins for this particle
             n_seeds_total = int(np.sum(info.get("n_seeds_in_bins", [])))
@@ -972,7 +1031,7 @@ class PerformanceMonitor:
                 "particle_id": particle_id,
                 "event_idx": event_idx,
                 "bins_appeared": info.get("bins", []),
-                "true_params": info.get("true_params").copy(),
+                "true_params": true_params.copy(),
                 "n_hits": n_truth_hits,
                 "had_seed": has_seed_globally,
                 "had_pure_seed": has_pure_seed_globally,
@@ -981,7 +1040,7 @@ class PerformanceMonitor:
 
             eligible_particles.append(info)
 
-    def _annotate_deltaR_min(self, eligible_particles: list) -> None:
+    def _annotate_deltaR_min(self, eligible_particles: List[Dict[str, Any]]) -> None:
         """Compute and attach per-particle nearest-neighbor ΔR in (eta, phi).
 
         For each event, compute ΔR_i = min_{j != i} sqrt((Δη)^2 + (Δφ)^2), where Δφ is computed
@@ -1031,7 +1090,7 @@ class PerformanceMonitor:
             for p, dr in zip(plist, min_dR):
                 p["deltaR_min"] = float(dr)
 
-    def _analyze_bin_complexity(self, bin_summaries):
+    def _analyze_bin_complexity(self, bin_summaries: Sequence[BinSummary]) -> Dict[str, Any]:
         """Analyze seeding efficiency as a function of bin complexity (number of particles and seeds)."""
         if not bin_summaries:
             return {}
@@ -1098,7 +1157,7 @@ class PerformanceMonitor:
             },
         }
 
-    def _print_seeding_performance_results(self, results):
+    def _print_seeding_performance_results(self, results: Dict[str, Any]) -> None:
         """Print seeding performance results in a formatted way."""
         print("\n" + "=" * 80)
         print("SEEDING PERFORMANCE EVALUATION")
@@ -1166,7 +1225,7 @@ class PerformanceMonitor:
         print("=" * 82)
         print("Note: Resolution computed from best seed per particle (most hits in common, then closest parameters)")
 
-    def _print_bin_complexity_analysis(self, complexity_analysis):
+    def _print_bin_complexity_analysis(self, complexity_analysis: Dict[str, Any]) -> None:
         """Print bin complexity analysis results."""
         print("\n  BIN COMPLEXITY ANALYSIS:")
 
