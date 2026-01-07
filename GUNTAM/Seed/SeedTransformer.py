@@ -1,4 +1,4 @@
-from typing import Tuple, Dict, Any
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -52,39 +52,50 @@ class SeedTransformer(nn.Module):
         self.dim_embedding = dim_embedding
         self.device_acc = device_acc
         self.nb_layers_t = nb_layers_t
-
+        self.nb_heads = nb_heads
+        self.dropout = dropout
         # Calculate number of frequencies to get close to dim_embedding if not provided
         # Output will be: 3 * nfreq * 2 + 3 (Fourier features + cos(phi) + sin(phi) + eta)
-        nfreq = max(1, (dim_embedding - 3) // 6) if (num_frequencies is None) else int(num_frequencies)
+        self.fourier_num_frequencies = (
+            max(1, (dim_embedding - 3) // 6) if (num_frequencies is None) else int(num_frequencies)
+        )
+        self._setup_modules()
+
+    def _setup_modules(
+        self,
+    ) -> None:
+        """
+        Initialize or rebuild all submodules with the provided hyperparameters.
+        """
 
         self.fourier_encoding = FourierPositionalEncoding(
             input_dim=3,
-            num_frequencies=nfreq,
+            num_frequencies=self.fourier_num_frequencies,
             dim_max=[200.0, 200.0, 1000.0],
-            device_acc=device_acc,
+            device_acc=self.device_acc,
         )
 
         # Set input dimension for projection
-        embedding_input_dim = 3 * nfreq * 2 + 3
+        embedding_input_dim = 3 * self.fourier_num_frequencies * 2 + 3
 
-        self.embedding_projection = nn.Linear(embedding_input_dim, dim_embedding, device=device_acc)
+        self.embedding_projection = nn.Linear(embedding_input_dim, self.dim_embedding, device=self.device_acc)
 
         # Transformer model
         self.transformer = TransformerEncoder(
-            n_layers=nb_layers_t,
-            input_dim=dim_embedding,
-            model_dim=dim_embedding,
-            num_heads=nb_heads,  # Number of attention heads can be adjusted
-            dropout=dropout,  # Dropout rate can be adjusted
-            device=device_acc,
+            n_layers=self.nb_layers_t,
+            input_dim=self.dim_embedding,
+            model_dim=self.dim_embedding,
+            num_heads=self.nb_heads,  # Number of attention heads can be adjusted
+            dropout=self.dropout,  # Dropout rate can be adjusted
+            device=self.device_acc,
         )
 
         self.matching_attention = MultiHeadAttention(
-            input_dim=dim_embedding,
-            model_dim=dim_embedding,
+            input_dim=self.dim_embedding,
+            model_dim=self.dim_embedding,
             num_heads=1,
-            dropout=dropout,
-            device=device_acc,
+            dropout=self.dropout,
+            device=self.device_acc,
             use_pytorch=False,
         )
 
@@ -181,25 +192,28 @@ class SeedTransformer(nn.Module):
         self,
         path: str,
         device: torch.device,
-        opt: torch.optim.Optimizer | None = None,
+        optimizer: torch.optim.Optimizer | None = None,
         scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
-    ) -> Dict[str, Any]:
+    ) -> int:
         """
         Load the model state from a file.
         Args:
             - path (str): File path to load the model from.
         Returns:
-            - checkpoint (Dict[str, Any]): Loaded checkpoint dictionary.
+            - start_epoch (int): Epoch to resume training from.
         """
+        start_epoch = 0
         try:
             checkpoint = torch.load(path, weights_only=False, map_location=device)
             state_dict = checkpoint.get("model_state_dict")
             if state_dict is None:
                 print("Checkpoint missing 'model_state_dict'; starting from scratch.")
             else:
+                # Rebuild architecture to match the checkpoint if freq/embedding/layers differ
+                self._rebuild_from_checkpoint_config(checkpoint.get("model_config"), device)
                 load_state_dict_flex(self, state_dict, desc="resume")
-                if "optimizer_state_dict" in checkpoint and opt is not None:
-                    opt.load_state_dict(checkpoint["optimizer_state_dict"])
+                if "optimizer_state_dict" in checkpoint and optimizer is not None:
+                    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
                 if "scheduler_state_dict" in checkpoint and scheduler is not None:
                     scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
                 if "epoch" in checkpoint:
@@ -210,3 +224,46 @@ class SeedTransformer(nn.Module):
         except Exception as e:
             print(f"Failed to load checkpoint ({e}); starting from scratch.")
         return start_epoch
+
+    def _rebuild_from_checkpoint_config(self, model_cfg: dict | None, device: torch.device) -> None:
+        """
+        Recreate architecture modules to match a checkpoint config.
+        Allows loading checkpoints with different architecture parameters.
+        Args:
+            - model_cfg (dict | None): Model configuration from checkpoint.
+            - device (torch.device): Device to allocate rebuilt modules on.
+        Returns:
+            - None
+        """
+        if not model_cfg:
+            return
+
+        # Use checkpoint values, fall back to current ones
+        nb_layers_t = int(model_cfg.get("nb_layers_t", self.nb_layers_t))
+        dim_embedding = int(model_cfg.get("dim_embedding", self.dim_embedding))
+        nb_heads = int(model_cfg.get("nb_heads", self.nb_heads))
+        dropout = float(model_cfg.get("dropout", self.dropout))
+        num_frequencies = model_cfg.get("num_frequencies", None)
+
+        # If nothing differs, keep current modules
+        if (
+            nb_layers_t == self.nb_layers_t
+            and dim_embedding == self.dim_embedding
+            and nb_heads == self.nb_heads
+            and dropout == self.dropout
+            and num_frequencies == self.fourier_num_frequencies
+        ):
+            return
+
+        print("Rebuilding SeedTransformer modules to match checkpoint configuration...")
+
+        self.nb_layers_t = nb_layers_t
+        self.nb_heads = nb_heads
+        self.dim_embedding = dim_embedding
+        self.dropout = dropout
+        self.fourier_num_frequencies = num_frequencies
+        self.device_acc = device
+
+        self._setup_modules()
+
+        self.to(device)

@@ -187,7 +187,7 @@ def train_model(
             tensor_hits = batch_data["tensor_hits"].to(cfg.device_acc)
             tensor_particles = batch_data["tensor_particles"].to(cfg.device_acc)
             padding_mask_hit = batch_data["padding_mask_hit"].to(cfg.device_acc)
-            all_pairs = batch_data["all_pairs"].to(cfg.device_acc)
+            all_pairs = batch_data["all_pairs"]
 
             # Iterate through each event in this batch with a random order
             num_events_in_batch = tensor_hits.shape[0]
@@ -260,7 +260,6 @@ def train_model(
 
                         batch_loss = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
 
-                        ts_print("Processing event ", entry, " bins ", batch_bin_indices)
                         # Perform the hit embedding for all bins in one forward pass
                         encoded_space_points, attention_maps = model(
                             batched_hits, batched_masks

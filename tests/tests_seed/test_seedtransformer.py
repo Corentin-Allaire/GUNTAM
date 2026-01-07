@@ -105,5 +105,85 @@ class TestSeedTransformerForward:
             _ = model(bad_hits, mask)
 
 
+class TestSeedTransformerCheckpointing:
+    """Test suite for checkpoint loading behavior."""
+
+    def test_load_missing_checkpoint(self, tmp_path, capsys):
+        model = SeedTransformer()
+        missing_path = tmp_path / "non_existent_checkpoint.pt"
+
+        # Ensure the path does not exist so load hits the FileNotFoundError branch
+        assert not missing_path.exists()
+
+        start_epoch = model.load(str(missing_path), device=torch.device("cpu"))
+        captured = capsys.readouterr()
+
+        assert start_epoch == 0
+        assert f"No checkpoint found at {missing_path}" in captured.out
+
+    def test_save_writes_checkpoint(self, tmp_path):
+        model = SeedTransformer(nb_layers_t=1, nb_heads=2, dim_embedding=16, dropout=0.0)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "seed_ckpt.pt"
+
+        model.save(epoch=5, path=str(ckpt_path), optimizer=optimizer)
+
+        assert ckpt_path.exists()
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+
+        assert checkpoint["epoch"] == 5
+        assert "model_state_dict" in checkpoint and checkpoint["model_state_dict"]
+        assert "optimizer_state_dict" in checkpoint and checkpoint["optimizer_state_dict"]
+        config = checkpoint.get("model_config")
+        assert config is not None
+        assert config["nb_layers_t"] == 1
+        assert config["dim_embedding"] == 16
+        assert config["nb_heads"] == 2
+        assert config["dropout"] == 0.0
+        assert config["num_frequencies"] == model.fourier_num_frequencies
+
+    def test_save_and_load_round_trip(self, tmp_path):
+        torch.manual_seed(42)
+        model = SeedTransformer(nb_layers_t=2, nb_heads=2, dim_embedding=24, dropout=0.0)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "round_trip.pt"
+
+        # Perform a training step to change parameters from initialization
+        hits = torch.randn(1, 5, 5)
+        mask = torch.zeros(1, 5, dtype=torch.bool)
+        out, _ = model(hits, mask)
+        loss = out.sum()
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+        # Save current state
+        model.save(epoch=3, path=str(ckpt_path), optimizer=optimizer)
+
+        # Load into a fresh model and optimizer
+        torch.manual_seed(123)
+        loaded_model = SeedTransformer(nb_layers_t=2, nb_heads=2, dim_embedding=24, dropout=0.0)
+        loaded_optimizer = torch.optim.Adam(loaded_model.parameters(), lr=1e-3)
+        start_epoch = loaded_model.load(str(ckpt_path), device=torch.device("cpu"), optimizer=loaded_optimizer)
+
+        assert start_epoch == 4
+
+        # Check that parameters match exactly after load
+        for name, param in model.state_dict().items():
+            assert torch.equal(param, loaded_model.state_dict()[name]), f"Mismatch in parameter {name}"
+
+        # Verify optimizer state was restored
+        assert loaded_optimizer.state_dict()["state"], "Optimizer state should not be empty after load"
+
+        # Forward pass outputs should match
+        torch.manual_seed(7)
+        hits = torch.randn(1, 5, 5)
+        ref_out, ref_attn = model(hits, None)
+        test_out, test_attn = loaded_model(hits, None)
+
+        assert torch.allclose(ref_out, test_out, atol=1e-6)
+        assert torch.allclose(ref_attn, test_attn, atol=1e-6)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
