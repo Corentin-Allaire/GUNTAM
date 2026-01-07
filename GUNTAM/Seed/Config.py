@@ -200,10 +200,7 @@ class config:
             "--fourier_num_frequencies",
             type=int,
             default=self.fourier_num_frequencies,
-            help=(
-                "Number of Fourier frequency bands (for embedding_mode='fourier'); "
-                "if omitted, it's derived from dim_embedding"
-            ),
+            help=("Number of Fourier frequency bands; " "if omitted, it's derived from dim_embedding"),
         )
         parser.add_argument(
             "--learning_rate",
