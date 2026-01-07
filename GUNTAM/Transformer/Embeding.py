@@ -67,7 +67,6 @@ class FourierPositionalEncoding(nn.Module):
         self.freq_matrix = (
             frequencies.unsqueeze(0).expand(input_dim, -1).clone()
         )  # Expand and clone to avoid memory aliasing
-        self.register_buffer("freq_matrix", self.freq_matrix)  # Register as buffer so it moves with model
 
     def forward(self, x_sampled: Tensor, x_high_level: Tensor) -> Tensor:
         """Apply Fourier positional encoding.

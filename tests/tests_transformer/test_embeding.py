@@ -18,9 +18,9 @@ class TestFourierPositionalEncodingInitialization:
         assert fpe.num_frequencies == num_frequencies
         expected_output_dim = input_dim * num_frequencies * 2 + high_level_dim
         assert fpe.output_dim == expected_output_dim
-        assert hasattr(fpe, "B")
-        assert fpe.B.shape == (input_dim, num_frequencies)
-        assert torch.allclose(fpe.B[0], 2.0 ** torch.arange(num_frequencies).float())
+        assert hasattr(fpe, "freq_matrix")
+        assert fpe.freq_matrix.shape == (input_dim, num_frequencies)
+        assert torch.allclose(fpe.freq_matrix[0], 2.0 ** torch.arange(num_frequencies).float())
 
     def test_high_level_dim_variations(self):
         """Changing high_level_dim should update output_dim accordingly."""
