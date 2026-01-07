@@ -45,7 +45,7 @@ class SeedTransformer(nn.Module):
         dim_embedding: int = 96,
         dropout: float = 0.1,
         num_frequencies: int | None = None,
-        device_acc: str = "cpu",
+        device_acc: torch.device = torch.device("cpu"),
     ) -> None:
         super(SeedTransformer, self).__init__()
 
@@ -243,7 +243,7 @@ class SeedTransformer(nn.Module):
         dim_embedding = int(model_cfg.get("dim_embedding", self.dim_embedding))
         nb_heads = int(model_cfg.get("nb_heads", self.nb_heads))
         dropout = float(model_cfg.get("dropout", self.dropout))
-        num_frequencies = model_cfg.get("num_frequencies", None)
+        num_frequencies = model_cfg.get("num_frequencies", self.fourier_num_frequencies)
 
         # If nothing differs, keep current modules
         if (

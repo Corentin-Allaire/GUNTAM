@@ -45,7 +45,7 @@ class FourierPositionalEncoding(nn.Module):
         high_level_dim: int = 3,
         num_frequencies: int = 6,
         dim_max: list = [200.0, 200.0, 1000.0],
-        device_acc: str = "cpu",
+        device_acc: torch.device = torch.device("cpu"),
     ) -> None:
         super().__init__()
         if input_dim <= 0:

@@ -104,7 +104,7 @@ class MultiHeadAttention(nn.Module):
         model_dim: int,
         num_heads: int,
         dropout: float = 0.1,
-        device: str = "cpu",
+        device: torch.device = torch.device("cpu"),
         use_pytorch: bool = True,
     ) -> None:
         super(MultiHeadAttention, self).__init__()
@@ -230,11 +230,7 @@ class TransformerFeedForward(nn.Module):
     """
 
     def __init__(
-        self,
-        d_model: int,
-        d_ff: int,
-        dropout: float = 0.1,
-        device: str = "cpu",
+        self, d_model: int, d_ff: int, dropout: float = 0.1, device: torch.device = torch.device("cpu"),
     ) -> None:
         super(TransformerFeedForward, self).__init__()
 
@@ -296,7 +292,7 @@ class EncoderLayer(nn.Module):
         model_dim: int,
         num_heads: int,
         dropout: float | Tuple[float, float] = 0.1,
-        device: str = "cpu",
+        device: torch.device = torch.device("cpu"),
         use_pytorch: bool = True,
     ) -> None:
         super(EncoderLayer, self).__init__()
@@ -395,7 +391,7 @@ class TransformerEncoder(nn.Module):
         num_heads: int | list,
         dropout: float | list = 0.1,
         use_pytorch: bool | list = True,
-        device: str = "cpu",
+        device: torch.device = torch.device("cpu"),
     ) -> None:
         super(TransformerEncoder, self).__init__()
         if n_layers <= 0:

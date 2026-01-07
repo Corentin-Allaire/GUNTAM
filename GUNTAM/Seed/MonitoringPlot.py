@@ -1,8 +1,9 @@
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib.axes import Axes
+import numpy as np
+
 
 plt.switch_backend("Agg")
 
