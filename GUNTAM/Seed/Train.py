@@ -765,7 +765,7 @@ def main():
     if cfg.resume_training:
         ts_print(f"Resuming training from {cfg.model_path}...")
         # Check if a checkpoint file exists
-        model.load(
+        start_epoch = model.load(
             path=cfg.model_path,
             device=cfg.device_acc,
             optimizer=opt,
