@@ -204,7 +204,6 @@ def visualize_attention_map(
     event_idx: int,
     bin_idx: int,
     max_hits: Optional[int] = None,
-    layer_idx: Optional[int] = None,
 ) -> None:
     """
     Visualize an attention-weight matrix for a bin, annotating positive pairs.
@@ -223,8 +222,6 @@ def visualize_attention_map(
     - max_hits: Optional[int]
         If provided, crops the visualization to the first `max_hits` hits
         (top-left `max_hits x max_hits` sub-matrix).
-    - layer_idx: Optional[int]
-        When available, appends the layer information to the title and filename.
 
     Plots
     - 2D image of the attention matrix with a colorbar.
@@ -232,12 +229,11 @@ def visualize_attention_map(
     - Minor grid at cell boundaries; x-axis is query index, y-axis is key index.
 
     Output
-    - Saves `attention_map_event_{event_idx}_bin_{bin_idx}[_layer_{layer_idx}].png`
+    - Saves `attention_map_event_{event_idx}_bin_{bin_idx}.png`
         in the current working directory. Returns None.
     """
 
-    layer_text = f" - Layer {layer_idx}" if layer_idx is not None else ""
-    print(f"\nATTENTION MAP VISUALIZATION{layer_text}:")
+    print("\nATTENTION MAP VISUALIZATION:")
 
     if max_hits is not None and max_hits < attention_weights.shape[0]:
         attention_weights = attention_weights[:max_hits, :max_hits]
@@ -310,8 +306,6 @@ def visualize_attention_map(
         ax.set_xlabel("Hit Index (Query)")
         ax.set_ylabel("Hit Index (Key)")
         title = f"Attention Map - Event {event_idx}, Bin {bin_idx}"
-        if layer_idx is not None:
-            title += f" - Layer {layer_idx}"
         title += "\nGreen ✓: Positive Pairs (Good Connections)"
         ax.set_title(title)
 
@@ -322,8 +316,7 @@ def visualize_attention_map(
         ax.grid(True, which="minor", alpha=0.3)
 
         plt.tight_layout()
-        layer_suffix = f"_layer_{layer_idx}" if layer_idx is not None else ""
-        plot_filename = f"attention_map_event_{event_idx}_bin_{bin_idx}{layer_suffix}.png"
+        plot_filename = f"attention_map_event_{event_idx}_bin_{bin_idx}.png"
         plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
         print("Attention map saved as:", plot_filename)
         plt.close()

@@ -373,8 +373,7 @@ class PerformanceMonitor:
             hits,
             event_idx,
             bin_idx,
-            max_hits=None,
-            layer_idx=None,
+            max_hits=100,
         )
         print("\nAttention statistics:")
         print(f"  Min attention: {np.min(attention_map):.4f}")
