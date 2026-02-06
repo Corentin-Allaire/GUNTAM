@@ -34,7 +34,8 @@ class config:
             - dim_embedding: int: Embedding dimension
             - nb_heads: int: Number of attention heads
             - dropout: float: Dropout rate
-            - fourier_num_frequencies: int | None: Number of Fourier frequency bands for embeddings
+            - fourier_num_frequencies: int | list[int] | None: Number of Fourier frequency bands for embeddings.
+                Can be int (same for all 3 dimensions) or list of 3 ints (one per dimension x,y,z).
 
             - loss_components: list[str]: Active loss components (e.g., 'cosine', 'MSE', 'attention')
             - loss_weights: list[float]: Corresponding weights for each loss component
@@ -198,9 +199,13 @@ class config:
         )
         parser.add_argument(
             "--fourier_num_frequencies",
+            nargs="*",
             type=int,
             default=self.fourier_num_frequencies,
-            help=("Number of Fourier frequency bands; " "if omitted, it's derived from dim_embedding"),
+            help=(
+                "Number of Fourier frequency bands (int or list of 3 ints for x,y,z); "
+                "if omitted, it's derived from dim_embedding"
+            ),
         )
         parser.add_argument(
             "--learning_rate",
@@ -300,7 +305,19 @@ class config:
         self.dim_embedding = args.dim_embedding
         self.nb_heads = args.nb_heads
         self.dropout = args.dropout
-        self.fourier_num_frequencies = args.fourier_num_frequencies
+        # Handle fourier_num_frequencies as int or list
+        if args.fourier_num_frequencies:
+            if len(args.fourier_num_frequencies) == 1:
+                self.fourier_num_frequencies = args.fourier_num_frequencies[0]
+            elif len(args.fourier_num_frequencies) == 3:
+                self.fourier_num_frequencies = args.fourier_num_frequencies
+            else:
+                raise ValueError(
+                    f"fourier_num_frequencies must be either 1 value (for all dims) or 3 values (x,y,z), "
+                    f"got {len(args.fourier_num_frequencies)} values"
+                )
+        else:
+            self.fourier_num_frequencies = None
         self.learning_rate = args.learning_rate
         self.weight_decay = args.weight_decay
         self.batch_size = args.batch_size
