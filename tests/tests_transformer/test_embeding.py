@@ -15,12 +15,14 @@ class TestFourierPositionalEncodingInitialization:
         )
 
         assert fpe.input_dim == input_dim
-        assert fpe.num_frequencies == num_frequencies
-        expected_output_dim = input_dim * num_frequencies * 2 + high_level_dim
+        assert fpe.num_frequencies == [num_frequencies] * input_dim  # Now stored as list
+        expected_output_dim = num_frequencies * input_dim * 2 + high_level_dim
         assert fpe.output_dim == expected_output_dim
-        assert hasattr(fpe, "freq_matrix")
-        assert fpe.freq_matrix.shape == (input_dim, num_frequencies)
-        assert torch.allclose(fpe.freq_matrix[0], 2.0 ** torch.arange(num_frequencies).float())
+        assert hasattr(fpe, "freq_tensors")  # Changed from freq_matrix
+        assert len(fpe.freq_tensors) == input_dim
+        for freq_tensor in fpe.freq_tensors:
+            assert freq_tensor.shape == (num_frequencies,)
+            assert torch.allclose(freq_tensor, 2.0 ** torch.arange(num_frequencies).float())
 
     def test_high_level_dim_variations(self):
         """Changing high_level_dim should update output_dim accordingly."""
@@ -29,7 +31,24 @@ class TestFourierPositionalEncodingInitialization:
             fpe = FourierPositionalEncoding(
                 input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=h
             )
-            assert fpe.output_dim == input_dim * num_frequencies * 2 + h
+            assert fpe.output_dim == sum(fpe.num_frequencies) * 2 + h
+
+    def test_valid_initialization_with_list(self):
+        """Test proper initialization with list of num_frequencies."""
+        input_dim, high_level_dim = 3, 3
+        num_frequencies_list = [4, 6, 8]
+        fpe = FourierPositionalEncoding(
+            input_dim=input_dim, num_frequencies=num_frequencies_list, high_level_dim=high_level_dim
+        )
+
+        assert fpe.input_dim == input_dim
+        assert fpe.num_frequencies == num_frequencies_list
+        expected_output_dim = sum(num_frequencies_list) * 2 + high_level_dim
+        assert fpe.output_dim == expected_output_dim
+        assert len(fpe.freq_tensors) == input_dim
+        for i, num_freq in enumerate(num_frequencies_list):
+            assert fpe.freq_tensors[i].shape == (num_freq,)
+            assert torch.allclose(fpe.freq_tensors[i], 2.0 ** torch.arange(num_freq).float())
 
     def test_initialization_errors(self):
         """Test that invalid constructor arguments raise errors."""
@@ -37,6 +56,10 @@ class TestFourierPositionalEncodingInitialization:
             FourierPositionalEncoding(input_dim=0)
         with pytest.raises(ValueError):
             FourierPositionalEncoding(num_frequencies=0)
+        with pytest.raises(ValueError):
+            FourierPositionalEncoding(num_frequencies=[6, 0, 4])  # Non-positive in list
+        with pytest.raises(ValueError):
+            FourierPositionalEncoding(input_dim=3, num_frequencies=[4, 6])  # Length mismatch
         with pytest.raises(ValueError):
             FourierPositionalEncoding(input_dim=3, dim_max=[1.0, 2.0])  # length mismatch
         with pytest.raises(ValueError):
@@ -59,11 +82,11 @@ class TestFourierPositionalEncodingForward:
 
         output = fpe(x_sampled, x_high_level)
 
-        expected_feature_dim = input_dim * num_frequencies * 2 + high_level_dim
+        expected_feature_dim = sum(fpe.num_frequencies) * 2 + high_level_dim
         assert output.shape == (batch_size, seq_len, expected_feature_dim)
         assert expected_feature_dim == fpe.output_dim
 
-        fourier_part = output[..., : input_dim * num_frequencies * 2]
+        fourier_part = output[..., : sum(fpe.num_frequencies) * 2]
         assert torch.all(fourier_part <= 1.0 + 1e-6)
         assert torch.all(fourier_part >= -1.0 - 1e-6)
 
@@ -82,7 +105,7 @@ class TestFourierPositionalEncodingForward:
             x_sampled = torch.randn(batch_size, seq_len, input_dim)
             x_high_level = torch.randn(batch_size, seq_len, h)
             out = fpe(x_sampled, x_high_level)
-            assert out.shape[-1] == input_dim * num_frequencies * 2 + h
+            assert out.shape[-1] == sum(fpe.num_frequencies) * 2 + h
             assert out.shape[-1] == fpe.output_dim
             assert not torch.isnan(out).any()
 
@@ -117,7 +140,7 @@ class TestFourierPositionalEncodingForward:
         x_sampled = torch.randn(2, 1, 3)
         x_high_level = torch.randn(2, 1, 5)
         out = fpe(x_sampled, x_high_level)
-        expected_dim = 3 * 2 * 2 + 5
+        expected_dim = sum(fpe.num_frequencies) * 2 + 5
         assert out.shape == (2, 1, expected_dim)
         assert out.shape[-1] == fpe.output_dim
         assert not torch.isnan(out).any()

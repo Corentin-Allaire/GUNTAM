@@ -24,9 +24,28 @@ class TestSeedTransformerInitialization:
         dim_embedding = 99  # (99-3)//6 = 16
         model = SeedTransformer(dim_embedding=dim_embedding, nb_heads=3)
         expected_nfreq = max(1, (dim_embedding - 3) // 6)
-        # output_dim of fourier_encoding = 3 * nfreq * 2 + 3
-        assert model.fourier_encoding.num_frequencies == expected_nfreq
-        assert model.fourier_encoding.output_dim == 3 * expected_nfreq * 2 + 3
+        # fourier_encoding.num_frequencies is now a list internally
+        assert model.fourier_encoding.num_frequencies == [expected_nfreq, expected_nfreq, expected_nfreq]
+        # output_dim of fourier_encoding = sum(num_frequencies) * 2 + 3
+        assert model.fourier_encoding.output_dim == sum(model.fourier_encoding.num_frequencies) * 2 + 3
+
+    def test_variable_frequencies_per_dimension(self):
+        # Test with different frequencies for each dimension
+        num_frequencies_list = [4, 6, 8]
+        model = SeedTransformer(num_frequencies=num_frequencies_list, dim_embedding=64, nb_heads=2)
+        
+        assert model.fourier_num_frequencies == num_frequencies_list
+        assert model.fourier_encoding.num_frequencies == num_frequencies_list
+        # output_dim = sum([4, 6, 8]) * 2 + 3 = 18 * 2 + 3 = 39
+        expected_output_dim = sum(num_frequencies_list) * 2 + 3
+        assert model.fourier_encoding.output_dim == expected_output_dim
+        
+        # Test forward pass works
+        hits = torch.randn(2, 5, 5)
+        mask = torch.zeros(2, 5, dtype=torch.bool)
+        output, attn = model(hits, mask)
+        assert output.shape == (2, 5, 64)
+        assert attn.shape == (2, 5, 5)
 
 
 class TestSeedTransformerForward:

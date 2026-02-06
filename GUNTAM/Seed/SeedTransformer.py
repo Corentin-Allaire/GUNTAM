@@ -33,7 +33,8 @@ class SeedTransformer(nn.Module):
         - dim_embedding (int, optional): Dimension of the embedding (hit feature dimension after projection).
             Defaults to 96.
         - dropout (float, optional): Dropout rate used in Transformer and attention layers. Defaults to 0.1.
-        - num_frequencies (int | None, optional): Number of Fourier frequencies for positional encoding.
+        - num_frequencies (int | list[int] | None, optional): Number of Fourier frequencies for positional encoding.
+            Can be int (same for all dimensions) or list of 3 ints (one per dimension x,y,z).
             If None, it is chosen such that the encoded dimension is close to `dim_embedding`. Defaults to None.
         - device_acc (str, optional): Device to run the model on (e.g. "cpu" or "cuda"). Defaults to "cpu".
     """
@@ -44,7 +45,7 @@ class SeedTransformer(nn.Module):
         nb_heads: int = 2,
         dim_embedding: int = 96,
         dropout: float = 0.1,
-        num_frequencies: int | None = None,
+        num_frequencies: int | list[int] | None = None,
         device_acc: torch.device = torch.device("cpu"),
     ) -> None:
         super(SeedTransformer, self).__init__()
@@ -55,10 +56,14 @@ class SeedTransformer(nn.Module):
         self.nb_heads = nb_heads
         self.dropout = dropout
         # Calculate number of frequencies to get close to dim_embedding if not provided
-        # Output will be: 3 * nfreq * 2 + 3 (Fourier features + cos(phi) + sin(phi) + eta)
-        self.fourier_num_frequencies = (
-            max(1, (dim_embedding - 3) // 6) if (num_frequencies is None) else int(num_frequencies)
-        )
+        # Output will be: sum(nfreq) * 2 + 3 (Fourier features + cos(phi) + sin(phi) + eta)
+        self.fourier_num_frequencies: int | list[int]
+        if num_frequencies is None:
+            # Default: same frequency for all 3 dimensions
+            self.fourier_num_frequencies = max(1, (dim_embedding - 3) // 6)
+        else:
+            self.fourier_num_frequencies = num_frequencies
+
         self._setup_modules()
 
     def _setup_modules(
@@ -71,12 +76,14 @@ class SeedTransformer(nn.Module):
         self.fourier_encoding = FourierPositionalEncoding(
             input_dim=3,
             num_frequencies=self.fourier_num_frequencies,
+            high_level_dim=3,
             dim_max=[200.0, 200.0, 1000.0],
             device_acc=self.device_acc,
         )
 
         # Set input dimension for projection
-        embedding_input_dim = 3 * self.fourier_num_frequencies * 2 + 3
+        # fourier_encoding.output_dim already accounts for variable frequencies
+        embedding_input_dim = self.fourier_encoding.output_dim
 
         self.embedding_projection = nn.Linear(embedding_input_dim, self.dim_embedding, device=self.device_acc)
 
