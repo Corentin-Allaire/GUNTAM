@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from GUNTAM.Seed.MonitoringPlot import (
     visualize_attention_map,
-    plot_attention_score_distribution,
     create_seeding_performance_plots,
     create_particle_reconstruction_comparison_plots,
     create_efficiency_vs_truth_param_plots,
@@ -375,22 +374,13 @@ class PerformanceMonitor:
             hits,
             event_idx,
             bin_idx,
-            max_hits=100,
+            max_hits=600,
         )
         print("\nAttention statistics:")
         print(f"  Min attention: {np.min(attention_map):.4f}")
         print(f"  Max attention: {np.max(attention_map):.4f}")
         print(f"  Mean attention: {np.mean(attention_map):.4f}")
         print(f"  Std attention: {np.std(attention_map):.4f}")
-
-        # Plot attention score distribution for good vs bad pairs
-        plot_attention_score_distribution(
-            attention_map,
-            pair_info,
-            event_idx,
-            bin_idx,
-            save_path=f"attention_score_distribution_event{event_idx}_bin{bin_idx}.png",
-        )
 
         print("=" * 120)
 

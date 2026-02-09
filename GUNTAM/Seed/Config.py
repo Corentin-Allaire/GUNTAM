@@ -17,8 +17,9 @@ class config:
             - max_hit_input: int: Maximum number of hits in the encoder input
             - vertex_cuts: list[int, int, int]: Cuts on the vertex position to keep the primary vertex
             - bin_width: float: Width of the bin in phi
-            - eta_bin_width: float: Width of the bin in eta
             - eta_range: list[float, float]: Fixed eta range [min, max] for binning
+            - binning_strategy: str: Binning strategy ('no_bin', 'global', 'neighbor', or 'margin')
+            - binning_margin: float: Margin for margin binning strategy (fraction of bin_width)
             - num_warmup_steps: int: Number of warmup steps for the scheduler
             - val_fraction: float: Fraction of the data to use for validation
             - test_fraction: float: Fraction of the data to use for testing
@@ -29,6 +30,7 @@ class config:
             - resume_training: bool: Resume training from an existing model checkpoint
             - device_acc: torch.device: The device to use (cpu/gpu)
             - max_events: int: Maximum number of events to process, -1 for all events
+            - events_per_file: int: Number of events per file (used for loading and processing)
 
             - nb_layers_t: int: Number of transformer layers
             - dim_embedding: int: Embedding dimension
@@ -47,12 +49,14 @@ class config:
         self.max_hit_input = -1
         self.vertex_cuts = [10, 10, 200]
         self.bin_width = 0.05
-        self.eta_bin_width = 0.5  # Width of the bin in eta
         self.eta_range = [
             -3.0,
             3.0,
         ]
+        self.binning_strategy = "global"  # Binning strategy: 'no_bin', 'global', 'neighbor', or 'margin'
+        self.binning_margin = 0.01  # Margin for margin binning strategy (fraction of bin_width)
         self.max_events = -1
+        self.events_per_file = 100  # Number of events per file (used for loading and processing)
         self.orphan_hit_fraction = 0.0  # Fraction of orphan hits to keep per bin (0.0 to 1.0)
 
         # Training loop variables
@@ -69,6 +73,7 @@ class config:
         self.input_path = "odd_output"  # Read/write path for input data
         self.input_tensor_path = "."  # Read/write path for input tensor .pt files
         self.model_path = "transformer.pt"
+        self.input_format = "csv"  # Input data format: 'csv' or 'h5'
 
         # Model architecture parameters
         self.nb_layers_t = 6
@@ -107,17 +112,27 @@ class config:
             help="Width of the bin in phi",
         )
         parser.add_argument(
-            "--eta_bin_width",
-            type=float,
-            default=self.eta_bin_width,
-            help="Width of the bin in eta",
-        )
-        parser.add_argument(
             "--eta_range",
             nargs=2,
             type=float,
             default=self.eta_range,
             help="Fixed eta range [min, max] for binning (hits/particles outside are filtered)",
+        )
+        parser.add_argument(
+            "--binning_strategy",
+            type=str,
+            default=self.binning_strategy,
+            choices=["no_bin", "global", "neighbor", "margin"],
+            help=(
+                "Binning strategy: 'no_bin' (no binning), 'global' (single bin per value), "
+                "'neighbor' (include neighboring bins), or 'margin' (include bins if near edge)"
+            ),
+        )
+        parser.add_argument(
+            "--binning_margin",
+            type=float,
+            default=self.binning_margin,
+            help="Margin for margin binning strategy (fraction of bin_width, used when binning_strategy='margin')",
         )
 
         parser.add_argument(
@@ -143,6 +158,13 @@ class config:
             type=str,
             default=self.input_tensor_path,
             help="Directory to read/write preprocessed tensor .pt files",
+        )
+        parser.add_argument(
+            "--input_format",
+            type=str,
+            default=self.input_format,
+            choices=["csv", "h5"],
+            help="Input data format: 'csv' (default) or 'h5'",
         )
         parser.add_argument(
             "--test_only",
@@ -171,6 +193,12 @@ class config:
             type=int,
             default=self.max_events,
             help="Maximum number of events to process (-1 for all events)",
+        )
+        parser.add_argument(
+            "--events_per_file",
+            type=int,
+            default=self.events_per_file,
+            help="Number of events per file (used for loading and processing)",
         )
         # Model architecture arguments
         parser.add_argument(
@@ -244,6 +272,7 @@ class config:
                 "full_attention",
                 "topk_attention",
                 "attention_next",
+                "attention_back",
                 "hit_BCE",
             ],
             help="List of loss components to use",
@@ -288,10 +317,10 @@ class config:
         self.max_hit_input = args.max_hit_input
         self.vertex_cuts = args.vertex_cuts
         self.bin_width = args.bin_width
-        self.eta_bin_width = args.eta_bin_width
         self.eta_range = args.eta_range
         self.num_warmup_steps = args.num_warmup_steps
         self.max_events = args.max_events
+        self.events_per_file = args.events_per_file
         self.val_fraction = args.val_fraction
         self.test_fraction = args.test_fraction
         self.input_path = args.input_path
@@ -429,7 +458,6 @@ class config:
         print("Max hit input: ", self.max_hit_input)
         print("Vertex cuts: ", self.vertex_cuts)
         print("Bin width (phi): ", self.bin_width)
-        print("Bin width (eta): ", self.eta_bin_width)
         print("Eta range: ", self.eta_range)
         print("Validation fraction: ", self.val_fraction)
         print("Test fraction: ", self.test_fraction)
@@ -441,6 +469,7 @@ class config:
         print("Device: ", self.device_acc)
         print("Cuda available: ", torch.cuda.is_available())
         print("Max events: ", self.max_events)
+        print("Events per file: ", self.events_per_file)
         print("Timing enabled: ", self.timing_enabled)
 
         # Print model architecture

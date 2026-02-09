@@ -256,6 +256,85 @@ def attention_next_loss(
     return loss
 
 
+def attention_backward_loss(
+    attention_map_bin: torch.Tensor,  # [seq_len, seq_len] attention map logits
+    pairs1: torch.Tensor,  # [N_pairs] first hit indices of each pair
+    pairs2: torch.Tensor,  # [N_pairs] second hit indices of each pair
+    target: torch.Tensor,  # [N_pairs] target labels (-1 or 1)
+) -> torch.Tensor:
+    """
+    Attention loss using cross-entropy for sequential pairs.
+
+    For each hit i in the sequence, if there exists a positive pair (i, i-1),
+    we use the attention distribution from hit i as logits and apply cross-entropy
+    loss with target = i-1. This encourages the model to attend to the previous hit
+    in the same particle track.
+
+        Args:
+            attention_map_bin: `[seq_len, seq_len]` attention logits matrix.
+            pairs1: `[N_pairs]` first indices for pairs.
+            pairs2: `[N_pairs]` second indices for pairs.
+            target: `[N_pairs]` labels where positives are `+1` used to derive next targets.
+
+        Note:
+            Pairs should be symmetric across direction `(i, j)` and `(j, i)` and must not include `(i, i)`.
+
+    """
+    device = attention_map_bin.device
+    pos_mask = target == 1
+    if not torch.any(pos_mask):
+        return torch.tensor(0.0, device=device)
+
+    pos_hits = torch.unique(torch.cat([pairs1[pos_mask], pairs2[pos_mask]]))
+    num_valid_hits = int(torch.max(pos_hits).item()) + 1
+
+    # Positive pairs within valid hit range
+    sources = pairs1[pos_mask]
+    targets = pairs2[pos_mask]
+
+    # Unique sources among valid hits
+    unique_sources = torch.unique(sources)
+
+    # For each source s: choose
+    #  - last backward target: max t where t < s
+    #  - else (no backward), next forward target: min t where t > s
+    selected_targets = torch.full_like(unique_sources, fill_value=num_valid_hits)
+
+    # Vectorized selection per source: prefer max backward target (< s), else min forward (> s)
+    if unique_sources.numel() > 0 and sources.numel() > 0:
+        # Build [S, M] match matrix (S=unique sources, M=pairs)
+        source_eq = unique_sources.view(-1, 1) == sources.view(1, -1)  # [S, M]
+
+        # Pair-wise forward/backward masks (per pair, relative to its own source)
+        forward_pairs_mask = targets >= sources  # [M]
+        backward_pairs_mask = targets < sources  # [M]
+
+        # Broadcast to [S, M]
+        fwd_mask = source_eq & forward_pairs_mask.view(1, -1)
+        back_mask = source_eq & backward_pairs_mask.view(1, -1)
+
+        targets_row = targets.view(1, -1)
+
+        # For backward: take max target; use sentinel = -1 when absent
+        back_candidates = torch.where(back_mask, targets_row, torch.full_like(targets_row, -1))
+        back_max, _ = torch.max(back_candidates, dim=1)  # [S]
+        back_exists = back_mask.any(dim=1)  # [S]
+
+        # For forward: take min target; use sentinel = num_valid_hits when absent
+        fwd_candidates = torch.where(fwd_mask, targets_row, torch.full_like(targets_row, num_valid_hits))
+        fwd_min, _ = torch.min(fwd_candidates, dim=1)  # [S]
+
+        # Prefer backward if exists, else forward
+        selected_targets = torch.where(back_exists, back_max, fwd_min)
+    # else: keep selected_targets as sentinel
+
+    # Restrict logits to valid hits (slice the attention map, not the function)
+    attention_logits = attention_map_bin[:num_valid_hits, :num_valid_hits]
+    loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="sum")
+
+    return loss
+
+
 def reconstruction_loss(
     reconstructed_particle: torch.Tensor,
     particles_data: torch.Tensor,

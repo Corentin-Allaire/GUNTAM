@@ -80,7 +80,7 @@ def topk_seed_reconstruction(
 def chained_seed_reconstruction(
     attention_map: torch.Tensor,
     reconstructed_parameters: torch.Tensor,
-    score_threshold: float = 0.001,
+    score_threshold: float = 0.01,
     max_chain_length: int = 5,
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
     """
@@ -93,8 +93,7 @@ def chained_seed_reconstruction(
         score_threshold: Minimum attention score to add a hit to the chain (default: 0.5)
         max_chain_length: Maximum length of the chain (default: 5)
     Returns:
-        clusters: List of (hit_indices, avg_parameters) tuples for initial per-hit chains
-        seeds: Empty list (kept for signature compatibility)
+        seed: List of (hit_indices, avg_parameters) tuples for initial per-hit chains
     """
     device = attention_map.device
     num_hits = attention_map.size(0)
@@ -128,6 +127,71 @@ def chained_seed_reconstruction(
 
             chain.append(next_idx)
             current_idx = next_idx
+
+        used_mask[chain] = True
+
+        if len(chain) >= 3:
+            chain_indices = torch.tensor(chain, device=device)
+            chain_params = reconstructed_parameters[chain_indices].mean(dim=0)
+            seeds.append((chain_indices.cpu().numpy(), chain_params.cpu().numpy()))
+
+    return seeds
+
+
+def back_chained_seed_reconstruction(
+    attention_map: torch.Tensor,
+    reconstructed_parameters: torch.Tensor,
+    score_threshold: float = 0.01,
+    max_chain_length: int = 5,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Backward chain-based seeding: starting from each hit, iteratively add the highest-attention
+    neighbor with a smaller index above a score threshold to form a backward chain of hits.
+
+    This is the backward counterpart to chained_seed_reconstruction, meant to be used with
+    attention_backward_loss. It chains hits in reverse order (from later to earlier indices).
+
+    Args:
+        attention_map: 2D tensor [N, N] with attention weights
+        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
+        score_threshold: Minimum attention score to add a hit to the chain (default: 0.001)
+        max_chain_length: Maximum length of the chain (default: 5)
+    Returns:
+        seeds: List of (hit_indices, avg_parameters) tuples for initial per-hit backward chains
+    """
+    device = attention_map.device
+    num_hits = attention_map.size(0)
+    seeds: List[Tuple[np.ndarray, np.ndarray]] = []
+
+    if num_hits == 0:
+        return seeds
+
+    # Precompute things
+    all_indices = torch.arange(num_hits, device=device)
+    used_mask = torch.zeros(num_hits, dtype=torch.bool, device=device)
+
+    # Process hits from last to first
+    for start_idx in range(num_hits - 1, -1, -1):
+        if used_mask[start_idx]:
+            continue
+
+        chain = [start_idx]
+        current_idx = start_idx
+
+        for _ in range(max_chain_length - 1):
+            # Get scores only for unused hits before current index
+            att_scores = attention_map[current_idx]
+            valid_mask = (all_indices < current_idx) & (~used_mask) & (att_scores >= score_threshold)
+            if not torch.any(valid_mask):
+                break
+
+            # Get best previous index directly
+            prev_idx = int(torch.argmax(att_scores * valid_mask.float()).item())
+            if att_scores[prev_idx] < score_threshold:
+                break
+
+            chain.append(prev_idx)
+            current_idx = prev_idx
 
         used_mask[chain] = True
 

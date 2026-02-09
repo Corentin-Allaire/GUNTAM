@@ -95,6 +95,8 @@ def initialize_loss_dictionary(active_components: list, device: torch.device) ->
         add_loss_key("full_attention")
     if "attention_next" in active_components:
         add_loss_key("attention_next")
+    if "attention_back" in active_components:
+        add_loss_key("attention_back")
 
     # Reconstruction losses and sub-components
     if "MSE" in active_components or "L1" in active_components:
@@ -351,6 +353,12 @@ def train_model(
                                     batch_loss["attention_next"] += Losses.attention_next_loss(
                                         attention_map_bin, pairs1, pairs2, target
                                     )
+                            # Compute the attention backward loss (sequential pairs with cross-entropy)
+                            if cfg.has_loss_component("attention_back"):
+                                if attention_map_bin is not None:
+                                    batch_loss["attention_back"] += Losses.attention_backward_loss(
+                                        attention_map_bin, pairs1, pairs2, target
+                                    )
 
                             num_valid_bins += 1
 
@@ -579,6 +587,16 @@ def run_model(
                         neighbor_matrix_masked.fill_diagonal_(float("-inf"))
                         neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
                         bin_seeds = Reconstruction.chained_seed_reconstruction(
+                            neighbor_matrix_masked,
+                            valid_parameters,
+                            score_threshold=0.2,
+                            max_chain_length=5,
+                        )
+                    elif cfg.has_loss_component("attention_back"):
+                        # Use attention-back based reconstruction (row-normalized scores)
+                        neighbor_matrix_masked.fill_diagonal_(float("-inf"))
+                        neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
+                        bin_seeds = Reconstruction.back_chained_seed_reconstruction(
                             neighbor_matrix_masked,
                             valid_parameters,
                             score_threshold=0.2,

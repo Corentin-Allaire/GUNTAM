@@ -1,134 +1,10 @@
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 import numpy as np
 
 plt.switch_backend("Agg")
-
-
-def plot_attention_score_distribution(
-    attention_map: np.ndarray,
-    pair_info: Dict[Tuple[int, int], Dict[str, Any]],
-    event_idx: int,
-    bin_idx: int,
-    save_path: str = "attention_score_distribution.png",
-) -> None:
-    """
-    Plot the distribution of attention scores for good and bad pairs.
-
-    Args:
-        attention_map: Attention matrix [n_hits, n_hits]
-        pair_info: Dict mapping (hit1, hit2) -> {"target": int, "is_good": bool}
-        event_idx: Event index for labeling
-        bin_idx: Bin index for labeling
-        save_path: Path to save the plot
-    """
-    good_scores_list = []
-    bad_scores_list = []
-
-    # Extract attention scores for good and bad pairs
-    for (i, j), info in pair_info.items():
-        if i < attention_map.shape[0] and j < attention_map.shape[1]:
-            score = attention_map[i, j]
-            if info["is_good"]:
-                good_scores_list.append(score)
-            else:
-                bad_scores_list.append(score)
-
-    good_scores = np.array(good_scores_list)
-    bad_scores = np.array(bad_scores_list)
-
-    # Create two separate histogram plots
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Plot 1: Good pairs histogram (linear scale)
-    if len(good_scores) > 0:
-        axes[0].hist(
-            good_scores,
-            bins=50,
-            alpha=0.7,
-            color="green",
-            label=f"Good pairs (n={len(good_scores)})",
-            density=True,
-            edgecolor="black",
-            linewidth=0.5,
-        )
-        axes[0].set_xlabel("Attention Score", fontsize=12)
-        axes[0].set_ylabel("Normalized Frequency", fontsize=12)
-        axes[0].set_title("Good Pairs Distribution", fontsize=13)
-        axes[0].grid(True, alpha=0.3)
-
-        # Add statistics text
-        stats_text = (
-            f"Mean: {np.mean(good_scores):.4f}\n" f"Std: {np.std(good_scores):.4f}\n" f"Count: {len(good_scores)}"
-        )
-        axes[0].text(
-            0.02,
-            0.98,
-            stats_text,
-            transform=axes[0].transAxes,
-            fontsize=9,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-        )
-    else:
-        axes[0].text(
-            0.5,
-            0.5,
-            "No good pairs",
-            transform=axes[0].transAxes,
-            ha="center",
-            va="center",
-        )
-        axes[0].set_title("Good Pairs Distribution")
-
-    # Plot 2: Bad pairs histogram (log scale)
-    if len(bad_scores) > 0:
-        axes[1].hist(
-            bad_scores,
-            bins=50,
-            alpha=0.7,
-            color="red",
-            label=f"Bad pairs (n={len(bad_scores)})",
-            density=True,
-            edgecolor="black",
-            linewidth=0.5,
-        )
-        axes[1].set_xlabel("Attention Score", fontsize=12)
-        axes[1].set_ylabel("Normalized Frequency (log scale)", fontsize=12)
-        axes[1].set_title("Bad Pairs Distribution", fontsize=13)
-        axes[1].set_yscale("log")
-        axes[1].grid(True, alpha=0.3)
-
-        # Add statistics text
-        stats_text = f"Mean: {np.mean(bad_scores):.4f}\n" f"Std: {np.std(bad_scores):.4f}\n" f"Count: {len(bad_scores)}"
-        axes[1].text(
-            0.02,
-            0.98,
-            stats_text,
-            transform=axes[1].transAxes,
-            fontsize=9,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-        )
-    else:
-        axes[1].text(
-            0.5,
-            0.5,
-            "No bad pairs",
-            transform=axes[1].transAxes,
-            ha="center",
-            va="center",
-        )
-        axes[1].set_title("Bad Pairs Distribution")
-
-    fig.suptitle(f"Attention Score Distribution (Event {event_idx}, Bin {bin_idx})", fontsize=14)
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Attention score distribution plot saved to: {save_path}")
 
 
 class PlotUtility:
@@ -396,7 +272,7 @@ def visualize_attention_map(
                 "✓",
                 ha="center",
                 va="center",
-                fontsize=12,
+                fontsize=2,
                 fontweight="bold",
                 color="lime",
             )
@@ -411,7 +287,7 @@ def visualize_attention_map(
                     symbol,
                     ha="center",
                     va="center",
-                    fontsize=12,
+                    fontsize=2,
                     fontweight="bold",
                     color=color,
                 )
@@ -421,7 +297,7 @@ def visualize_attention_map(
                     symbol,
                     ha="center",
                     va="center",
-                    fontsize=12,
+                    fontsize=2,
                     fontweight="bold",
                     color=color,
                 )
