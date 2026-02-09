@@ -1455,23 +1455,6 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
         ax.set_ylabel(y_label, fontsize=11)
         ax.set_title(f"Efficiency: {y_label} vs {x_label}", fontsize=12)
 
-        # Add contour lines for better visualization
-        X, Y = np.meshgrid(
-            0.5 * (x_edges[:-1] + x_edges[1:]),
-            0.5 * (y_edges[:-1] + y_edges[1:]),
-        )
-        contour_levels = [0.3, 0.5, 0.7, 0.9]
-        cs = ax.contour(
-            X,
-            Y,
-            efficiency_2d.T,
-            levels=contour_levels,
-            colors="black",
-            alpha=0.3,
-            linewidths=0.5,
-        )
-        ax.clabel(cs, inline=True, fontsize=8, fmt="%.1f")
-
         # Add text showing overall efficiency
         overall_eff = np.sum(seeded_counts) / np.sum(all_counts) if np.sum(all_counts) > 0 else 0.0
         ax.text(
