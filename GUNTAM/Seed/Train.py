@@ -558,8 +558,8 @@ def run_model(
                     continue
 
                 # Get encoded space points for valid hits
-                valid_sp = encoded_space_point[bin_idx][bin_mask].cpu().detach()
-                valid_parameters = parameters[bin_idx][bin_mask].cpu().detach()
+                valid_sp = encoded_space_point[bin_idx].cpu().detach()
+                valid_parameters = parameters[bin_idx].cpu().detach()
                 valid_attention_weights = attention_weights[bin_idx].squeeze(0).detach().cpu()
                 bin_mask_cpu = bin_mask.detach().cpu()
 
@@ -595,7 +595,7 @@ def run_model(
                         )
                     event_seeds.append(bin_seeds)
                     # Store matrix used for seeding (either scores or attention)
-                    event_attention_maps.append(neighbor_matrix_masked.cpu().detach().numpy())
+                    event_attention_maps.append(valid_attention_weights.cpu().detach().numpy())
                 else:
                     # No attention weights or pairwise scores available - append placeholder to keep alignment
                     event_seeds.append([])
