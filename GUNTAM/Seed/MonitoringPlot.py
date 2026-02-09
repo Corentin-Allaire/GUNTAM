@@ -1367,9 +1367,10 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
         Required keys per particle:
         - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
         - `"had_seed"`: bool flag for at least one seed.
+        - Optional `"deltaR_min"`: float for ΔR to closest neighbor.
 
     Plots
-    - 2D heatmaps for all pairs: (z0, eta), (z0, phi), (z0, pT), (eta, phi), (eta, pT), (phi, pT)
+    - 2D heatmaps for all pairs including deltaR when available
 
     Output
     - Saves `efficiency_2d_heatmaps.png`.
@@ -1390,6 +1391,10 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
     # Normalize phi to [-π, π]
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
 
+    # Check if deltaR is available
+    deltaR = np.array([p.get("deltaR_min", np.inf) for p in eligible_particles], dtype=float)
+    has_deltaR = np.any(np.isfinite(deltaR))
+
     # Define parameter pairs and their labels
     param_pairs = [
         (z0, eta, "z0 [mm]", "η", "z0_eta"),
@@ -1400,8 +1405,28 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
         (phi, pt, "φ [rad]", "pT [GeV]", "phi_pt"),
     ]
 
-    # Create figure with 2x3 subplots
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    # Add deltaR pairs if available
+    if has_deltaR:
+        param_pairs.extend(
+            [
+                (deltaR, eta, "ΔR", "η", "deltaR_eta"),
+                (deltaR, phi, "ΔR", "φ [rad]", "deltaR_phi"),
+                (deltaR, pt, "ΔR", "pT [GeV]", "deltaR_pt"),
+                (deltaR, z0, "ΔR", "z0 [mm]", "deltaR_z0"),
+            ]
+        )
+
+    # Determine grid size based on number of plots
+    n_plots = len(param_pairs)
+    if n_plots <= 6:
+        nrows, ncols = 2, 3
+    elif n_plots <= 12:
+        nrows, ncols = 3, 4
+    else:
+        nrows, ncols = 4, 4
+
+    # Create figure with appropriate subplots
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows))
     axes = axes.flatten()
 
     for idx, (x_data, y_data, x_label, y_label, name) in enumerate(param_pairs):
@@ -1412,7 +1437,13 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
             """Get bin edges for data, handling edge cases."""
             if len(data) == 0:
                 return np.linspace(0, 1, n_bins + 1)
-            data_min, data_max = np.percentile(data, [1, 99])
+
+            # Filter out infinite values for deltaR
+            finite_data = data[np.isfinite(data)]
+            if len(finite_data) == 0:
+                return np.linspace(0, 1, n_bins + 1)
+
+            data_min, data_max = np.percentile(finite_data, [1, 99])
             if data_min == data_max:
                 data_min -= 1e-6
                 data_max += 1e-6
@@ -1421,14 +1452,34 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
                 return np.linspace(-np.pi, np.pi, n_bins + 1)
             return np.linspace(data_min, data_max, n_bins + 1)
 
-        x_bins = get_bins(x_data, n_bins=15)
-        y_bins = get_bins(y_data, n_bins=15)
+        # Filter data to remove infinite deltaR values for binning
+        if "ΔR" in x_label or "ΔR" in y_label:
+            valid_mask = np.isfinite(x_data) & np.isfinite(y_data)
+            x_data_filtered = x_data[valid_mask]
+            y_data_filtered = y_data[valid_mask]
+            has_seed_filtered = has_seed[valid_mask]
+        else:
+            x_data_filtered = x_data
+            y_data_filtered = y_data
+            has_seed_filtered = has_seed
+
+        if len(x_data_filtered) == 0:
+            ax.text(0.5, 0.5, "No finite data", transform=ax.transAxes, ha="center", va="center")
+            ax.set_xlabel(x_label, fontsize=11)
+            ax.set_ylabel(y_label, fontsize=11)
+            ax.set_title(f"Efficiency: {y_label} vs {x_label}", fontsize=12)
+            continue
+
+        x_bins = get_bins(x_data_filtered, n_bins=15)
+        y_bins = get_bins(y_data_filtered, n_bins=15)
 
         # Compute 2D histogram of all particles
-        all_counts, x_edges, y_edges = np.histogram2d(x_data, y_data, bins=[x_bins, y_bins])
+        all_counts, x_edges, y_edges = np.histogram2d(x_data_filtered, y_data_filtered, bins=[x_bins, y_bins])
 
         # Compute 2D histogram of particles with seeds
-        seeded_counts, _, _ = np.histogram2d(x_data[has_seed], y_data[has_seed], bins=[x_bins, y_bins])
+        seeded_counts, _, _ = np.histogram2d(
+            x_data_filtered[has_seed_filtered], y_data_filtered[has_seed_filtered], bins=[x_bins, y_bins]
+        )
 
         # Calculate efficiency per bin
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1466,6 +1517,10 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
             verticalalignment="top",
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
         )
+
+    # Hide extra subplots if any
+    for idx in range(n_plots, len(axes)):
+        axes[idx].axis("off")
 
     plt.tight_layout()
     out_name = "efficiency_2d_heatmaps.png"

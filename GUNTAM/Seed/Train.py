@@ -594,7 +594,7 @@ def run_model(
                             max_selection=5,
                         )
                     event_seeds.append(bin_seeds)
-                    
+
                     # Apply softmax row-wise to attention weights for monitoring
                     attention_softmax = torch.softmax(valid_attention_weights, dim=-1)
                     event_attention_maps.append(attention_softmax.cpu().detach().numpy())
