@@ -39,44 +39,29 @@ def plot_attention_score_distribution(
     good_scores = np.array(good_scores_list)
     bad_scores = np.array(bad_scores_list)
 
-    # Create figure with two subplots
+    # Create two separate histogram plots
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Plot 1: Overlaid histograms (normalized)
-    if len(good_scores) > 0 and len(bad_scores) > 0:
+    # Plot 1: Good pairs histogram (linear scale)
+    if len(good_scores) > 0:
         axes[0].hist(
             good_scores,
             bins=50,
-            alpha=0.6,
+            alpha=0.7,
             color="green",
             label=f"Good pairs (n={len(good_scores)})",
             density=True,
             edgecolor="black",
             linewidth=0.5,
         )
-        axes[0].hist(
-            bad_scores,
-            bins=50,
-            alpha=0.6,
-            color="red",
-            label=f"Bad pairs (n={len(bad_scores)})",
-            density=True,
-            edgecolor="black",
-            linewidth=0.5,
-        )
         axes[0].set_xlabel("Attention Score", fontsize=12)
         axes[0].set_ylabel("Normalized Frequency", fontsize=12)
-        axes[0].set_title(
-            f"Attention Score Distribution (Event {event_idx}, Bin {bin_idx})",
-            fontsize=13,
-        )
-        axes[0].legend(fontsize=10)
+        axes[0].set_title("Good Pairs Distribution", fontsize=13)
         axes[0].grid(True, alpha=0.3)
 
         # Add statistics text
         stats_text = (
-            f"Good: mean={np.mean(good_scores):.4f}, std={np.std(good_scores):.4f}\n"
-            f"Bad: mean={np.mean(bad_scores):.4f}, std={np.std(bad_scores):.4f}"
+            f"Mean: {np.mean(good_scores):.4f}\n" f"Std: {np.std(good_scores):.4f}\n" f"Count: {len(good_scores)}"
         )
         axes[0].text(
             0.02,
@@ -91,50 +76,54 @@ def plot_attention_score_distribution(
         axes[0].text(
             0.5,
             0.5,
-            "Insufficient data for distribution",
+            "No good pairs",
             transform=axes[0].transAxes,
             ha="center",
             va="center",
         )
-        axes[0].set_title("Attention Score Distribution")
+        axes[0].set_title("Good Pairs Distribution")
 
-    # Plot 2: Cumulative distribution
-    if len(good_scores) > 0 and len(bad_scores) > 0:
-        good_sorted = np.sort(good_scores)
-        bad_sorted = np.sort(bad_scores)
-        good_cumulative = np.arange(1, len(good_sorted) + 1) / len(good_sorted)
-        bad_cumulative = np.arange(1, len(bad_sorted) + 1) / len(bad_sorted)
-
-        axes[1].plot(
-            good_sorted,
-            good_cumulative,
-            color="green",
-            linewidth=2,
-            label="Good pairs",
-        )
-        axes[1].plot(
-            bad_sorted,
-            bad_cumulative,
+    # Plot 2: Bad pairs histogram (log scale)
+    if len(bad_scores) > 0:
+        axes[1].hist(
+            bad_scores,
+            bins=50,
+            alpha=0.7,
             color="red",
-            linewidth=2,
-            label="Bad pairs",
+            label=f"Bad pairs (n={len(bad_scores)})",
+            density=True,
+            edgecolor="black",
+            linewidth=0.5,
         )
         axes[1].set_xlabel("Attention Score", fontsize=12)
-        axes[1].set_ylabel("Cumulative Probability", fontsize=12)
-        axes[1].set_title("Cumulative Distribution Function", fontsize=13)
-        axes[1].legend(fontsize=10)
+        axes[1].set_ylabel("Normalized Frequency (log scale)", fontsize=12)
+        axes[1].set_title("Bad Pairs Distribution", fontsize=13)
+        axes[1].set_yscale("log")
         axes[1].grid(True, alpha=0.3)
-        axes[1].set_ylim([0, 1])
+
+        # Add statistics text
+        stats_text = f"Mean: {np.mean(bad_scores):.4f}\n" f"Std: {np.std(bad_scores):.4f}\n" f"Count: {len(bad_scores)}"
+        axes[1].text(
+            0.02,
+            0.98,
+            stats_text,
+            transform=axes[1].transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+        )
     else:
         axes[1].text(
             0.5,
             0.5,
-            "Insufficient data for CDF",
+            "No bad pairs",
             transform=axes[1].transAxes,
             ha="center",
             va="center",
         )
-        axes[1].set_title("Cumulative Distribution Function")
+        axes[1].set_title("Bad Pairs Distribution")
+
+    fig.suptitle(f"Attention Score Distribution (Event {event_idx}, Bin {bin_idx})", fontsize=14)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
