@@ -1,10 +1,145 @@
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 import numpy as np
 
 plt.switch_backend("Agg")
+
+
+def plot_attention_score_distribution(
+    attention_map: np.ndarray,
+    pair_info: Dict[Tuple[int, int], Dict[str, Any]],
+    event_idx: int,
+    bin_idx: int,
+    save_path: str = "attention_score_distribution.png",
+) -> None:
+    """
+    Plot the distribution of attention scores for good and bad pairs.
+
+    Args:
+        attention_map: Attention matrix [n_hits, n_hits]
+        pair_info: Dict mapping (hit1, hit2) -> {"target": int, "is_good": bool}
+        event_idx: Event index for labeling
+        bin_idx: Bin index for labeling
+        save_path: Path to save the plot
+    """
+    good_scores_list = []
+    bad_scores_list = []
+
+    # Extract attention scores for good and bad pairs
+    for (i, j), info in pair_info.items():
+        if i < attention_map.shape[0] and j < attention_map.shape[1]:
+            score = attention_map[i, j]
+            if info["is_good"]:
+                good_scores_list.append(score)
+            else:
+                bad_scores_list.append(score)
+
+    good_scores = np.array(good_scores_list)
+    bad_scores = np.array(bad_scores_list)
+
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Overlaid histograms (normalized)
+    if len(good_scores) > 0 and len(bad_scores) > 0:
+        axes[0].hist(
+            good_scores,
+            bins=50,
+            alpha=0.6,
+            color="green",
+            label=f"Good pairs (n={len(good_scores)})",
+            density=True,
+            edgecolor="black",
+            linewidth=0.5,
+        )
+        axes[0].hist(
+            bad_scores,
+            bins=50,
+            alpha=0.6,
+            color="red",
+            label=f"Bad pairs (n={len(bad_scores)})",
+            density=True,
+            edgecolor="black",
+            linewidth=0.5,
+        )
+        axes[0].set_xlabel("Attention Score", fontsize=12)
+        axes[0].set_ylabel("Normalized Frequency", fontsize=12)
+        axes[0].set_title(
+            f"Attention Score Distribution (Event {event_idx}, Bin {bin_idx})",
+            fontsize=13,
+        )
+        axes[0].legend(fontsize=10)
+        axes[0].grid(True, alpha=0.3)
+
+        # Add statistics text
+        stats_text = (
+            f"Good: mean={np.mean(good_scores):.4f}, std={np.std(good_scores):.4f}\n"
+            f"Bad: mean={np.mean(bad_scores):.4f}, std={np.std(bad_scores):.4f}"
+        )
+        axes[0].text(
+            0.02,
+            0.98,
+            stats_text,
+            transform=axes[0].transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+        )
+    else:
+        axes[0].text(
+            0.5,
+            0.5,
+            "Insufficient data for distribution",
+            transform=axes[0].transAxes,
+            ha="center",
+            va="center",
+        )
+        axes[0].set_title("Attention Score Distribution")
+
+    # Plot 2: Cumulative distribution
+    if len(good_scores) > 0 and len(bad_scores) > 0:
+        good_sorted = np.sort(good_scores)
+        bad_sorted = np.sort(bad_scores)
+        good_cumulative = np.arange(1, len(good_sorted) + 1) / len(good_sorted)
+        bad_cumulative = np.arange(1, len(bad_sorted) + 1) / len(bad_sorted)
+
+        axes[1].plot(
+            good_sorted,
+            good_cumulative,
+            color="green",
+            linewidth=2,
+            label="Good pairs",
+        )
+        axes[1].plot(
+            bad_sorted,
+            bad_cumulative,
+            color="red",
+            linewidth=2,
+            label="Bad pairs",
+        )
+        axes[1].set_xlabel("Attention Score", fontsize=12)
+        axes[1].set_ylabel("Cumulative Probability", fontsize=12)
+        axes[1].set_title("Cumulative Distribution Function", fontsize=13)
+        axes[1].legend(fontsize=10)
+        axes[1].grid(True, alpha=0.3)
+        axes[1].set_ylim([0, 1])
+    else:
+        axes[1].text(
+            0.5,
+            0.5,
+            "Insufficient data for CDF",
+            transform=axes[1].transAxes,
+            ha="center",
+            va="center",
+        )
+        axes[1].set_title("Cumulative Distribution Function")
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Attention score distribution plot saved to: {save_path}")
 
 
 class PlotUtility:
@@ -1221,3 +1356,136 @@ def create_seeds_per_particle_vs_truth_param_plots(
         plt.close()
     except Exception as e:
         print(f"Error while plotting seeds-per-particle vs parameters: {e}")
+
+
+def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]]) -> None:
+    """
+    Create 2D heatmaps showing seeding efficiency as a function of pairs of truth parameters.
+
+    Inputs
+    - eligible_particles: Sequence[Mapping[str, Any]]
+        Required keys per particle:
+        - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
+        - `"had_seed"`: bool flag for at least one seed.
+
+    Plots
+    - 2D heatmaps for all pairs: (z0, eta), (z0, phi), (z0, pT), (eta, phi), (eta, pT), (phi, pT)
+
+    Output
+    - Saves `efficiency_2d_heatmaps.png`.
+    """
+
+    if not eligible_particles:
+        print("No eligible particles for 2D efficiency heatmaps")
+        return
+
+    truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
+    has_seed = np.array([bool(p.get("had_seed", False)) for p in eligible_particles])
+
+    z0 = truth_params[:, 0]
+    eta = truth_params[:, 1]
+    phi = truth_params[:, 2]
+    pt = truth_params[:, 3]
+
+    # Normalize phi to [-π, π]
+    phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
+
+    # Define parameter pairs and their labels
+    param_pairs = [
+        (z0, eta, "z0 [mm]", "η", "z0_eta"),
+        (z0, phi, "z0 [mm]", "φ [rad]", "z0_phi"),
+        (z0, pt, "z0 [mm]", "pT [GeV]", "z0_pt"),
+        (eta, phi, "η", "φ [rad]", "eta_phi"),
+        (eta, pt, "η", "pT [GeV]", "eta_pt"),
+        (phi, pt, "φ [rad]", "pT [GeV]", "phi_pt"),
+    ]
+
+    # Create figure with 2x3 subplots
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
+
+    for idx, (x_data, y_data, x_label, y_label, name) in enumerate(param_pairs):
+        ax = axes[idx]
+
+        # Define bins based on data range
+        def get_bins(data, n_bins=15):
+            """Get bin edges for data, handling edge cases."""
+            if len(data) == 0:
+                return np.linspace(0, 1, n_bins + 1)
+            data_min, data_max = np.percentile(data, [1, 99])
+            if data_min == data_max:
+                data_min -= 1e-6
+                data_max += 1e-6
+            # Special handling for phi
+            if "φ" in y_label and y_data is data:
+                return np.linspace(-np.pi, np.pi, n_bins + 1)
+            return np.linspace(data_min, data_max, n_bins + 1)
+
+        x_bins = get_bins(x_data, n_bins=15)
+        y_bins = get_bins(y_data, n_bins=15)
+
+        # Compute 2D histogram of all particles
+        all_counts, x_edges, y_edges = np.histogram2d(x_data, y_data, bins=[x_bins, y_bins])
+
+        # Compute 2D histogram of particles with seeds
+        seeded_counts, _, _ = np.histogram2d(x_data[has_seed], y_data[has_seed], bins=[x_bins, y_bins])
+
+        # Calculate efficiency per bin
+        with np.errstate(divide="ignore", invalid="ignore"):
+            efficiency_2d = np.where(all_counts > 0, seeded_counts / all_counts, np.nan)
+
+        # Create heatmap
+        im = ax.imshow(
+            efficiency_2d.T,
+            origin="lower",
+            extent=[x_edges[0], x_edges[-1], y_edges[0], y_edges[-1]],
+            aspect="auto",
+            cmap="RdYlGn",
+            vmin=0.0,
+            vmax=1.0,
+            interpolation="nearest",
+        )
+
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label("Efficiency", rotation=270, labelpad=20)
+
+        # Set labels and title
+        ax.set_xlabel(x_label, fontsize=11)
+        ax.set_ylabel(y_label, fontsize=11)
+        ax.set_title(f"Efficiency: {y_label} vs {x_label}", fontsize=12)
+
+        # Add contour lines for better visualization
+        X, Y = np.meshgrid(
+            0.5 * (x_edges[:-1] + x_edges[1:]),
+            0.5 * (y_edges[:-1] + y_edges[1:]),
+        )
+        contour_levels = [0.3, 0.5, 0.7, 0.9]
+        cs = ax.contour(
+            X,
+            Y,
+            efficiency_2d.T,
+            levels=contour_levels,
+            colors="black",
+            alpha=0.3,
+            linewidths=0.5,
+        )
+        ax.clabel(cs, inline=True, fontsize=8, fmt="%.1f")
+
+        # Add text showing overall efficiency
+        overall_eff = np.sum(seeded_counts) / np.sum(all_counts) if np.sum(all_counts) > 0 else 0.0
+        ax.text(
+            0.02,
+            0.98,
+            f"Overall: {overall_eff:.1%}",
+            transform=ax.transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
+        )
+
+    plt.tight_layout()
+    out_name = "efficiency_2d_heatmaps.png"
+    plt.savefig(out_name, dpi=300, bbox_inches="tight")
+    print("2D efficiency heatmap plots saved as:", out_name)
+    plt.close()

@@ -4,10 +4,12 @@ import numpy as np
 import torch
 from GUNTAM.Seed.MonitoringPlot import (
     visualize_attention_map,
+    plot_attention_score_distribution,
     create_seeding_performance_plots,
     create_particle_reconstruction_comparison_plots,
     create_efficiency_vs_truth_param_plots,
     create_seeds_per_particle_vs_truth_param_plots,
+    create_2d_efficiency_heatmaps,
 )
 
 SeedErrors = Dict[str, List[float]]
@@ -206,7 +208,7 @@ class PerformanceMonitor:
 
         bin_hits = event_hits[bin_idx][bin_mask]
         bin_particles = event_particles[bin_idx][bin_mask]
-        bin_reconstructed = event_reconstructed[bin_idx]
+        bin_reconstructed = event_reconstructed[bin_idx][bin_mask]
         bin_pairs = event_pairs[bin_idx]
         bin_seed = event_seeds[bin_idx]
         bin_IDs = event_ID[bin_idx][bin_mask]
@@ -380,6 +382,15 @@ class PerformanceMonitor:
         print(f"  Max attention: {np.max(attention_map):.4f}")
         print(f"  Mean attention: {np.mean(attention_map):.4f}")
         print(f"  Std attention: {np.std(attention_map):.4f}")
+
+        # Plot attention score distribution for good vs bad pairs
+        plot_attention_score_distribution(
+            attention_map,
+            pair_info,
+            event_idx,
+            bin_idx,
+            save_path=f"attention_score_distribution_event{event_idx}_bin{bin_idx}.png",
+        )
 
         print("=" * 120)
 
@@ -671,6 +682,7 @@ class PerformanceMonitor:
                 self._annotate_deltaR_min(eligible_particles)
                 create_efficiency_vs_truth_param_plots(eligible_particles)
                 create_seeds_per_particle_vs_truth_param_plots(eligible_particles)
+                create_2d_efficiency_heatmaps(eligible_particles)
             except Exception as e:
                 print(f"Error creating efficiency-vs-parameter plots: {e}")
 
