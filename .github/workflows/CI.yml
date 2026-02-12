@@ -59,7 +59,7 @@ jobs:
         run: pdm install
 
       - name: Run tests
-        run: pdm run pytest --cov=GUNTAM --ignore=tests/test_integration
+        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=xml --ignore=tests/test_integration
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
