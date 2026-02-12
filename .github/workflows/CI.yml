@@ -79,3 +79,23 @@ jobs:
 
       - name: Run mypy
         run: pdm run mypy -p GUNTAM
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: [lint, test, Typing]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Ensure deps
+        run: pdm install
+
+      - name: Run integration tests
+        run: pdm run pytest tests/test_integration/test_integration_seed.py
+  
