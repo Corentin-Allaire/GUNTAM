@@ -61,9 +61,7 @@ class FourierPositionalEncoding(nn.Module):
         else:
             num_frequencies_list = list(num_frequencies)
             if len(num_frequencies_list) != input_dim:
-                raise ValueError(
-                    f"num_frequencies list length ({len(num_frequencies_list)}) must match input_dim ({input_dim})"
-                )
+                raise ValueError(f"num_frequencies list length ({len(num_frequencies_list)}) must match input_dim ({input_dim})")
             if any(n <= 0 for n in num_frequencies_list):
                 raise ValueError("All num_frequencies values must be greater than 0")
 

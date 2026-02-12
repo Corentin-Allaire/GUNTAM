@@ -59,9 +59,7 @@ def _normalize_state_dict_keys(state_dict: Dict[str, Any]) -> Dict[str, Any]:
     return state_dict
 
 
-def manual_scaled_dot_product_attention(
-    q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None
-) -> Tuple[Tensor, Tensor]:
+def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
     """Scaled dot-product attention mechanism.
 
     Args:
@@ -168,9 +166,7 @@ class MultiHeadAttention(nn.Module):
         if self.use_pytorch:
             # Use multi-head splitting for flash attention
             qkv = self.qkv_linear(x)
-            qkv = qkv.view(
-                batch_size, -1, self.num_heads, 3 * self.head_dim
-            )  # (batch_size, seq_len, num_heads, 3 * head_dim)
+            qkv = qkv.view(batch_size, -1, self.num_heads, 3 * self.head_dim)  # (batch_size, seq_len, num_heads, 3 * head_dim)
             q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)  # each: (batch_size, num_heads, seq_len, head_dim)
 
             # Invert mask for PyTorch flash attention (True = keep, False = mask)
