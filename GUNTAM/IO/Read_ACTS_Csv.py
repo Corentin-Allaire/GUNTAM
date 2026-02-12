@@ -1,6 +1,6 @@
-# TODO
 import glob
-
+import argparse
+from typing import List, Optional
 import numpy as np
 import pandas as pd
 
@@ -29,7 +29,7 @@ def extract_masked_values(value: int) -> tuple[int, int, int, int]:
     return (int(volume), int(layer), int(sensitive), int(extra))
 
 
-def create_particle_id_column(hits: pd.DataFrame, particles: pd.DataFrame) -> None:
+def _create_particle_id_column(hits: pd.DataFrame, particles: pd.DataFrame) -> None:
     """Create a 'particle_id' column in the hits and particles DataFrames
        based on the five existing particle ID columns.
 
@@ -64,11 +64,13 @@ def create_particle_id_column(hits: pd.DataFrame, particles: pd.DataFrame) -> No
     hits.drop(columns="_key", inplace=True)
 
 
-def process_hits_data(data: pd.DataFrame, R_max: float = 500, Z_max: float = 1000) -> pd.DataFrame:
+def _process_hits_data(data: pd.DataFrame, R_max: float = 500, Z_max: float = 1000) -> pd.DataFrame:
     """Process hits data, applying spatial filters and calculating eta and phi.
 
     Args:
         data: Raw hits DataFrame
+        R_max: Maximum radial distance filter (default: 500)
+        Z_max: Maximum z-coordinate filter (default: 1000)
 
     Returns:
         Processed hits DataFrame with computed r, eta, phi and geometry fields
@@ -111,7 +113,9 @@ def process_hits_data(data: pd.DataFrame, R_max: float = 500, Z_max: float = 100
     # Vectorized calculations for better performance
     tx_sq = data["tx"] ** 2
     ty_sq = data["ty"] ** 2
+    tz_sq = data["tz"] ** 2
     data["r"] = np.sqrt(tx_sq + ty_sq)
+    data["d"] = np.sqrt(tx_sq + ty_sq + tz_sq)
 
     # Compute eta and phi using vectorized operations
     rho = np.sqrt(tx_sq + ty_sq)
@@ -127,19 +131,18 @@ def process_hits_data(data: pd.DataFrame, R_max: float = 500, Z_max: float = 100
     data["varZ"] = 0
     data["badSP"] = 0
 
-    # Sort by r
-    data = data.sort_values("r", ascending=True)
+    # Sort by distance from origin
+    data = data.sort_values("d", ascending=True)
+    data = data.drop(columns=["d"])
 
     # Use the bit map to extract the volume, layer, sensitive and extra values
-    data["volume"], data["layer"], data["sensitive"], data["extra"] = zip(
-        *data["geometry_id"].map(extract_masked_values)
-    )
+    data["volume"], data["layer"], data["sensitive"], data["extra"] = zip(*data["geometry_id"].map(extract_masked_values))
     data = data.drop(columns=["geometry_id"])
 
     return data
 
 
-def process_particles_data(particles: pd.DataFrame, valid_particle_ids: pd.Index) -> pd.DataFrame:
+def _process_particles_data(particles: pd.DataFrame, valid_particle_ids: pd.Index) -> pd.DataFrame:
     """Compute pT, eta, and phi for particles.
 
     Args:
@@ -165,16 +168,13 @@ def process_particles_data(particles: pd.DataFrame, valid_particle_ids: pd.Index
     p_theta = np.arctan2(p_rho, particles["pz"])
     particles["eta"] = -np.log(np.tan(p_theta / 2))
     particles["phi"] = np.arctan2(particles["py"], particles["px"])
-
-    # Sort by pT descending
-    particles = particles.sort_values("pT", ascending=False)
+    particles["d0"] = particles["vx"] ** 2 + particles["vy"] ** 2
+    particles["z0"] = particles["vz"]
 
     return particles
 
 
-def process_space_points_data(
-    space_points: pd.DataFrame, hit_measurement_map: pd.DataFrame, hits: pd.DataFrame
-) -> pd.DataFrame:
+def _process_space_points_data(space_points: pd.DataFrame, hit_measurement_map: pd.DataFrame, hits: pd.DataFrame) -> pd.DataFrame:
     """Process space point data, merging with hit measurement map and hits to compute r, eta, phi.
 
     Args:
@@ -185,6 +185,18 @@ def process_space_points_data(
         Processed space points DataFrame with computed r, eta, phi and geometry fields
     """
 
+    columns_to_keep = [
+        "measurement_id_1",
+        "measurement_id_2",
+        "x",
+        "y",
+        "z",
+        "var_r",
+        "var_z",
+    ]
+
+    existing_columns = [col for col in columns_to_keep if col in space_points.columns]
+    space_points = space_points[existing_columns]
     # Merge to get hit_id for measurement_id_1
     space_points = (
         space_points.merge(
@@ -249,7 +261,12 @@ def process_space_points_data(
 
     x_sq = x**2
     y_sq = y**2
+    z_sq = z**2
     space_points["r"] = np.sqrt(x_sq + y_sq)
+    space_points["d"] = np.sqrt(x_sq + y_sq + z_sq)
+
+    space_points = space_points.sort_values("d", ascending=True)
+    space_points = space_points.drop(columns=["d"])
 
     rho = np.sqrt(x_sq + y_sq)
     theta = np.arctan2(rho, z)
@@ -260,57 +277,40 @@ def process_space_points_data(
     space_points.rename(columns={"var_r": "varR", "var_z": "varZ"}, inplace=True)
     space_points.rename(columns={"hit_id_1": "hit_id"}, inplace=True)
     # Drop columns with _1 and _2 suffixes
-    space_points = space_points.drop(
-        columns=[col for col in space_points.columns if col.endswith("_1") or col.endswith("_2")]
-    )
+    space_points = space_points.drop(columns=[col for col in space_points.columns if col.endswith("_1") or col.endswith("_2")])
+
+    # Drop space points that don't have an event_id (failed to merge with hits)
+    space_points = space_points.dropna(subset=["event_id"])
 
     return space_points
 
 
-def main():
+def read_acts_csv(args: argparse.Namespace) -> None:
+    """Preprocess CSV data from ACTS G4 simulation with the ODD detector.
+
+    This function reads hits, particles, and optionally space points data from
+    specified directories, preprocesses them, and combines them into output files.
+
+    Processing includes:
+    - Spatial filtering (R_max, Z_max)
+    - Particle ID mapping and filtering by minimum hit count
+    - Computation of r, eta, phi for hits, particles, and space points
+    - Geometry ID unpacking (volume, layer, sensitive, extra)
+    - Duplicate hit removal
+    - Space point validation and particle matching
+
+    Args:
+        args: Namespace containing:
+            - input_path: Base path to input data directories
+            - dir_start, dir_end: Optional directory range (odd_full_chain_N)
+            - file_number: Optional suffix for output files
+            - use_space_point: If True, process space points instead of raw hits
+            - min_hits_per_particle: Minimum hits required per particle (default: 9)
+            - output_format: List of output formats ('csv', 'h5', or both)
+
+    Outputs:
+        CSV and/or H5 files containing processed particles and hits/space points.
     """
-    Preprocess the csv data obtain from the ACTS G4 simulation with the ODD data.
-    This script reads the hits, particles, and seeds data from the ODD_data_mu directory,
-    and preprocesses them and combined them into a single file for each type.
-    The processing includes spatial filtering, calculations of eta and phi,
-    and extraction of hit pairs from seeds.
-    """
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Preprocess ACTS simulation data")
-    parser.add_argument(
-        "--file-number",
-        type=int,
-        default=None,
-        help="Optional number to append to output filenames (e.g., --file-number 1 produces hits_small_1.csv)",
-    )
-    parser.add_argument(
-        "--dir-start",
-        type=int,
-        default=None,
-        help="Starting directory number (inclusive) for odd_full_chain_N directories",
-    )
-    parser.add_argument(
-        "--dir-end", type=int, default=None, help="Ending directory number (inclusive) for odd_full_chain_N directories"
-    )
-    parser.add_argument(
-        "--input-path",
-        type=str,
-        default="/data/atlas/callaire/Acts/ODD_data",
-        help="Base path to input data directory (default: /data/atlas/callaire/Acts/ODD_data)",
-    )
-    parser.add_argument(
-        "--use-space-point", action="store_true", help="If set, use space point data instead of hit data"
-    )
-
-    parser.add_argument(
-        "--min-hits-per-particle",
-        type=int,
-        default=9,
-        help="Minimum number of hits required for a particle to be included (default: 9)",
-    )
-
-    args = parser.parse_args()
 
     # Determine output suffix
     file_suffix = f"_{args.file_number}" if args.file_number is not None else ""
@@ -335,10 +335,14 @@ def main():
     else:
         # Default behavior - process all odd* directories
         hit_files = sorted(glob.glob(f"{args.input_path}/odd*/event*-hits.csv"))
-        particle_files = sorted(glob.glob(f"{args.input_path}/odd*/event*-particles_selected.csv.csv"))
+        particle_files = sorted(glob.glob(f"{args.input_path}/odd*/event*-particles_selected.csv"))
         if args.use_space_point:
+
             space_point_files = sorted(glob.glob(f"{args.input_path}/odd*/event*-spacepoint.csv"))
             hit_measurement_map_files = sorted(glob.glob(f"{args.input_path}/odd*/event*-measurement-simhit-map.csv"))
+        else:
+            space_point_files = []
+            hit_measurement_map_files = []
 
         print(f"Processing all directories matching: {args.input_path}/odd*")
 
@@ -349,16 +353,21 @@ def main():
         f"{len(hit_measurement_map_files) if args.use_space_point else 'N/A'} hit measurement map files."
     )
 
-    # Use lists to collect DataFrames - much more efficient than repeated concatenation
-    all_data = []
-    all_particles = []
-    all_space_points = []
-
     total_files = len(hit_files)
 
-    for counter, (file, particle_file, space_point_file, hit_measurement_map_file) in enumerate(
-        zip(hit_files, particle_files, space_point_files, hit_measurement_map_files)
-    ):
+    # Pre-allocate lists for better performance
+    all_data: List[Optional[pd.DataFrame]] = [None] * total_files
+    all_particles: List[Optional[pd.DataFrame]] = [None] * total_files
+    all_space_points: List[Optional[pd.DataFrame]] = [None] * total_files if args.use_space_point else []
+
+    # Create iterator based on whether space points are used
+    if args.use_space_point:
+        file_iterator = zip(hit_files, particle_files, space_point_files, hit_measurement_map_files)
+    else:
+        # When not using space points, create dummy None values for space_point and hit_measurement files
+        file_iterator = zip(hit_files, particle_files, [None] * len(hit_files), [None] * len(hit_files))  # type: ignore
+
+    for counter, (file, particle_file, space_point_file, hit_measurement_map_file) in enumerate(file_iterator):
         # Progress reporting
         if counter % 10 == 0 or counter == total_files - 1:
             print(f"Processing event {counter} / {total_files} ({counter / total_files * 100:.1f}%)")
@@ -367,31 +376,39 @@ def main():
         data = pd.read_csv(file, dtype={"geometry_id": np.int64})
         particles = pd.read_csv(particle_file, dtype={"particle_id": np.int64})
 
-        # Add event ID to all datasets
-        data["event_id"] = counter
-        particles["event_id"] = counter
-
         if args.use_space_point:
             space_points = pd.read_csv(space_point_file)
             hit_measurement_map = pd.read_csv(hit_measurement_map_file)
 
-        create_particle_id_column(data, particles)
+        # From the id barcode create a single particle_id column in both hits and particles dataframes
+        _create_particle_id_column(data, particles)
 
-        # Filter particles with IDs associated with at least the minimum number of hits (default: 9)
+        # Filter particles with IDs associated with at less than the minimum number of hits (default: 9)
         particle_counts = data["particle_id"].value_counts()
         valid_particle_ids = particle_counts[particle_counts >= args.min_hits_per_particle].index
 
         # Process each dataset with optimized functions
-        data = process_hits_data(data)
-        particles = process_particles_data(particles, valid_particle_ids)
-        if args.use_space_point:
-            space_points = process_space_points_data(space_points, hit_measurement_map, data)
+        data = _process_hits_data(data)
+        particles = _process_particles_data(particles, valid_particle_ids)
 
-        # Append to lists (much faster than concatenating each iteration)
-        all_data.append(data)
-        all_particles.append(particles)
+        # Add event ID to all datasets
+        data["event_id"] = counter
+        particles["event_id"] = counter
+
+        # Set particle_id to -1 for hits that don't match any remaining particle after filtering
+        # This handles both NaN values and particle_ids that were filtered out during processing
+        particle_ids = set(particles["particle_id"].values)
+        mask_id = data["particle_id"].isna() | ~data["particle_id"].isin(particle_ids)
+        data.loc[mask_id, "particle_id"] = -1
+
         if args.use_space_point:
-            all_space_points.append(space_points)
+            space_points = _process_space_points_data(space_points, hit_measurement_map, data)
+
+        # Assign to pre-allocated lists instead of appending
+        all_data[counter] = data
+        all_particles[counter] = particles
+        if args.use_space_point:
+            all_space_points[counter] = space_points
 
     print("Concatenating all data...")
 
@@ -418,23 +435,74 @@ def main():
     space_points_filename = f"{args.input_path}/space_points_small{file_suffix}.csv"
     hdf_filename = f"{args.input_path}/processed_data{file_suffix}.h5"
 
-    full_data.to_csv(hits_filename, index=False)
-    full_particles.to_csv(particles_filename, index=False)
-    if args.use_space_point:
-        full_space_points.to_csv(space_points_filename, index=False)
+    files_written = []
 
-    with pd.HDFStore(hdf_filename, mode="w") as store:
-        store.put("hits", full_data, format="table")
-        store.put("particles", full_particles, format="table")
+    # Write CSV files if requested
+    if "csv" in args.output_format:
+        full_particles.to_csv(particles_filename, index=False)
+        files_written.extend([particles_filename])
         if args.use_space_point:
-            store.put("space_points", full_space_points, format="table")
+            full_space_points.to_csv(space_points_filename, index=False)
+            files_written.append(space_points_filename)
+        else:
+            full_data.to_csv(hits_filename, index=False)
+            files_written.append(hits_filename)
+
+    # Write H5 files if requested
+    if "h5" in args.output_format:
+        with pd.HDFStore(hdf_filename, mode="w") as store:
+            store.put("particles", full_particles, format="table")
+            if args.use_space_point:
+                store.put("space_points", full_space_points, format="table")
+            else:
+                store.put("hits", full_data, format="table")
+        files_written.append(hdf_filename)
 
     print("Files written successfully:")
-    print(f"  {hits_filename}")
-    print(f"  {particles_filename}")
-    print(f"  {space_points_filename}")
-    print(f"  {hdf_filename}")
+    for filename in files_written:
+        print(f"  {filename}")
 
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(description="Preprocess ACTS simulation data")
+    parser.add_argument(
+        "--file-number",
+        type=int,
+        default=None,
+        help="Optional number to append to output filenames (e.g., --file-number 1 produces hits_small_1.csv)",
+    )
+    parser.add_argument(
+        "--dir-start",
+        type=int,
+        default=None,
+        help="Starting directory number (inclusive) for odd_full_chain_N directories",
+    )
+    parser.add_argument(
+        "--dir-end", type=int, default=None, help="Ending directory number (inclusive) for odd_full_chain_N directories"
+    )
+    parser.add_argument(
+        "--input-path",
+        type=str,
+        default="/data/atlas/callaire/Acts/ODD_data",
+        help="Base path to input data directory (default: /data/atlas/callaire/Acts/ODD_data)",
+    )
+    parser.add_argument("--use-space-point", action="store_true", help="If set, use space point data instead of hit data")
+
+    parser.add_argument(
+        "--min-hits-per-particle",
+        type=int,
+        default=9,
+        help="Minimum number of hits required for a particle to be included (default: 9)",
+    )
+
+    parser.add_argument(
+        "--output-format",
+        nargs="+",
+        default=["csv"],
+        choices=["csv", "h5"],
+        help="Output file format(s): 'csv' (default), 'h5', or both (e.g., --output-format csv h5)",
+    )
+
+    args = parser.parse_args()
+    read_acts_csv(args)

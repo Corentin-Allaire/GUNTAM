@@ -31,7 +31,7 @@ class DataLoader:
 
         # Load dataset files
         os.makedirs(self.dataset_dir, exist_ok=True)
-        metadata_path = os.path.join(self.dataset_dir, f"{self.dataset_name}_metadata.pt")
+        metadata_path = os.path.join(self.dataset_dir, f"metadata_{self.dataset_name}.pt")
         ts_print(f"Metadata: {metadata_path}")
         self._load_metadata()
 
@@ -60,7 +60,7 @@ class DataLoader:
         """Load dataset metadata from file."""
         import os
 
-        metadata_path = os.path.join(self.dataset_dir, f"{self.dataset_name}_metadata.pt")
+        metadata_path = os.path.join(self.dataset_dir, f"metadata_{self.dataset_name}.pt")
         metadata = torch.load(metadata_path, map_location=self.device, weights_only=False)
 
         self.total_events = metadata["total_events"]
@@ -70,12 +70,10 @@ class DataLoader:
         # Reconstruct file paths using current dataset_dir and filenames from metadata
         # This allows the dataset to be moved to a different directory
         saved_file_paths = metadata["file_paths"]
+        print(f"Saved file paths from metadata: {saved_file_paths}")
         self.file_paths = []
         for saved_path in saved_file_paths:
-            # Extract just the filename from the saved path
-            filename = os.path.basename(saved_path)
-            # Reconstruct the full path using current dataset_dir
-            new_path = os.path.join(self.dataset_dir, filename)
+            new_path = f"{self.dataset_dir}/{saved_path}"
             self.file_paths.append(new_path)
 
         # Verify files exist
@@ -116,12 +114,6 @@ class DataLoader:
                 available = ", ".join(sorted(file_data.keys()))
                 raise KeyError(f"Requested tensor '{name}' not found in file. Available keys: {available}")
             value = file_data[name]
-            if isinstance(value, torch.Tensor):
-                if value.ndim < 2 or value.shape[1] != self.nb_bins:
-                    raise ValueError(
-                        f"Tensor '{name}' must have shape [E, B,...] with B={self.nb_bins} as dim 1; "
-                        f"got {tuple(value.shape)}"
-                    )
             result[name] = value
 
         result["start_event"] = file_data["start_event"]
@@ -219,9 +211,7 @@ class DataLoader:
             Total number of events across specified files.
         """
         if batch_file_start < 0 or batch_file_end < batch_file_start or batch_file_end >= len(self.file_paths):
-            raise IndexError(
-                f"Invalid file range ({batch_file_start}, {batch_file_end}) for 0-{len(self.file_paths) - 1}"
-            )
+            raise IndexError(f"Invalid file range ({batch_file_start}, {batch_file_end}) for 0-{len(self.file_paths) - 1}")
 
         total_size = 0
         for file_idx in range(batch_file_start, batch_file_end + 1):
