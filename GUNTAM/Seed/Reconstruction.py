@@ -18,11 +18,10 @@ def topk_seed_reconstruction(
         attention_map: 2D tensor [N, N] with attention weights
         reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
         threshold: Minimum attention score required to keep a neighbor (default: 0.8)
-        max_selection: Maximum number of neighbors to select per hit (default: 5)
+        max_selection: Maximum number of neighbors to select per hit (default: 4)
 
     Returns:
-        clusters: List of (hit_indices, avg_parameters) tuples; one cluster per valid hit
-        seeds: Empty list (kept for signature compatibility)
+        List of (hit_indices, avg_parameters) tuples; one seed per valid hit
     """
     device = attention_map.device
     seeds: List[Tuple[np.ndarray, np.ndarray]] = []
@@ -90,10 +89,11 @@ def chained_seed_reconstruction(
     Args:
         attention_map: 2D tensor [N, N] with attention weights
         reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
-        score_threshold: Minimum attention score to add a hit to the chain (default: 0.5)
+        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
         max_chain_length: Maximum length of the chain (default: 5)
+
     Returns:
-        seed: List of (hit_indices, avg_parameters) tuples for initial per-hit chains
+        List of (hit_indices, avg_parameters) tuples for initial per-hit chains
     """
     device = attention_map.device
     num_hits = attention_map.size(0)
@@ -154,10 +154,11 @@ def back_chained_seed_reconstruction(
     Args:
         attention_map: 2D tensor [N, N] with attention weights
         reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
-        score_threshold: Minimum attention score to add a hit to the chain (default: 0.001)
+        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
         max_chain_length: Maximum length of the chain (default: 5)
+
     Returns:
-        seeds: List of (hit_indices, avg_parameters) tuples for initial per-hit backward chains
+        List of (hit_indices, avg_parameters) tuples for initial per-hit backward chains
     """
     device = attention_map.device
     num_hits = attention_map.size(0)

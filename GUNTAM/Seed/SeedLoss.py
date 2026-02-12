@@ -396,12 +396,12 @@ def reconstruction_loss(
     # Compute component losses
     loss_z_part = loss_function(
         reconstructed_particle[:, :, 0][valid_hits_mask],
-        particles_data[:, :, 0][valid_hits_mask],
+        particles_data[:, :, 1][valid_hits_mask],
         reduction="sum",
     )
     loss_eta_part = loss_function(
         reconstructed_particle[:, :, 1][valid_hits_mask],
-        particles_data[:, :, 1][valid_hits_mask],
+        particles_data[:, :, 3][valid_hits_mask],
         reduction="sum",
     )
     loss_sin_phi_part = loss_function(
@@ -417,7 +417,7 @@ def reconstruction_loss(
     loss_phi_part = loss_sin_phi_part + loss_cos_phi_part
     loss_pt_part = loss_function(
         (1.0 / pred_pt_clamped),
-        (1.0 / particles_data[:, :, 3][valid_hits_mask]),
+        (1.0 / particles_data[:, :, 4][valid_hits_mask]),
         reduction="mean",
     )
 
