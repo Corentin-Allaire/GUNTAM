@@ -7,11 +7,6 @@ import sys
 from pathlib import Path
 
 
-# Only run these tests when explicitly running this test file
-if not any("test_integration_seed.py" in arg for arg in sys.argv):
-    pytest.skip("Integration tests only run when explicitly called", allow_module_level=True)
-
-
 class TestFullIntegration:
     """
     Full integration test for the complete GUNTAM pipeline:

@@ -59,31 +59,13 @@ jobs:
         run: pdm install
 
       - name: Run tests
-        run: pdm run pytest --ignore=tests/test_integration
-
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install PDM
-        run: pip install pdm
-
-      - name: Ensure deps
-        run: pdm install
-
-      - name: Run tests with coverage
-        run: pdm run pytest --cov=GUNTAM --cov-report=xml --cov-report=term --ignore=tests/test_integration
+        run: pdm run pytest --cov=GUNTAM --ignore=tests/test_integration
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: coverage.xml
 
   Typing:
     runs-on: ubuntu-latest

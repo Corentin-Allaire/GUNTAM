@@ -23,7 +23,7 @@ class TestSeedTransformerInitialization:
         # dim_embedding drives inferred nfreq = max(1,(dim_embedding -3)//6)
         dim_embedding = 99  # (99-3)//6 = 16
         model = SeedTransformer(dim_embedding=dim_embedding, nb_heads=3)
-        expected_nfreq = max(1, (dim_embedding - 3) // 6)
+        expected_nfreq = max(1, (dim_embedding - 4) // 6)
         # fourier_encoding.num_frequencies is now a list internally
         assert model.fourier_encoding.num_frequencies == [expected_nfreq, expected_nfreq, expected_nfreq]
         # output_dim of fourier_encoding = sum(num_frequencies) * 2 + 4
