@@ -17,7 +17,7 @@ class PlotUtility:
         title: str,
         xlabel: str,
         ylabel: str,
-        bins: int = 600,
+        bins: int = 50,
         color: str = "skyblue",
         stats_text: Optional[str] = None,
         reference_lines: Optional[Sequence[Mapping[str, Any]]] = None,
@@ -515,82 +515,12 @@ def create_bin_complexity_plots(
     - Saves `bin_complexity_analysis.png`.
     """
 
-    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
     n_particles = np.array([b["n_particles"] for b in bin_summaries])
     n_seeds = np.array([b["n_seeds"] for b in bin_summaries])
     efficiencies = np.array([b["seeding_efficiency"] for b in bin_summaries])
 
-    ax = axes[0, 0]
-    hist, xbins, ybins = np.histogram2d(n_particles, efficiencies, bins=[15, 20])
-    im = ax.imshow(
-        hist.T,
-        origin="lower",
-        extent=[xbins[0], xbins[-1], ybins[0], ybins[-1]],
-        aspect="auto",
-        cmap="viridis",
-        alpha=0.8,
-    )
-    ax.scatter(
-        n_particles,
-        efficiencies,
-        alpha=0.3,
-        s=20,
-        c="red",
-        edgecolors="black",
-        linewidth=0.5,
-    )
-    ax.set_xlabel("Number of Particles per Bin")
-    ax.set_ylabel("Seeding Efficiency")
-    ax.set_title("Seeding Efficiency vs Particle Count")
-    ax.grid(True, alpha=0.3)
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Number of Bins")
-
-    ax = axes[0, 1]
-    hist, xbins, ybins = np.histogram2d(n_seeds, efficiencies, bins=[15, 20])
-    im = ax.imshow(
-        hist.T,
-        origin="lower",
-        extent=[xbins[0], xbins[-1], ybins[0], ybins[-1]],
-        aspect="auto",
-        cmap="plasma",
-        alpha=0.8,
-    )
-    ax.scatter(
-        n_seeds,
-        efficiencies,
-        alpha=0.3,
-        s=20,
-        c="blue",
-        edgecolors="black",
-        linewidth=0.5,
-    )
-    ax.set_xlabel("Number of Seeds per Bin")
-    ax.set_ylabel("Seeding Efficiency")
-    ax.set_title("Seeding Efficiency vs Seed Count")
-    ax.grid(True, alpha=0.3)
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Number of Bins")
-
-    ax = axes[0, 2]
-    scatter = ax.scatter(
-        n_particles,
-        n_seeds,
-        c=efficiencies,
-        s=30,
-        cmap="RdYlBu_r",
-        alpha=0.7,
-        edgecolors="black",
-        linewidth=0.5,
-    )
-    ax.set_xlabel("Number of Particles per Bin")
-    ax.set_ylabel("Number of Seeds per Bin")
-    ax.set_title("Seeds vs Particles (colored by efficiency)")
-    ax.grid(True, alpha=0.3)
-    cbar = plt.colorbar(scatter, ax=ax)
-    cbar.set_label("Seeding Efficiency")
-
-    ax = axes[1, 0]
+    ax = axes[0]
     ax.hist(n_particles, bins=20, alpha=0.7, color="lightcoral", edgecolor="black")
     ax.axvline(
         np.mean(n_particles),
@@ -612,7 +542,7 @@ def create_bin_complexity_plots(
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    ax = axes[1, 1]
+    ax = axes[1]
     ax.hist(n_seeds, bins=20, alpha=0.7, color="lightgreen", edgecolor="black")
     ax.axvline(
         np.mean(n_seeds),
@@ -634,7 +564,7 @@ def create_bin_complexity_plots(
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    ax = axes[1, 2]
+    ax = axes[2]
     seeds_per_particle = n_seeds / np.maximum(n_particles, 1)
     ratio_bins = np.linspace(0, np.percentile(seeds_per_particle, 95), 15)
     bin_indices = np.digitize(seeds_per_particle, ratio_bins)
@@ -940,12 +870,8 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
     c_phi, e_phi, e_phi_err, ep_phi, ep_phi_err, n_phi, w_phi = compute_efficiency(
         phi, has_seed_flags, has_pure_seed_flags, bins_phi
     )
-    c_z0, e_z0, e_z0_err, ep_z0, ep_z0_err, n_z0, w_z0 = compute_efficiency(
-        z0, has_seed_flags, has_pure_seed_flags, bins_z0
-    )
-    c_pt, e_pt, e_pt_err, ep_pt, ep_pt_err, n_pt, w_pt = compute_efficiency(
-        pt, has_seed_flags, has_pure_seed_flags, bins_pt
-    )
+    c_z0, e_z0, e_z0_err, ep_z0, ep_z0_err, n_z0, w_z0 = compute_efficiency(z0, has_seed_flags, has_pure_seed_flags, bins_z0)
+    c_pt, e_pt, e_pt_err, ep_pt, ep_pt_err, n_pt, w_pt = compute_efficiency(pt, has_seed_flags, has_pure_seed_flags, bins_pt)
     if bins_dr is not None:
         plot_dr = True
         c_dr, e_dr, e_dr_err, ep_dr, ep_dr_err, n_dr, w_dr = compute_efficiency(

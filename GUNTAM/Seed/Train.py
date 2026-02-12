@@ -10,15 +10,16 @@ from typing import List, Optional, Dict, Any
 from torch.utils.tensorboard import SummaryWriter
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 import GUNTAM.Seed.SeedLoss as Losses
-from GUNTAM.Seed.Config import config
+from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader
 from GUNTAM.Transformer.Utils import ts_print
 import GUNTAM.Transformer.Utils as Utils
 import GUNTAM.Seed.Reconstruction as Reconstruction
 from GUNTAM.Seed.Monitoring import PerformanceMonitor
+from GUNTAM.IO.PrepareTensor import compute_barcode, prepare_tensor
 
 
-def compute_parameter_loss_norms(dataset) -> Dict[str, float]:
+def compute_parameter_loss_norms(dataset: DataLoader) -> Dict[str, float]:
     """
     Compute normalization factors for parameter loss based on the truth distribution.
     Args:
@@ -32,17 +33,10 @@ def compute_parameter_loss_norms(dataset) -> Dict[str, float]:
     # Use first training file (in original order, before shuffling) for consistent normalization
     batch_data = dataset.get_file(0)
 
-    tensor_particles = batch_data["tensor_particles"]
-    padding_mask_hit = batch_data["padding_mask_hit"]
+    tensor_particles = batch_data["hits_tensor"]
 
-    # Create mask for valid hits
-    valid_mask = ~padding_mask_hit.bool()
-    valid_particles = tensor_particles[valid_mask]
-    nonzero_pt_mask = valid_particles[:, 3] > 0
-    valid_particles = valid_particles[nonzero_pt_mask]
-
-    if len(valid_particles) > 0:
-        valid_particles_list.append(valid_particles.cpu())
+    if len(tensor_particles) > 0:
+        valid_particles_list.append(tensor_particles.cpu())
 
     # Compute normalization factors
     if valid_particles_list:
@@ -50,8 +44,8 @@ def compute_parameter_loss_norms(dataset) -> Dict[str, float]:
         stds = torch.std(all_valid_particles, dim=0)
         std_pt = torch.std(1 / all_valid_particles[:, 3], dim=0)
         norm_factors = {
-            "z0": float(stds[0]),
-            "eta": float(stds[1]),
+            "z0": float(stds[1]),
+            "eta": float(stds[3]),
             "phi": float(stds[2]),
             "pt": float(std_pt),
         }
@@ -72,10 +66,13 @@ def compute_parameter_loss_norms(dataset) -> Dict[str, float]:
 def initialize_loss_dictionary(active_components: list, device: torch.device) -> Dict[str, torch.Tensor]:
     """
     Initialize a loss dictionary with zero values for active loss components.
+
     Args:
-        active_components (list): List of active loss component names.
+        active_components: List of active loss component names.
+        device: Torch device for tensor initialization.
+
     Returns:
-        dict: Initialized loss dictionary with zero values.
+        Initialized loss dictionary with zero values.
     """
 
     # Helper to add a key lazily
@@ -121,7 +118,7 @@ def train_model(
     dataset: DataLoader,
     nb_events: int,
     batch_size: int,
-    cfg: config,
+    cfg: SeedConfig,
     writer: SummaryWriter,
     optimiser: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
@@ -129,18 +126,21 @@ def train_model(
 ) -> SeedTransformer:
     """
     Train the transformer model for seed reconstruction.
+
     Args:
-        model (SeedTransformer): The transformer model to be trained.
-        train_file_indices (list): List of file indices for training data.
-        dataset (Seeding_Dataset): The dataset object containing training data.
-        nb_events (int): Number of events per file.
-        cfg (config): Configuration object with training parameters.
-        writer (SummaryWriter): TensorBoard writer for logging.
-        optimiser (torch.optim.Optimizer): Optimizer for training.
-        scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
-        start_epoch (int, optional): Starting epoch number. Defaults to 0.
+        model: The transformer model to be trained.
+        train_file_indices: List of file indices for training data.
+        dataset: The dataset object containing training data.
+        nb_events: Number of events per file.
+        batch_size: Batch size for training.
+        cfg: Configuration object with training parameters.
+        writer: TensorBoard writer for logging.
+        optimiser: Optimizer for training.
+        scheduler: Learning rate scheduler.
+        start_epoch: Starting epoch number (default: 0).
+
     Returns:
-        SeedTransformer: The trained transformer model.
+        The trained transformer model.
     """
     epoch_nb = cfg.epoch_nb
 
@@ -186,23 +186,26 @@ def train_model(
 
             # Load the data
             batch_data = dataset.get_file(file_idx)
-            tensor_hits = batch_data["tensor_hits"].to(cfg.device_acc)
-            tensor_particles = batch_data["tensor_particles"].to(cfg.device_acc)
-            padding_mask_hit = batch_data["padding_mask_hit"].to(cfg.device_acc)
-            all_pairs = batch_data["all_pairs"]
+            hits_tensor = batch_data["hits_tensor"].to(cfg.device_acc)
+            particles_tensor = batch_data["particles_tensor"].to(cfg.device_acc)
+            hit_to_particle_tensor = batch_data["hit_to_particle_tensor"].to(cfg.device_acc)
+            padding_mask = batch_data["padding_mask"].to(cfg.device_acc)
+            good_pairs = batch_data["good_pairs"].to(cfg.device_acc)
 
             # Iterate through each event in this batch with a random order
-            num_events_in_batch = tensor_hits.shape[0]
+            num_events_in_batch = hits_tensor.shape[0]
             event_indices = list(range(num_events_in_batch))
             random.shuffle(event_indices)
 
             for event_idx in event_indices:
                 num_valid_bins = 0
                 # Extract data for this specific event
-                batch_tensor_hits = tensor_hits[event_idx]  # Shape: [bins, hits, features]
-                batch_tensor_particles = tensor_particles[event_idx]
-                batch_padding_hit = padding_mask_hit[event_idx]
-                event_pairs = all_pairs[event_idx]  # Pairs for this specific event
+                batch_hits_tensor = hits_tensor[event_idx]  # [num_bin, max_hit_input, num_hit_features]
+                batch_good_pairs = good_pairs[event_idx]  # [num_bin, num_pairs, 3]
+                batch_padding_mask = padding_mask[event_idx]  # [num_bin, max_hit_input, 1]
+
+                batch_hit_to_particle_tensor = hit_to_particle_tensor[event_idx]  # [num_bin, max_hit_input, 1]
+                batch_particles_tensor = particles_tensor[event_idx]  # [num_particles, num_particle_features]
 
                 event_losses = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
 
@@ -210,55 +213,28 @@ def train_model(
                 grad_enabled = status == "Training"
                 accumulated_loss = torch.tensor(0.0, device=cfg.device_acc, requires_grad=True)
 
-                # Collect all bins with valid pairs
-                valid_bins = [
-                    (bin_idx, bin_data)
-                    for bin_idx, bin_data in event_pairs.items()
-                    if len(bin_data[0]) > 0 and len(bin_data[1]) > 0
-                ]
+                # Collect all bins with valid pairs (vectorized)
+                valid_bins = torch.where(batch_good_pairs.sum(dim=(1, 2)) > 0)[0].tolist()
 
                 with torch.set_grad_enabled(grad_enabled):
 
                     # Loop over the event batch
                     for batch_start in range(0, len(valid_bins), batch_size):
 
-                        batch_end = min(batch_start + batch_size, len(valid_bins))
-                        bins_in_batch = valid_bins[batch_start:batch_end]
-
-                        # Collect bin indices and pair data
-                        batch_bin_indices = []
-                        batch_pairs_list = []  # List of (pairs1, pairs2, target, bin_mask)
-
-                        # TODO: Maybe the we we store bin can be optimised
-                        for bin_idx, bin_data in bins_in_batch:
-                            pairs1, pairs2, target = bin_data
-                            if len(pairs1) == 0 or len(pairs2) == 0:
-                                ts_print(f"Skipping bin {bin_idx} for event {entry} due to empty pairs")
-                                continue
-
-                            # Ensure pairs are on the correct device
-                            pairs1 = pairs1.to(cfg.device_acc)
-                            pairs2 = pairs2.to(cfg.device_acc)
-                            target = target.to(cfg.device_acc)
-
-                            # Get valid hits in this bin
-                            bin_mask = ~batch_padding_hit[bin_idx].bool()
-                            if not torch.any(bin_mask):
-                                ts_print(f"Skipping bin {bin_idx} for event {entry} due to no valid hits")
-                                continue
-
-                            # Store only indices and pairs - use tensor views for actual data
-                            batch_bin_indices.append(bin_idx)
-                            batch_pairs_list.append((pairs1, pairs2, target, bin_mask))
-
+                        batch_bin_indices = valid_bins[batch_start : batch_start + batch_size]
+                        batched_hits = batch_hits_tensor[batch_bin_indices]  # [batch_size, max_hit_input, num_hit_features]
+                        batched_masks = batch_padding_mask[batch_bin_indices]  # [batch_size, max_hit_input, 1]
+                        batched_pairs = batch_good_pairs[batch_bin_indices]  # [batch_size, num_pairs, 3]
+                        batched_hit_to_particle_indices = batch_hit_to_particle_tensor[batch_bin_indices].squeeze(
+                            -1
+                        )  # [batch_size, max_hit_input]
+                        # Gather particles using the hit-to-particle mapping
+                        batched_particles = batch_particles_tensor[
+                            batched_hit_to_particle_indices
+                        ]  # [batch_size, max_hit_input, num_particle_features]
                         # Skip if no valid bins in this batch
                         if len(batch_bin_indices) == 0:
                             continue
-
-                        # Create tensor views for the bins in this batch (no copying!)
-                        batched_hits = batch_tensor_hits[batch_bin_indices]  # [N, max_hit_input, 5]
-                        batched_masks = batch_padding_hit[batch_bin_indices]  # [N, max_hit_input]
-                        batched_particles = batch_tensor_particles[batch_bin_indices, :, 0:4]  # [N, max_hit_input, 4]
 
                         batch_loss = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
 
@@ -268,11 +244,7 @@ def train_model(
                         )  # encoded_space_points: [N, max_hit_input, dim_embedding]
 
                         # Compute reconstructed parameters if needed
-                        if (
-                            cfg.has_loss_component("MSE")
-                            or cfg.has_loss_component("L1")
-                            or cfg.has_loss_component("hit_BCE")
-                        ):
+                        if cfg.has_loss_component("MSE") or cfg.has_loss_component("L1") or cfg.has_loss_component("hit_BCE"):
                             ts_print(
                                 "Computing reconstructed parameters for event ",
                                 entry,
@@ -292,16 +264,10 @@ def train_model(
                                     loss_type=loss_type,
                                 )
                                 # Normalize individual components and store in batch dict
-                                batch_loss["reco_z0"] = batch_reco_loss_dict["z"] / (
-                                    norm_factors["z0"] * norm_factors["z0"]
-                                )
-                                batch_loss["reco_eta"] = batch_reco_loss_dict["eta"] / (
-                                    norm_factors["eta"] * norm_factors["eta"]
-                                )
+                                batch_loss["reco_z0"] = batch_reco_loss_dict["z"] / (norm_factors["z0"] * norm_factors["z0"])
+                                batch_loss["reco_eta"] = batch_reco_loss_dict["eta"] / (norm_factors["eta"] * norm_factors["eta"])
                                 batch_loss["reco_phi"] = batch_reco_loss_dict["phi"]
-                                batch_loss["reco_pt"] = batch_reco_loss_dict["pt"] / (
-                                    norm_factors["pt"] * norm_factors["pt"]
-                                )
+                                batch_loss["reco_pt"] = batch_reco_loss_dict["pt"] / (norm_factors["pt"] * norm_factors["pt"])
                                 # Average across components
                                 batch_loss["reco"] = (
                                     batch_loss["reco_z0"]
@@ -321,17 +287,16 @@ def train_model(
 
                         # Process each bin's results for pair-based losses
                         for idx_in_batch, bin_idx in enumerate(batch_bin_indices):
-                            pairs1, pairs2, target, bin_mask = batch_pairs_list[idx_in_batch]
-
+                            pairs1, pairs2, target = batched_pairs[idx_in_batch].unbind(
+                                dim=1
+                            )  # [num_pairs], [num_pairs], [num_pairs]
                             # Extract this bin's attention map and squeeze batch dim -> [seq_len, seq_len]
                             attention_map_bin = attention_maps[idx_in_batch].squeeze(0)
 
                             # Compute the attention loss
                             if cfg.has_loss_component("attention"):
                                 if attention_map_bin is not None:
-                                    batch_loss["attention"] += Losses.attention_loss(
-                                        attention_map_bin, pairs1, pairs2, target
-                                    )
+                                    batch_loss["attention"] += Losses.attention_loss(attention_map_bin, pairs1, pairs2, target)
 
                             # Compute the full attention loss (treat all non-positive pairs as negatives)
                             if cfg.has_loss_component("full_attention"):
@@ -458,7 +423,7 @@ def run_model(
     model: SeedTransformer,
     file_indices: list,
     dataset: DataLoader,
-    cfg: config,
+    cfg: SeedConfig,
 ) -> tuple:
     """Run inference over files and return per-bin artifacts.
 
@@ -495,14 +460,14 @@ def run_model(
     for file_idx in file_indices:
         batch_data = dataset.get_file(file_idx)
 
-        tensor_hits = batch_data["tensor_hits"].to(cfg.device_acc)
-        tensor_particles = batch_data["tensor_particles"].to(cfg.device_acc)
-        tensor_ID = batch_data["tensor_ID"].to(cfg.device_acc)
-        padding_mask_hit = batch_data["padding_mask_hit"].to(cfg.device_acc)
-        all_pairs = batch_data["all_pairs"]
+        hits_tensor = batch_data["hits_tensor"].to(cfg.device_acc)
+        particles_tensor = batch_data["particles_tensor"].to(cfg.device_acc)
+        hit_to_particle_tensor = batch_data["hit_to_particle_tensor"].to(cfg.device_acc)
+        padding_mask = batch_data["padding_mask"].to(cfg.device_acc)
+        good_pairs = batch_data["good_pairs"]
 
         # Process each event in the batch
-        num_events_in_batch = tensor_hits.shape[0]
+        num_events_in_batch = hits_tensor.shape[0]
         for event_idx in range(num_events_in_batch):
             # for event_idx in range(min(num_events_in_batch, 20)):
             if cfg.timing_enabled:
@@ -510,8 +475,8 @@ def run_model(
                 event_start_time = time.perf_counter()
 
             # Extract data for this specific event
-            batch_tensor_hits = tensor_hits[event_idx]
-            batch_padding_hit = padding_mask_hit[event_idx]
+            batch_hits_tensor = hits_tensor[event_idx]
+            batch_padding_mask = padding_mask[event_idx]
 
             event_seeds: List[Any] = []
             event_encoded_points: List[Optional[np.ndarray]] = []
@@ -525,7 +490,7 @@ def run_model(
                     t0 = time.perf_counter()
 
                 # Obtain encoded embeddings and attention weights from the model
-                encoded_space_point, attention_weights = model(batch_tensor_hits, batch_padding_hit)
+                encoded_space_point, attention_weights = model(batch_hits_tensor, batch_padding_mask)
 
                 if cfg.timing_enabled:
                     Utils.sync_device(cfg.device_acc)
@@ -539,9 +504,9 @@ def run_model(
                 ts_print("Reconstructed parameters computation not implemented....")
                 # Initialize parameters with zeros having shape [bins, hits, 5]
                 parameters = torch.zeros(
-                    (batch_tensor_hits.shape[0], batch_tensor_hits.shape[1], 5),
+                    (batch_hits_tensor.shape[0], batch_hits_tensor.shape[1], 5),
                     device=cfg.device_acc,
-                    dtype=batch_tensor_hits.dtype,
+                    dtype=batch_hits_tensor.dtype,
                 )
 
                 if cfg.timing_enabled:
@@ -553,10 +518,10 @@ def run_model(
                 Utils.sync_device(cfg.device_acc)
                 seed_reconstruction_start = time.perf_counter()
 
-            for bin_idx in range(batch_tensor_hits.shape[0]):
+            for bin_idx in range(batch_hits_tensor.shape[0]):
 
                 # Get valid hits in this bin
-                bin_mask = ~batch_padding_hit[bin_idx].bool()
+                bin_mask = ~batch_padding_mask[bin_idx].bool()
                 if not torch.any(bin_mask):
                     # Maintain positional consistency with explicit None placeholders
                     event_encoded_points.append(None)
@@ -646,7 +611,7 @@ def run_model(
             del encoded_space_point, parameters
             if attention_weights is not None:
                 del attention_weights
-            del batch_tensor_hits, batch_padding_hit
+            del batch_hits_tensor, batch_padding_mask
             del (
                 event_encoded_points,
                 event_parameters,
@@ -667,7 +632,7 @@ def run_model(
                     print(f"Processed {event_counter} events...")
 
         # Clean up batch data after processing all events in this file
-        del tensor_hits, tensor_particles, tensor_ID, padding_mask_hit, all_pairs
+        del hits_tensor, particles_tensor, hit_to_particle_tensor, padding_mask, good_pairs
 
     # Final speed summary with component breakdown
     if cfg.timing_enabled:
@@ -724,13 +689,17 @@ def main():
     Main function to run the training of the transformer model for seed reconstruction
     """
     # Parse the command line argument
-    cfg = config()
+    cfg = SeedConfig()
     cfg.parse_args()
 
     # Print starting information
     ts_print("Starting the training of the transformer model for seed reconstruction")
     cfg.print_config()
     ts_print(f"Using device: {cfg.device_acc}")
+
+    # If on CUDA, set matmul precision to high for potential speedup (requires PyTorch 2.0+ and compatible hardware)
+    if cfg.device_acc.type == "cuda":
+        torch.set_float32_matmul_precision("high")
 
     # TODO: make into an optional argument
     log_dir = "training_seeding"
@@ -757,24 +726,29 @@ def main():
 
     start_epoch = 0
 
-    # TODO: Create a unique suffix for the dataset based on configuration parameters
-    tensor_file_suffix = "default"
-
-    # TODO: Right  now we assume that the dataset already exists on disk
-    # We will need to write a different file to create the dataset if it does not exist
+    # Check if the metadata file exist
+    barcode = compute_barcode(cfg.preprocessing_config)
+    metadata_path = f"{cfg.input_tensor_path}/metadata_{cfg.dataset_name}_{barcode}.pt"
+    if not os.path.exists(metadata_path) or cfg.recompute_tensor:
+        ts_print("Computing new tensor dataset from input files with barcode: ", barcode)
+        # Set hit/particle features in preprocessing config
+        cfg.preprocessing_config.hit_features = ["x", "y", "z", "r", "phi", "eta"]
+        cfg.preprocessing_config.particle_features = ["d0", "z0", "phi", "eta", "pT", "q", "m"]
+        # Pass preprocessing_config to prepare_tensor
+        prepare_tensor(cfg.preprocessing_config)
 
     ts_print("Loading existing Seeding Dataset from disk")
     # Load the existing dataset (force_recreate=False will load existing files)
     tensor_list = {
-        "tensor_hits",
-        "tensor_particles",
-        "tensor_ID",
-        "padding_mask_hit",
-        "all_pairs",
+        "hits_tensor",
+        "particles_tensor",
+        "hit_to_particle_tensor",
+        "padding_mask",
+        "good_pairs",
     }
     dataset = DataLoader(
         dataset_dir=cfg.input_tensor_path,
-        dataset_name=f"seeding_data_{tensor_file_suffix}",
+        dataset_name=f"{cfg.dataset_name}_{barcode}",
         tensor_names=list(tensor_list),
         device=cfg.device_acc,
     )
@@ -809,9 +783,7 @@ def main():
     test_fraction = cfg.test_fraction
     train_files = math.ceil((1 - test_fraction) * num_files)
 
-    ts_print(
-        f"Dataset has {num_files} files, using {train_files} for training and {num_files - train_files} for testing"
-    )
+    ts_print(f"Dataset has {num_files} files, using {train_files} for training and {num_files - train_files} for testing")
 
     # Create file-based train and test indices
     train_file_indices = list(range(train_files))
@@ -882,7 +854,7 @@ def main():
     # Collect all test data for monitoring from test_file_indices
     all_hits_test = []
     all_particles_test = []
-    all_ID_test = []
+    all_hit_to_particle_test = []
     all_padding_mask_test = []
     all_pairs_test = []
 
@@ -892,34 +864,34 @@ def main():
     for file_idx in test_file_indices:
         batch_data = dataset.get_file(file_idx)
 
-        tensor_hits = batch_data["tensor_hits"]
-        tensor_particles = batch_data["tensor_particles"]
-        tensor_ID = batch_data["tensor_ID"]
-        padding_mask_hit = batch_data["padding_mask_hit"]
-        all_pairs = batch_data["all_pairs"]
+        hits_tensor = batch_data["hits_tensor"]
+        particles_tensor = batch_data["particles_tensor"]
+        hit_to_particle_tensor = batch_data["hit_to_particle_tensor"]
+        padding_mask = batch_data["padding_mask"]
+        good_pairs = batch_data["good_pairs"]
 
         # Move tensors to device
-        tensor_hits = tensor_hits.to(cfg.device_acc)
-        tensor_particles = tensor_particles.to(cfg.device_acc)
-        tensor_ID = tensor_ID.to(cfg.device_acc)
-        padding_mask_hit = padding_mask_hit.to(cfg.device_acc)
-        # all_pairs is already a dictionary, no need to extract from batch
+        hits_tensor = hits_tensor.to(cfg.device_acc)
+        particles_tensor = particles_tensor.to(cfg.device_acc)
+        hit_to_particle_tensor = hit_to_particle_tensor.to(cfg.device_acc)
+        padding_mask = padding_mask.to(cfg.device_acc)
+        # good_pairs may be a list of tensors per event
 
         # Process each event in the batch
-        num_events_in_batch = tensor_hits.shape[0]
+        num_events_in_batch = hits_tensor.shape[0]
         # for event_idx in range(min(num_events_in_batch, 20)):
         for event_idx in range(num_events_in_batch):
             # Extract event data
-            event_hits = tensor_hits[event_idx]
-            event_particles = tensor_particles[event_idx]
-            event_ID = tensor_ID[event_idx]
-            event_padding_mask = padding_mask_hit[event_idx]
-            event_pairs = all_pairs[event_idx]
+            event_hits = hits_tensor[event_idx]
+            event_particles = particles_tensor[event_idx]
+            event_hit_to_particle = hit_to_particle_tensor[event_idx]
+            event_padding_mask = padding_mask[event_idx]
+            event_pairs = good_pairs[event_idx]
 
             # Store test data for monitoring
             all_hits_test.append(event_hits.cpu())
             all_particles_test.append(event_particles.cpu())
-            all_ID_test.append(event_ID.cpu())
+            all_hit_to_particle_test.append(event_hit_to_particle.cpu())
             all_padding_mask_test.append(event_padding_mask.cpu())
             all_pairs_test.append(event_pairs)
 
@@ -930,18 +902,18 @@ def main():
     # Convert lists to tensors for monitoring
     hits_test = torch.stack(all_hits_test)
     particles_test = torch.stack(all_particles_test)
-    ID_test = torch.stack(all_ID_test)
-    padding_mask_hit_test = torch.stack(all_padding_mask_test)
+    hit_to_particle_test = torch.stack(all_hit_to_particle_test)
+    padding_mask_test = torch.stack(all_padding_mask_test)
 
     # Delete the lists immediately to free memory
-    del all_hits_test, all_particles_test, all_ID_test, all_padding_mask_test
+    del all_hits_test, all_particles_test, all_hit_to_particle_test, all_padding_mask_test
     gc.collect()
 
     # Convert tensors to NumPy for monitoring inputs
     hits_test_np = hits_test.cpu().numpy()
     particles_test_np = particles_test.cpu().numpy()
-    ID_test_np = ID_test.cpu().numpy()
-    padding_mask_hit_test_np = padding_mask_hit_test.cpu().numpy()
+    hit_to_particle_test_np = hit_to_particle_test.cpu().numpy()
+    padding_mask_test_np = padding_mask_test.cpu().numpy()
 
     # Create PerformanceMonitor with configuration-only args
     # Derive default monitoring indices if not provided (config may not define these)
@@ -966,8 +938,8 @@ def main():
     seeding_results = monitor.seeding_performance(
         hits_test_np,
         particles_test_np,
-        ID_test_np,
-        padding_mask_hit_test_np,
+        hit_to_particle_test_np,
+        padding_mask_test_np,
         seeds_test,
         reconstructed_parameters_test,
         all_pairs_test,
@@ -977,8 +949,8 @@ def main():
     print(f"Monitoring finished in {_monitor_duration:.2f}s")
 
     # Cleanup large intermediates
-    del hits_test, particles_test, ID_test, padding_mask_hit_test
-    del hits_test_np, particles_test_np, ID_test_np, padding_mask_hit_test_np
+    del hits_test, particles_test, hit_to_particle_test, padding_mask_test
+    del hits_test_np, particles_test_np, hit_to_particle_test_np, padding_mask_test_np
     del seeds_test, reconstructed_parameters_test, all_pairs_test
     gc.collect()
     if torch.cuda.is_available():

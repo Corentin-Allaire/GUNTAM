@@ -56,11 +56,11 @@ class SeedTransformer(nn.Module):
         self.nb_heads = nb_heads
         self.dropout = dropout
         # Calculate number of frequencies to get close to dim_embedding if not provided
-        # Output will be: sum(nfreq) * 2 + 3 (Fourier features + cos(phi) + sin(phi) + eta)
+        # Output will be: sum(nfreq) * 2 + 4 (Fourier features + cos(phi) + sin(phi) + eta)
         self.fourier_num_frequencies: int | list[int]
         if num_frequencies is None:
             # Default: same frequency for all 3 dimensions
-            self.fourier_num_frequencies = max(1, (dim_embedding - 3) // 6)
+            self.fourier_num_frequencies = max(1, (dim_embedding - 4) // 6)
         else:
             self.fourier_num_frequencies = num_frequencies
 
@@ -76,7 +76,7 @@ class SeedTransformer(nn.Module):
         self.fourier_encoding = FourierPositionalEncoding(
             input_dim=3,
             num_frequencies=self.fourier_num_frequencies,
-            high_level_dim=3,
+            high_level_dim=4,
             dim_max=[200.0, 200.0, 1000.0],
             device_acc=self.device_acc,
         )
@@ -84,14 +84,15 @@ class SeedTransformer(nn.Module):
         # Set input dimension for projection
         # fourier_encoding.output_dim already accounts for variable frequencies
         embedding_input_dim = self.fourier_encoding.output_dim
-
+        print(self.fourier_num_frequencies)
+        print(embedding_input_dim)
         self.embedding_projection = nn.Linear(embedding_input_dim, self.dim_embedding, device=self.device_acc)
 
         # Transformer model
         self.transformer = TransformerEncoder(
             n_layers=self.nb_layers_t,
             input_dim=self.dim_embedding,
-            model_dim=self.dim_embedding,
+            model_dim=4 * self.dim_embedding,
             num_heads=self.nb_heads,  # Number of attention heads can be adjusted
             dropout=self.dropout,  # Dropout rate can be adjusted
             device=self.device_acc,
@@ -118,9 +119,11 @@ class SeedTransformer(nn.Module):
 
         coord = hits[..., :3]
         high_level = torch.cat(
-            [torch.cos(hits[..., 3:4]), torch.sin(hits[..., 3:4]), hits[..., 4:5]],
+            [hits[..., 3:4], torch.cos(hits[..., 4:5]), torch.sin(hits[..., 4:5]), hits[..., 5:6]],
             dim=-1,
         )
+        print(coord.shape)
+        print(high_level.shape)
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
         # Apply generic projection if needed

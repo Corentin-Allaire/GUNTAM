@@ -20,7 +20,7 @@ EventData = Tuple[
     np.ndarray,  # event_reconstructed
     Sequence[Any],  # event_pairs
     Sequence[Any],  # event_seeds
-    np.ndarray,  # event_ID
+    np.ndarray,  # event_hit_to_particle
     Optional[np.ndarray],  # event_map
     np.ndarray,  # event_mask
 ]
@@ -81,9 +81,10 @@ class PerformanceMonitor:
 
     Input expectations for `seeding_performance(...)`:
     - All event-level arrays/lists share the same number of events.
-    - Arrays (`hits_test`, `particles_test`, `ID_test`, `padding_mask_hit_test`)
+    - Arrays (`hits_test`, `hit_to_particle_test`, `padding_mask_test`)
         have identical bin dimensions per event.
-    - `padding_mask_hit_test[event][bin]` marks padded hits; valid hits are
+    - `particles_test` is per-event (not binned): `[event, particle, features]`.
+    - `padding_mask_test[event][bin]` marks padded hits; valid hits are
         those where the mask is False.
     """
 
@@ -121,8 +122,8 @@ class PerformanceMonitor:
         self,
         hits_test: np.ndarray,
         particles_test: np.ndarray,
-        ID_test: np.ndarray,
-        padding_mask_hit_test: np.ndarray,
+        hit_to_particle_test: np.ndarray,
+        padding_mask_test: np.ndarray,
         seeds_test: Sequence[Sequence[Any]],
         reconstructed_parameters: Sequence[Sequence[Any]],
         all_pairs_test: Sequence[Sequence[Any]],
@@ -138,7 +139,7 @@ class PerformanceMonitor:
         Returns:
             EventData: (
                 event_hits, event_particles, event_reconstructed,
-                event_pairs, event_seeds, event_ID, event_map, event_mask
+                event_pairs, event_seeds, event_hit_to_particle, event_map, event_mask
             )
         """
         test_size = len(hits_test)
@@ -146,12 +147,20 @@ class PerformanceMonitor:
             raise IndexError(f"Event index {event_idx} is out of range (0 to {test_size - 1})")
 
         event_hits: np.ndarray = np.asarray(hits_test[event_idx])
-        event_particles: np.ndarray = np.asarray(particles_test[event_idx])
+        event_particles: np.ndarray = np.asarray(particles_test[event_idx])  # [num_particles, features]
         event_reconstructed: np.ndarray = np.asarray(reconstructed_parameters[event_idx])
         event_pairs: Sequence[Any] = all_pairs_test[event_idx]
         event_seeds: Sequence[Any] = seeds_test[event_idx]
-        event_ID: np.ndarray = np.asarray(ID_test[event_idx])
-        event_mask: np.ndarray = np.asarray(padding_mask_hit_test[event_idx])
+        event_hit_to_particle: np.ndarray = np.asarray(hit_to_particle_test[event_idx])
+        # Normalize hit_to_particle shape: remove trailing dimension if present
+        if event_hit_to_particle.ndim == 3 and event_hit_to_particle.shape[-1] == 1:
+            event_hit_to_particle = event_hit_to_particle[..., 0]
+
+        event_mask: np.ndarray = np.asarray(padding_mask_test[event_idx])
+        # Normalize padding mask shape: remove trailing dimension if present
+        if event_mask.ndim == 3 and event_mask.shape[-1] == 1:
+            event_mask = event_mask[..., 0]
+
         event_map: Optional[np.ndarray] = np.asarray(attention_maps[event_idx]) if attention_maps is not None else None
 
         return (
@@ -160,7 +169,7 @@ class PerformanceMonitor:
             event_reconstructed,
             event_pairs,
             event_seeds,
-            event_ID,
+            event_hit_to_particle,
             event_map,
             event_mask,
         )
@@ -174,7 +183,7 @@ class PerformanceMonitor:
         np.ndarray,
         np.ndarray,
         np.ndarray,
-        Tuple[np.ndarray, np.ndarray, np.ndarray],
+        np.ndarray,  # bin_pairs - tensor/array [num_pairs, 3]
         Sequence[Any],
         Optional[np.ndarray],
     ]:
@@ -186,7 +195,7 @@ class PerformanceMonitor:
             bin_idx: Index of the bin to retrieve.
 
         Returns:
-            Tuple of (bin_hits, bin_particles, bin_IDs, bin_reconstructed,
+            Tuple of (bin_hits, bin_particles, bin_hit_to_particle, bin_reconstructed,
             bin_pairs, bin_seed, bin_map).
         """
         (
@@ -195,7 +204,7 @@ class PerformanceMonitor:
             event_reconstructed,
             event_pairs,
             event_seeds,
-            event_ID,
+            event_hit_to_particle,
             event_map,
             event_mask,
         ) = event_data
@@ -206,17 +215,47 @@ class PerformanceMonitor:
         bin_mask = ~event_mask[bin_idx].astype(bool)
 
         bin_hits = event_hits[bin_idx][bin_mask]
-        bin_particles = event_particles[bin_idx][bin_mask]
-        bin_reconstructed = event_reconstructed[bin_idx][bin_mask]
+
+        # Get hit-to-particle mapping for this bin's valid hits
+        bin_hit_to_particle = event_hit_to_particle[bin_idx]
+        if bin_hit_to_particle.ndim > 1:
+            bin_hit_to_particle = bin_hit_to_particle.reshape(-1)
+        bin_hit_to_particle = bin_hit_to_particle[bin_mask].astype(int)
+
+        # Construct bin_particles by mapping each hit to its particle using hit_to_particle
+        # event_particles has shape [num_particles, features]
+        # bin_hit_to_particle contains particle indices for each valid hit in this bin
+        if event_particles.ndim == 2 and event_particles.shape[0] > 0:
+            # For each hit, get the corresponding particle parameters
+            num_particle_features = event_particles.shape[1]
+            bin_particles = np.zeros((len(bin_hit_to_particle), num_particle_features), dtype=event_particles.dtype)
+
+            # Map valid particle IDs (>= 0 and within bounds)
+            valid_pid_mask = (bin_hit_to_particle >= 0) & (bin_hit_to_particle < event_particles.shape[0])
+            if np.any(valid_pid_mask):
+                bin_particles[valid_pid_mask] = event_particles[bin_hit_to_particle[valid_pid_mask]]
+        else:
+            # No particles available - create empty array with correct shape
+            bin_particles = np.zeros((len(bin_hit_to_particle), 0), dtype=event_hits.dtype)
+
+        # Get reconstructed parameters for this bin's valid hits
+        bin_reconstructed = event_reconstructed[bin_idx]
+        if bin_reconstructed is None:
+            bin_reconstructed = np.zeros((len(bin_hits), 0), dtype=event_hits.dtype)
+        else:
+            bin_reconstructed = np.asarray(bin_reconstructed)
+            # Only apply mask if bin_reconstructed has the same length as the bin
+            if bin_reconstructed.shape[0] == event_mask[bin_idx].shape[0]:
+                bin_reconstructed = bin_reconstructed[bin_mask]
+
         bin_pairs = event_pairs[bin_idx]
         bin_seed = event_seeds[bin_idx]
-        bin_IDs = event_ID[bin_idx][bin_mask]
         bin_map = event_map[bin_idx] if event_map is not None else None
 
         return (
             bin_hits,
             bin_particles,
-            bin_IDs,
+            bin_hit_to_particle,
             bin_reconstructed,
             bin_pairs,
             bin_seed,
@@ -227,8 +266,8 @@ class PerformanceMonitor:
         self,
         hits_test: np.ndarray,
         particles_test: np.ndarray,
-        ID_test: np.ndarray,
-        padding_mask_hit_test: np.ndarray,
+        hit_to_particle_test: np.ndarray,
+        padding_mask_test: np.ndarray,
         seeds_test: Sequence[Sequence[Any]],
         reconstructed_parameters: Sequence[Sequence[Any]],
         all_pairs_test: Sequence[Sequence[Any]],
@@ -243,8 +282,8 @@ class PerformanceMonitor:
         test_size = len(hits_test)
         if (
             len(particles_test) != test_size
-            or len(ID_test) != test_size
-            or len(padding_mask_hit_test) != test_size
+            or len(hit_to_particle_test) != test_size
+            or len(padding_mask_test) != test_size
             or len(seeds_test) != test_size
             or len(reconstructed_parameters) != test_size
             or len(all_pairs_test) != test_size
@@ -253,13 +292,8 @@ class PerformanceMonitor:
             raise ValueError(f"All inputs must have the same number of events ({test_size})")
 
         expected_bins = hits_test.shape[1] if test_size > 0 else 0
-        if (
-            expected_bins == 0
-            or particles_test.shape[1] != expected_bins
-            or ID_test.shape[1] != expected_bins
-            or padding_mask_hit_test.shape[1] != expected_bins
-        ):
-            raise ValueError("hits/particles/ID/mask must have the same number of bins per event")
+        if expected_bins == 0 or hit_to_particle_test.shape[1] != expected_bins or padding_mask_test.shape[1] != expected_bins:
+            raise ValueError("hits/hit_to_particle/mask must have the same number of bins per event")
 
         for ev in range(test_size):
             if (
@@ -278,7 +312,7 @@ class PerformanceMonitor:
         particles: np.ndarray,
         reco_params: np.ndarray,
         seeds: Sequence[Any],
-        pairs: Tuple[np.ndarray, np.ndarray, np.ndarray],
+        pairs: np.ndarray,
         attention_map: np.ndarray,
     ) -> None:
         """Detailed, optional analysis for a specific event/bin.
@@ -293,7 +327,7 @@ class PerformanceMonitor:
             particles: Array of truth parameters aligned to hits, shape `[n_hits, 4]`
             reco_params: Array of reconstructed parameters aligned to hits, shape `[n_hits, 4 or 5]`
             seeds: List of seeds `(hit_indices, parameters)` for the bin
-            pairs: Tuple `(pairs1, pairs2, targets)` over valid hits
+            pairs: Tensor `[num_pairs, 3]` where columns are (pairs1, pairs2, targets)
             attention_map: Array `[n_hits, n_hits]` attention weights for the bin
         """
 
@@ -351,11 +385,22 @@ class PerformanceMonitor:
                 print(f"     Parameters: z={s[1][0]:.2f}, eta={s[1][1]:.3f}, phi={s[1][2]:.3f}, pT={s[1][3]:.2f}")
 
         pair_info = {}
-        pairs1, pairs2, targets = pairs
 
-        pairs1 = _to_numpy(pairs1)
-        pairs2 = _to_numpy(pairs2)
-        targets = _to_numpy(targets)
+        # Unbind pairs tensor to get individual columns
+        if isinstance(pairs, torch.Tensor):
+            pairs1, pairs2, targets = pairs.unbind(dim=1)
+            pairs1 = _to_numpy(pairs1)
+            pairs2 = _to_numpy(pairs2)
+            targets = _to_numpy(targets)
+        else:
+            # Fallback for numpy arrays
+            pairs_np = np.asarray(pairs)
+            if pairs_np.ndim == 2 and pairs_np.shape[1] == 3:
+                pairs1 = pairs_np[:, 0]
+                pairs2 = pairs_np[:, 1]
+                targets = pairs_np[:, 2]
+            else:
+                pairs1, pairs2, targets = pairs_np
 
         mask_valid = (pairs1 < len(hits)) & (pairs2 < len(hits))
         for p1, p2, t in zip(pairs1[mask_valid], pairs2[mask_valid], targets[mask_valid]):
@@ -388,8 +433,8 @@ class PerformanceMonitor:
         self,
         hits_test: np.ndarray,
         particles_test: np.ndarray,
-        ID_test: np.ndarray,
-        padding_mask_hit_test: np.ndarray,
+        hit_to_particle_test: np.ndarray,
+        padding_mask_test: np.ndarray,
         seeds_test: Sequence[Sequence[Any]],
         reconstructed_parameters: Sequence[Sequence[Any]],
         all_pairs_test: Sequence[Sequence[Any]],
@@ -400,7 +445,8 @@ class PerformanceMonitor:
         In the futur this could be use to minimise the ammount of attention maps to be stored during inference.
 
         Args:
-            hits_test, particles_test, ID_test, padding_mask_hit_test: arrays with per-event
+            hits_test, hit_to_particle_test, padding_mask_test: arrays with per-event bins
+            particles_test: per-event particle arrays `[events, particles, features]`
             seeds_test, reconstructed_parameters, all_pairs_test, attention_maps: nested lists `[events][bins]`
 
         Returns:
@@ -410,8 +456,8 @@ class PerformanceMonitor:
         self._validate_inputs(
             hits_test,
             particles_test,
-            ID_test,
-            padding_mask_hit_test,
+            hit_to_particle_test,
+            padding_mask_test,
             seeds_test,
             reconstructed_parameters,
             all_pairs_test,
@@ -429,8 +475,8 @@ class PerformanceMonitor:
             event = self._get_event(
                 hits_test,
                 particles_test,
-                ID_test,
-                padding_mask_hit_test,
+                hit_to_particle_test,
+                padding_mask_test,
                 seeds_test,
                 reconstructed_parameters,
                 all_pairs_test,
@@ -440,7 +486,7 @@ class PerformanceMonitor:
 
             # === Loop over bins ===
             for bin_idx in range(event[0].shape[0]):
-                hits, particles, IDs, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
+                hits, particles, hit_to_particle, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
                 # If in the event/bin selection lists run the detailed analysis
                 if attn_map is not None and event_idx in self.event_idx_list and bin_idx in self.bin_idx_list:
                     self.analyze_event_bins(
@@ -458,8 +504,8 @@ class PerformanceMonitor:
         self,
         hits_test: np.ndarray,
         particles_test: np.ndarray,
-        ID_test: np.ndarray,
-        padding_mask_hit_test: np.ndarray,
+        hit_to_particle_test: np.ndarray,
+        padding_mask_test: np.ndarray,
         seeds_test: Sequence[Sequence[Any]],
         reconstructed_parameters: Sequence[Sequence[Any]],
         all_pairs_test: Sequence[Sequence[Any]],
@@ -476,7 +522,8 @@ class PerformanceMonitor:
             5. Aggregate results and optionally create plots
 
         Args:
-            hits_test, particles_test, ID_test, padding_mask_hit_test: arrays with per-event bins
+            hits_test, hit_to_particle_test, padding_mask_test: arrays with per-event bins
+            particles_test: per-event particle arrays `[events, particles, features]`
             seeds_test, reconstructed_parameters, all_pairs_test, attention_maps: nested lists `[events][bins]`
 
         Returns:
@@ -486,8 +533,8 @@ class PerformanceMonitor:
         self._validate_inputs(
             hits_test,
             particles_test,
-            ID_test,
-            padding_mask_hit_test,
+            hit_to_particle_test,
+            padding_mask_test,
             seeds_test,
             reconstructed_parameters,
             all_pairs_test,
@@ -523,8 +570,8 @@ class PerformanceMonitor:
             event = self._get_event(
                 hits_test,
                 particles_test,
-                ID_test,
-                padding_mask_hit_test,
+                hit_to_particle_test,
+                padding_mask_test,
                 seeds_test,
                 reconstructed_parameters,
                 all_pairs_test,
@@ -535,7 +582,7 @@ class PerformanceMonitor:
             # === Loop over bins ===
             for bin_idx in range(event[0].shape[0]):
 
-                hits, particles, IDs, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
+                hits, particles, hit_to_particle, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
                 # If in the event/bin selection lists run the detailed analysis
                 if attn_map is not None and event_idx in self.event_idx_list and bin_idx in self.bin_idx_list:
                     self.analyze_event_bins(
@@ -552,10 +599,10 @@ class PerformanceMonitor:
                 total_seeds += len(seeds)
 
                 # --- Build bin_particles dict ---
-                bin_particles = self._build_bin_particles(particles, IDs)
+                bin_particles = self._build_bin_particles(particles, hit_to_particle)
 
                 # --- Step 1 & 2: associate and select best seeds ---
-                seeded_particle = self._associate_seeds_to_particles(seeds, bin_particles, IDs, self.min_common_hits)
+                seeded_particle = self._associate_seeds_to_particles(seeds, bin_particles, hit_to_particle, self.min_common_hits)
                 bin_particles = self._select_best_seed_for_particles(seeded_particle, bin_particles)
 
                 # --- Collect stats ---
@@ -563,9 +610,7 @@ class PerformanceMonitor:
                 # Count particles with any associated seed in this bin
                 bin_particles_with_seeds = sum(1 for pid, pdata in bin_particles.items() if "best_seed_idx" in pdata)
                 # Count particles with a pure associated seed in this bin
-                bin_particles_with_pure_seeds = sum(
-                    1 for pid, pdata in bin_particles.items() if pdata.get("is_pure", False)
-                )
+                bin_particles_with_pure_seeds = sum(1 for pid, pdata in bin_particles.items() if pdata.get("is_pure", False))
 
                 self._update_event_particle_bins(
                     event_particle_bins,
@@ -618,9 +663,7 @@ class PerformanceMonitor:
         total_unique_particles = len(eligible_particles)
         particles_with_seeds_count = sum(1 for p in eligible_particles if p.get("had_seed", False))
         particles_with_pure_seeds_count = sum(1 for p in eligible_particles if p.get("had_pure_seed", False))
-        seeding_efficiency = (
-            (particles_with_seeds_count / total_unique_particles) if total_unique_particles > 0 else 0.0
-        )
+        seeding_efficiency = (particles_with_seeds_count / total_unique_particles) if total_unique_particles > 0 else 0.0
         pure_seeding_efficiency = (
             (particles_with_pure_seeds_count / total_unique_particles) if total_unique_particles > 0 else 0.0
         )
@@ -692,9 +735,9 @@ class PerformanceMonitor:
     def _build_bin_particles(
         self,
         particles: np.ndarray,
-        IDs: np.ndarray,
+        hit_to_particle: np.ndarray,
     ) -> Dict[int, Dict[str, Any]]:
-        """Build per-bin particle dictionary from valid hits and IDs.
+        """Build per-bin particle dictionary from valid hits and hit_to_particle mapping.
 
         Returns a dict mapping particle_id -> {
             'hit_indices': list[int],
@@ -702,20 +745,20 @@ class PerformanceMonitor:
         }
 
         Notes:
-        - Skips Orphan hits (ID < 0 or pT <= 0)
+        - Skips Orphan hits (particle ID < 0 or pT <= 0)
         - Assumes reconstructed_params is aligned with hits
         """
-        # Normalize shapes: expect flat per-hit IDs aligned with particles
-        IDs = np.asarray(IDs).reshape(-1)
+        # Normalize shapes: expect flat per-hit hit_to_particle aligned with particles
+        hit_to_particle = np.asarray(hit_to_particle).reshape(-1)
         particles = np.asarray(particles)
 
         # Apply mask to select non orphan hits
         pt = particles[:, 3]
-        mask = (IDs > 0) & (pt > 0.0)
+        mask = (hit_to_particle >= 0) & (pt > 0.0)
 
-        # Indices of selected hits and corresponding IDs
+        # Indices of selected hits and corresponding particle IDs
         idx = np.nonzero(mask)[0]
-        mask_ids = IDs[mask]
+        mask_ids = hit_to_particle[mask]
 
         # Group valid indices by particle ID using sorting + unique
         order = np.argsort(mask_ids, kind="stable")
@@ -744,7 +787,7 @@ class PerformanceMonitor:
         self,
         bin_seeds: Sequence[Tuple[Sequence[int], Sequence[float]]],
         bin_particles: Dict[int, Dict[str, Any]],
-        IDs: np.ndarray,
+        hit_to_particle: np.ndarray,
         min_common_hits: int = 3,
     ) -> Dict[int, List[Dict[str, Any]]]:
         """
@@ -756,7 +799,7 @@ class PerformanceMonitor:
                 "hit_indices": list[int],  # hit indices belonging to this particle
                 "true_params": np.ndarray, # true particle parameters
             }
-            IDs: array of particle IDs per hit for this bin (aligned with hits)
+            hit_to_particle: array of particle IDs per hit for this bin (aligned with hits)
             min_common_hits: minimum number of common hits to form an association (default: 3)
 
         Returns:
@@ -777,7 +820,7 @@ class PerformanceMonitor:
             seed_hit_indices = set(seed[0])
 
             # Candidate particle IDs are those present among this seed's hits
-            seed_ids = set(np.unique(IDs[list(seed_hit_indices)]))
+            seed_ids = set(np.unique(hit_to_particle[list(seed_hit_indices)]))
             candidate_particle_ids = {pid for pid in seed_ids if pid in bin_particle_ids}
 
             for particle_id in candidate_particle_ids:
@@ -1169,9 +1212,7 @@ class PerformanceMonitor:
         print(f"   Total particles analyzed: {eff_metrics['total_particles']}")
         print(f"   Total seeds reconstructed: {eff_metrics['total_seeds']}")
         print(f"   Total bins processed: {eff_metrics['total_bins_processed']}")
-        print(
-            f"   Average particles per bin: {eff_metrics['total_particles'] / eff_metrics['total_bins_processed']:.1f}"
-        )
+        print(f"   Average particles per bin: {eff_metrics['total_particles'] / eff_metrics['total_bins_processed']:.1f}")
         print(f"   Average seeds per bin: {eff_metrics['total_seeds'] / eff_metrics['total_bins_processed']:.1f}")
         print(f"   Seeds per particle ratio: {eff_metrics['total_seeds'] / eff_metrics['total_particles']:.2f}")
 
@@ -1193,10 +1234,7 @@ class PerformanceMonitor:
 
         bin_stats = results["bin_statistics"]
         print("\n BIN-WISE STATISTICS:")
-        print(
-            "   Mean seeding efficiency per bin: "
-            f"{bin_stats['mean_efficiency']:.1%} ± {bin_stats['std_efficiency']:.1%}"
-        )
+        print("   Mean seeding efficiency per bin: " f"{bin_stats['mean_efficiency']:.1%} ± {bin_stats['std_efficiency']:.1%}")
         print(
             "   Mean pure seeding efficiency per bin: "
             f"{bin_stats['mean_pure_efficiency']:.1%} ± {bin_stats['std_pure_efficiency']:.1%}"
@@ -1208,9 +1246,7 @@ class PerformanceMonitor:
 
         print("\n  SEED RESOLUTION (Best seed per particle):")
         resolution = results["resolution_metrics"]
-        print(
-            f"{'Parameter':<10} {'Mean Error':<12} {'Std Error':<12} {'RMS Error':<12} {'Median':<10} {'N Seeds':<10}"
-        )
+        print(f"{'Parameter':<10} {'Mean Error':<12} {'Std Error':<12} {'RMS Error':<12} {'Median':<10} {'N Seeds':<10}")
         print("-" * 82)
 
         param_units = {"z": "[mm]", "eta": "", "phi": "[rad]", "pt": "[GeV]"}
@@ -1232,10 +1268,7 @@ class PerformanceMonitor:
 
         overall = complexity_analysis["overall_stats"]
         print("   Overall bin statistics:")
-        print(
-            "     Mean particles per bin: "
-            f"{overall['mean_particles_per_bin']:.1f} ± {overall['std_particles_per_bin']:.1f}"
-        )
+        print("     Mean particles per bin: " f"{overall['mean_particles_per_bin']:.1f} ± {overall['std_particles_per_bin']:.1f}")
         print(f"     Mean seeds per bin: {overall['mean_seeds_per_bin']:.1f} ± {overall['std_seeds_per_bin']:.1f}")
         print(f"     Mean seeds per particle: {overall['mean_seeds_per_particle']:.2f}")
 
