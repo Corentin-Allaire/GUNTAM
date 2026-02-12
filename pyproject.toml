@@ -5,7 +5,7 @@ description = "Transformer network implementation to be used as a seeding for ch
 authors = [
     {name = "Corentin Allaire", email = "corentin.allaire@cern.ch"},
 ]
-dependencies = ["torch>=2.2.2", "numpy>=1.26", "pandas>=2.3.3", "black>=25.11.0", "pytest>=9.0.1", "mypy>=1.18.2", "tensorboard>=2.20.0", "matplotlib>=3.10.7", "flake8>=7.3.0", "flake8-pyproject>=1.2.3", "pandas-stubs>=3.0.0.260204", "tables>=3.10.2"]
+dependencies = ["torch>=2.2.2", "numpy>=1.26", "pandas>=2.3.3", "black>=25.11.0", "pytest>=9.0.1", "mypy>=1.18.2", "tensorboard>=2.20.0", "matplotlib>=3.10.7", "flake8>=7.3.0", "flake8-pyproject>=1.2.3", "pandas-stubs>=3.0.0.260204", "tables>=3.10.2", "pytest-cov>=7.0.0"]
 requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "MPL-2.0"}
