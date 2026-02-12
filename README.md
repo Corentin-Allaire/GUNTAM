@@ -1,6 +1,6 @@
 # GUNTAM
 
-[![codecov](https://codecov.io/gh/YOURUSERNAME/GUNTAM/branch/main/graph/badge.svg)](https://codecov.io/gh/YOURUSERNAME/GUNTAM)
+[![codecov](https://codecov.io/gh/Corentin-Allaire/GUNTAM/branch/main/graph/badge.svg)](https://codecov.io/gh/Corentin-Allaire/GUNTAM)
 
 This generic library is intended to explore the use of Transformer networks for trajectory reconstruction. 
 In particular, it focuses on charged particle tracking, integrating with the data from the ACTS project. 
