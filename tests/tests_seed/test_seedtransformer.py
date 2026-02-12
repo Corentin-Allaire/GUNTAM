@@ -26,8 +26,8 @@ class TestSeedTransformerInitialization:
         expected_nfreq = max(1, (dim_embedding - 3) // 6)
         # fourier_encoding.num_frequencies is now a list internally
         assert model.fourier_encoding.num_frequencies == [expected_nfreq, expected_nfreq, expected_nfreq]
-        # output_dim of fourier_encoding = sum(num_frequencies) * 2 + 3
-        assert model.fourier_encoding.output_dim == sum(model.fourier_encoding.num_frequencies) * 2 + 3
+        # output_dim of fourier_encoding = sum(num_frequencies) * 2 + 4
+        assert model.fourier_encoding.output_dim == sum(model.fourier_encoding.num_frequencies) * 2 + 4
 
     def test_variable_frequencies_per_dimension(self):
         # Test with different frequencies for each dimension
@@ -36,12 +36,12 @@ class TestSeedTransformerInitialization:
         
         assert model.fourier_num_frequencies == num_frequencies_list
         assert model.fourier_encoding.num_frequencies == num_frequencies_list
-        # output_dim = sum([4, 6, 8]) * 2 + 3 = 18 * 2 + 3 = 39
-        expected_output_dim = sum(num_frequencies_list) * 2 + 3
+        # output_dim = sum([4, 6, 8]) * 2 + 4 = 18 * 2 + 4 = 40
+        expected_output_dim = sum(num_frequencies_list) * 2 + 4
         assert model.fourier_encoding.output_dim == expected_output_dim
         
-        # Test forward pass works
-        hits = torch.randn(2, 5, 5)
+        # Test forward pass works with 6 features: x, y, z, r, phi, eta
+        hits = torch.randn(2, 5, 6)
         mask = torch.zeros(2, 5, dtype=torch.bool)
         output, attn = model(hits, mask)
         assert output.shape == (2, 5, 64)
@@ -52,11 +52,12 @@ class TestSeedTransformerForward:
     """Test suite for forward pass and core behaviors."""
 
     def _make_inputs(self, batch_size=2, seq_len=10):
-        # hits layout: first 3 coords (x,y,z), then phi, then eta-like feature
-        coords = torch.randn(batch_size, seq_len, 3)
-        phi = torch.randn(batch_size, seq_len, 1)
-        eta = torch.randn(batch_size, seq_len, 1)
-        hits = torch.cat([coords, phi, eta], dim=-1)  # (B, S, 5)
+        # hits layout: x, y, z, r, phi, eta (6 features)
+        coords = torch.randn(batch_size, seq_len, 3)  # x, y, z
+        r = torch.randn(batch_size, seq_len, 1)  # r
+        phi = torch.randn(batch_size, seq_len, 1)  # phi
+        eta = torch.randn(batch_size, seq_len, 1)  # eta
+        hits = torch.cat([coords, r, phi, eta], dim=-1)  # (B, S, 6)
         mask = torch.zeros(batch_size, seq_len, dtype=torch.bool)  # (B,S) unmasked
         return hits, mask
 
@@ -117,8 +118,8 @@ class TestSeedTransformerForward:
 
     def test_dimension_mismatch_raises(self):
         model = SeedTransformer(dim_embedding=32)
-        # hits must have last dim 5; provide wrong dim
-        bad_hits = torch.randn(2, 6, 4)  # last dim 4 instead of 5
+        # hits must have last dim 6 (x, y, z, r, phi, eta); provide wrong dim
+        bad_hits = torch.randn(2, 6, 4)  # last dim 4 instead of 6
         mask = torch.zeros(2, 6, dtype=torch.bool)
         with pytest.raises(RuntimeError):  # Linear will complain or downstream shape mismatch
             _ = model(bad_hits, mask)
@@ -168,7 +169,7 @@ class TestSeedTransformerCheckpointing:
         ckpt_path = tmp_path / "round_trip.pt"
 
         # Perform a training step to change parameters from initialization
-        hits = torch.randn(1, 5, 5)
+        hits = torch.randn(1, 5, 6)
         mask = torch.zeros(1, 5, dtype=torch.bool)
         out, _ = model(hits, mask)
         loss = out.sum()
@@ -196,7 +197,7 @@ class TestSeedTransformerCheckpointing:
 
         # Forward pass outputs should match
         torch.manual_seed(7)
-        hits = torch.randn(1, 5, 5)
+        hits = torch.randn(1, 5, 6)
         ref_out, ref_attn = model(hits, None)
         test_out, test_attn = loaded_model(hits, None)
 

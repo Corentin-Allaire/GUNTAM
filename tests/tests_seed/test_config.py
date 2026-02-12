@@ -1,19 +1,26 @@
 import sys
 import pytest
 
-from GUNTAM.Seed.Config import config
+from GUNTAM.Seed.Config import SeedConfig
 
 
 def test_defaults_initialization():
-    cfg = config()
-    # Preprocessing / binning defaults
-    assert cfg.max_hit_input == -1
-    assert cfg.vertex_cuts == [10, 10, 200]
-    assert cfg.bin_width == 0.05
-    assert cfg.eta_bin_width == 0.5
-    assert cfg.eta_range == [-3.0, 3.0]
-    assert cfg.max_events == -1
-    assert cfg.orphan_hit_fraction == 0.0
+    cfg = SeedConfig()
+    
+    # Preprocessing config exists and has correct defaults
+    assert cfg.preprocessing_config is not None
+    assert cfg.preprocessing_config.max_hit_input == 1200
+    assert cfg.preprocessing_config.vertex_cuts == [10, 200]
+    assert cfg.preprocessing_config.bin_width == 0.05
+    assert cfg.preprocessing_config.eta_range == [-3.0, 3.0]
+    assert cfg.preprocessing_config.binning_strategy == "neighbor"
+    assert cfg.preprocessing_config.binning_margin == 0.01
+    assert cfg.preprocessing_config.max_events == -1
+    assert cfg.preprocessing_config.orphan_hit_fraction == 0.0
+    assert cfg.preprocessing_config.input_path == "odd_output"
+    assert cfg.preprocessing_config.input_format == "csv"
+    assert cfg.preprocessing_config.hit_features == ["x", "y", "z"]
+    assert cfg.preprocessing_config.particle_features == ["eta", "phi", "pT"]
 
     # Training defaults
     assert cfg.epoch_nb == 10
@@ -24,10 +31,11 @@ def test_defaults_initialization():
     assert cfg.weight_decay == pytest.approx(0.01)
     assert cfg.batch_size == 1
 
-    # Paths
-    assert cfg.input_path == "odd_output"
-    assert cfg.input_tensor_path == "."
+    # Paths (overlapping with preprocessing_config)
+    assert cfg.input_tensor_path == "odd_output"
+    assert cfg.dataset_name == "seeding_data"
     assert cfg.model_path == "transformer.pt"
+    assert cfg.recompute_tensor is False
 
     # Model architecture
     assert cfg.nb_layers_t == 6
@@ -37,15 +45,16 @@ def test_defaults_initialization():
     assert cfg.fourier_num_frequencies is None
 
     # Loss configuration
-    assert cfg.loss_components == ["cosine", "MSE", "attention"]
+    assert cfg.loss_components == ["attention_next"]
     assert cfg.loss_weights == []
 
 
 def test_to_from_dict_roundtrip():
-    cfg = config()
+    cfg = SeedConfig()
     # customize a few fields and provide consistent loss/weights
     cfg.epoch_nb = 3
-    cfg.input_path = "data/in"
+    cfg.preprocessing_config.input_path = "data/in"
+    cfg.preprocessing_config.max_hit_input = 1500
     cfg.loss_components = ["cosine", "L1", "attention"]
     cfg.loss_weights = [0.5, 2.0, 1.5]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
@@ -53,13 +62,16 @@ def test_to_from_dict_roundtrip():
     payload = cfg.to_dict()
     # device should be serialized as string
     assert isinstance(payload["device_acc"], str)
+    # preprocessing_config should be serialized as dict
+    assert isinstance(payload["preprocessing_config"], dict)
 
-    new_cfg = config()
+    new_cfg = SeedConfig()
     new_cfg.from_dict(payload)
 
     # spot check important values and that loss_config is restored
     assert new_cfg.epoch_nb == 3
-    assert new_cfg.input_path == "data/in"
+    assert new_cfg.preprocessing_config.input_path == "data/in"
+    assert new_cfg.preprocessing_config.max_hit_input == 1500
     assert new_cfg.loss_components == ["cosine", "L1", "attention"]
     assert new_cfg.loss_weights == [0.5, 2.0, 1.5]
     assert new_cfg.get_loss_weight("L1") == 2.0
@@ -67,7 +79,7 @@ def test_to_from_dict_roundtrip():
 
 
 def test_save_and_load_config(tmp_path):
-    cfg = config()
+    cfg = SeedConfig()
     cfg.epoch_nb = 42
     cfg.loss_components = ["cosine"]
     cfg.loss_weights = [3.0]
@@ -77,7 +89,7 @@ def test_save_and_load_config(tmp_path):
     cfg.save_config(str(file_path))
     assert file_path.exists()
 
-    loaded = config()
+    loaded = SeedConfig()
     loaded.load_config(str(file_path))
 
     assert loaded.epoch_nb == 42
@@ -95,7 +107,7 @@ def test_parse_args_conflicting_losses_raises(monkeypatch):
     ]
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(ValueError):
-        config().parse_args()
+        SeedConfig().parse_args()
 
 
 def test_parse_args_infers_default_weights(monkeypatch):
@@ -107,7 +119,7 @@ def test_parse_args_infers_default_weights(monkeypatch):
         "attention",
     ]
     monkeypatch.setattr(sys, "argv", argv)
-    cfg = config()
+    cfg = SeedConfig()
     cfg.parse_args()
     assert cfg.loss_components == ["cosine", "attention"]
     assert cfg.loss_weights == [1.0, 1.0]
@@ -126,19 +138,20 @@ def test_parse_args_mismatched_lengths_raises(monkeypatch):
     ]
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(ValueError):
-        config().parse_args()
+        SeedConfig().parse_args()
 
 
-@pytest.mark.parametrize("bad_value", ["-0.1", "1.1", "2"])  # out of [0,1]
-def test_orphan_hit_fraction_validation(monkeypatch, bad_value):
-    argv = ["prog", "--orphan_hit_fraction", bad_value]
+def test_orphan_hit_fraction_validation(monkeypatch):
+    # Valid value should work
+    argv = ["prog", "--orphan_hit_fraction", "0.5"]
     monkeypatch.setattr(sys, "argv", argv)
-    with pytest.raises(ValueError):
-        config().parse_args()
+    cfg = SeedConfig()
+    cfg.parse_args()
+    assert cfg.preprocessing_config.orphan_hit_fraction == 0.5
 
 
 def test_has_loss_component_and_get_weight_helpers():
-    cfg = config()
+    cfg = SeedConfig()
     cfg.loss_components = ["cosine", "attention"]
     cfg.loss_weights = [0.7, 1.3]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))

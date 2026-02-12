@@ -9,7 +9,7 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
 
     Shapes:
     - hits_test: [E, B, H, 5]
-    - particles_test: [E, B, H, 4]
+    - particles_test: [E, P, 4]
     - ID_test: [E, B, H]
     - padding_mask_hit_test: [E, B, H] (False for valid hits)
     - seeds_test: nested list [E][B] of (hit_indices, params)
@@ -21,27 +21,27 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
 
     # Initialize arrays
     hits_test = np.zeros((E, B, H, 5), dtype=float)
-    particles_test = np.zeros((E, B, H, 4), dtype=float)
+    particles_test = np.zeros((E, 1, 4), dtype=float)
     ID_test = np.full((E, B, H), -1, dtype=int)  # -1 for orphan by default
     padding_mask_hit_test = np.zeros((E, B, H), dtype=bool)  # all valid
 
     # Construct one simple particle with 3 hits in bin 0 of event 0
     # True params: [z0, eta, phi, pt]
     true_params = np.array([10.0, 0.5, 1.0, 5.0], dtype=float)
-    particle_id = 1
+    particle_id = 0
     particle_hit_indices = [0, 1, 2]
 
     e, b = 0, 0
     for hi in particle_hit_indices:
         # Hits coordinates: simple tx,ty forming distinct radii; tz, phi, eta placeholders
         hits_test[e, b, hi, :] = np.array([hi + 1.0, hi + 2.0, 0.0, true_params[2], true_params[1]], dtype=float)
-        particles_test[e, b, hi, :] = true_params
+        particles_test[e, particle_id, :] = true_params
         ID_test[e, b, hi] = particle_id
 
     # Remaining hits are orphans (-1 id, pt<=0)
     for hi in range(3, H):
         hits_test[e, b, hi, :] = np.array([0.1 * hi, 0.2 * hi, 0.0, 0.0, 0.0], dtype=float)
-        particles_test[e, b, hi, :] = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
+        # No particle entry for orphans
         ID_test[e, b, hi] = -1
 
     # Seeds: one pure seed matching the particle hits
@@ -52,7 +52,7 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
     reco_bin = np.zeros((H, 5), dtype=float)
     for hi in range(H):
         # Copy truth for simplicity; last column as a dummy score
-        reco_bin[hi, :4] = particles_test[e, b, hi, :]
+        reco_bin[hi, :4] = true_params if hi in particle_hit_indices else 0.0
         reco_bin[hi, 4] = 1.0 if hi in particle_hit_indices else 0.0
     reconstructed_parameters = [[reco_bin]]
 
@@ -86,7 +86,8 @@ def make_multi_event_multi_bin_setup():
     E, B, H = 2, 4, 32
 
     hits_test = np.zeros((E, B, H, 5), dtype=float)
-    particles_test = np.zeros((E, B, H, 4), dtype=float)
+    max_particles = 5
+    particles_test = np.zeros((E, max_particles, 4), dtype=float)
     ID_test = np.full((E, B, H), -1, dtype=int)
     padding_mask_hit_test = np.zeros((E, B, H), dtype=bool)
 
@@ -108,7 +109,7 @@ def make_multi_event_multi_bin_setup():
                     true_params[1],
                 ]
             )
-            particles_test[e, b, hi, :] = true_params
+            particles_test[e, pid, :] = true_params
             ID_test[e, b, hi] = pid
             reconstructed_parameters[e][b][hi, :4] = true_params
             reconstructed_parameters[e][b][hi, 4] = 1.0
@@ -116,17 +117,17 @@ def make_multi_event_multi_bin_setup():
         seeds_test[e][b].append((idxs, true_params.copy()))
 
     # Event 1: 5 particles appear in all 4 bins
-    for pid in range(1, 6):
+    for pid in range(5):
         true = np.array([5.0 * pid, 0.1 * pid, 0.2 * pid, 2.0 + pid], dtype=float)
         for b in range(4):
-            base = (pid - 1) * 3  # keep indices consistent across bins
+            base = pid * 3  # keep indices consistent across bins
             place_particle(0, b, pid, base, true)
 
     # Event 2: 2 particles appear in bins 0,1,2; bin 3 remains empty
-    for pid in range(1, 3):
+    for pid in range(2):
         true = np.array([7.0 * pid, 0.2 * pid, 0.3 * pid, 3.0 + pid], dtype=float)
         for b in range(3):
-            base = (pid - 1) * 3
+            base = pid * 3
             place_particle(1, b, pid, base, true)
 
     return (

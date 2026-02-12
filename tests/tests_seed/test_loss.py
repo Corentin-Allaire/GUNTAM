@@ -151,18 +151,17 @@ class TestAttentionNextLoss:
 
 class TestReconstructionLoss:
     def test_valid_and_empty(self):
-        # Removed model instantiation as cfg/self parameter is no longer needed
-        
         # Batch=1, hits=3
         # reconstructed: [z, eta, sin(phi), cos(phi), pT]
+        # particles: [d0, z0, phi, eta, pT]
         phi_vals = torch.tensor([0.0, 1.0])
         sin_phi = torch.sin(phi_vals)
         cos_phi = torch.cos(phi_vals)
         reconstructed = torch.tensor(
             [
                 [
-                    [1.0, 0.5, sin_phi[0], cos_phi[0], 10.0],
-                    [2.0, 1.5, sin_phi[1], cos_phi[1], 20.0],
+                    [1.0, 0.5, sin_phi[0].item(), cos_phi[0].item(), 10.0],
+                    [2.0, 1.5, sin_phi[1].item(), cos_phi[1].item(), 20.0],
                     [0.0, 0.0, 0.0, 0.0, 0.0]
                 ]
             ]
@@ -170,16 +169,16 @@ class TestReconstructionLoss:
         particles = torch.tensor(
             [
                 [
-                    [1.0, 0.5, phi_vals[0], 10.0],
-                    [2.0, 1.5, phi_vals[1], 20.0],
-                    [0.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, phi_vals[0], 0.5, 10.0],
+                    [0.0, 2.0, phi_vals[1], 1.5, 20.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0],
                 ]
             ]
         )
         padded_mask = torch.tensor([[False, False, True]])
         losses = reconstruction_loss(reconstructed, particles, padded_mask, loss_type="MSE")
         for k in ["z", "eta", "phi", "pt"]:
-            assert torch.isclose(losses[k], torch.tensor(0.0), atol=1e-6)
+            assert torch.isclose(losses[k], torch.tensor(0.0), atol=1e-6), f"Loss for {k} is not close to 0: {losses[k]}"
 
         # Empty valid (all padded or pT=0) -> zeros
         reconstructed_empty = torch.zeros_like(reconstructed)
@@ -194,6 +193,57 @@ class TestReconstructionLoss:
         reconstructed_shift[0, 0, 0] += 1.0  # z shift
         losses_l1 = reconstruction_loss(reconstructed_shift, particles, padded_mask, loss_type="L1")
         assert losses_l1["z"] > 0
+
+    def test_phi_wrapping(self):
+        # Test phi loss with angle wrapping: sin/cos representation should handle phi correctly
+        # particles format: [d0, z0, phi, eta, pT]
+        phi_vals = torch.tensor([0.0, torch.pi / 2, torch.pi, -torch.pi / 2])
+        sin_phi = torch.sin(phi_vals)
+        cos_phi = torch.cos(phi_vals)
+        reconstructed = torch.zeros((1, 4, 5))
+        reconstructed[0, :, 0] = torch.tensor([1.0, 2.0, 3.0, 4.0])  # z
+        reconstructed[0, :, 1] = torch.tensor([0.5, 1.0, 1.5, 2.0])  # eta
+        reconstructed[0, :, 2] = sin_phi  # sin(phi)
+        reconstructed[0, :, 3] = cos_phi  # cos(phi)
+        reconstructed[0, :, 4] = torch.tensor([10.0, 20.0, 30.0, 40.0])  # pT
+
+        particles = torch.zeros((1, 4, 5))
+        particles[0, :, 0] = torch.tensor([0.0, 0.0, 0.0, 0.0])  # d0
+        particles[0, :, 1] = torch.tensor([1.0, 2.0, 3.0, 4.0])  # z0
+        particles[0, :, 2] = phi_vals  # phi
+        particles[0, :, 3] = torch.tensor([0.5, 1.0, 1.5, 2.0])  # eta
+        particles[0, :, 4] = torch.tensor([10.0, 20.0, 30.0, 40.0])  # pT
+
+        padded_mask = torch.tensor([[False, False, False, False]])
+        losses = reconstruction_loss(reconstructed, particles, padded_mask, loss_type="MSE")
+        
+        # Perfect reconstruction should yield near-zero losses
+        assert torch.isclose(losses["phi"], torch.tensor(0.0), atol=1e-6), f"Phi loss not close to 0: {losses['phi']}"
+
+    def test_pt_inverse_loss(self):
+        # Test that pT loss uses inverse (1/pT)
+        # Two hits with different pT values
+        reconstructed = torch.zeros((1, 2, 5))
+        reconstructed[0, 0] = torch.tensor([1.0, 0.5, 0.0, 1.0, 10.0])  # z=1.0, eta=0.5, sin(phi)=0.0, cos(phi)=1.0, pT=10
+        reconstructed[0, 1] = torch.tensor([2.0, 1.5, 1.0, 0.0, 20.0])  # z=2.0, eta=1.5, sin(phi)=1.0, cos(phi)=0.0, pT=20
+
+        particles = torch.zeros((1, 2, 5))
+        particles[0, 0] = torch.tensor([0.0, 1.0, 0.0, 0.5, 10.0])  # d0=0.0, z0=1.0, phi=0.0, eta=0.5, pT=10
+        particles[0, 1] = torch.tensor([0.0, 2.0, torch.pi / 2, 1.5, 20.0])  # d0=0.0, z0=2.0, phi=π/2, eta=1.5, pT=20
+
+        padded_mask = torch.tensor([[False, False]])
+        losses = reconstruction_loss(reconstructed, particles, padded_mask, loss_type="MSE")
+        
+        # Perfect pT match -> loss should be 0
+        assert torch.isclose(losses["pt"], torch.tensor(0.0), atol=1e-6), f"pT loss not close to 0: {losses['pt']}"
+
+        # Now test with mismatch
+        reconstructed_mismatch = reconstructed.clone()
+        reconstructed_mismatch[0, 0, 4] = 15.0  # Change pT from 10 to 15
+        losses_mismatch = reconstruction_loss(reconstructed_mismatch, particles, padded_mask, loss_type="MSE")
+        
+        # Loss should be non-zero due to mismatch
+        assert losses_mismatch["pt"] > 0, "pT loss should be positive for mismatched predictions"
 
 
 class TestHitClassificationLoss:
