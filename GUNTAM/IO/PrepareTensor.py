@@ -43,13 +43,13 @@ def _particle_selection(
     )
     particles_batch = particles_batch[mask].reset_index(drop=True)
 
-    # Using the hit_to_particle mapping, find the hits that correspond to the removed particle
-    # and remove them from the data_batch and map
+    # Using the hit_to_particle mapping, reclassify hits from removed particles as orphans
     valid_particle_ids = set(particles_batch["particle_id"].unique())
-    valid_hit_indices = hit_to_particle[hit_to_particle.isin(valid_particle_ids)].index
-    data_batch = data_batch.loc[valid_hit_indices].reset_index(drop=True)
-    bins = bins.loc[valid_hit_indices].reset_index(drop=True)
-    hit_to_particle = hit_to_particle.loc[valid_hit_indices].reset_index(drop=True)
+
+    # Reclassify hits from removed particles as orphans (particle_id = -1)
+    invalid_particle_mask = ~hit_to_particle.isin(valid_particle_ids) & (hit_to_particle != -1)
+    hit_to_particle.loc[invalid_particle_mask] = -1
+    data_batch.loc[invalid_particle_mask, "particle_id"] = -1
 
     # Remap particle_id to sequential indices for each event
     for event_id in particles_batch["event_id"].unique():
