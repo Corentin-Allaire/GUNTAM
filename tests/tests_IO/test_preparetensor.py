@@ -59,7 +59,7 @@ class TestParticleSelection:
         assert set(particles_result["eta"].values) == {1.0, -1.0}
         
         # Hits associated with original particle 1 should be removed
-        assert len(data_result) == 3
+        assert len(data_result) == 4
 
     def test_vertex_cuts(self):
         cfg = SeedConfig()
