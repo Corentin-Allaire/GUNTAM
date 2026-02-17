@@ -450,7 +450,7 @@ def read_acts_csv(args: argparse.Namespace) -> None:
 
     # Write H5 files if requested
     if "h5" in args.output_format:
-        with pd.HDFStore(hdf_filename, mode="w") as store:
+        with pd.HDFStore(hdf_filename, mode="w", complevel=9, complib="blosc") as store:
             store.put("particles", full_particles, format="table")
             if args.use_space_point:
                 store.put("space_points", full_space_points, format="table")
