@@ -159,3 +159,40 @@ def test_has_loss_component_and_get_weight_helpers():
     assert not cfg.has_loss_component("MSE")
     assert cfg.get_loss_weight("attention") == 1.3
     assert cfg.get_loss_weight("MSE") == 0.0
+
+
+def test_print_config(capsys):
+    """Test that print_config outputs all configuration sections."""
+    cfg = SeedConfig()
+    cfg.epoch_nb = 15
+    cfg.loss_components = ["cosine", "attention"]
+    cfg.loss_weights = [0.5, 1.0]
+    cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
+    cfg.model_path = "custom_model.pt"
+    
+    cfg.print_config()
+    
+    captured = capsys.readouterr()
+    output = captured.out
+    
+    # Check main sections are present
+    assert "Seed Training Configuration" in output
+    assert "Preprocessing Settings" in output
+    assert "Training Settings:" in output
+    assert "File Settings:" in output
+    assert "Model Architecture:" in output
+    assert "Loss Configuration:" in output
+    
+    # Check specific values are printed
+    assert "Epoch number:  15" in output
+    assert "Model path:  custom_model.pt" in output
+    assert "Active loss components:  ['cosine', 'attention']" in output
+    assert "cosine: 0.5" in output
+    assert "attention: 1.0" in output
+    assert "Transformer layers:" in output
+    assert "Embedding dimension:" in output
+    
+    # Check that config file operations help is shown
+    assert "Configuration file operations available:" in output
+    assert "--save_config" in output
+    assert "--load_config" in output

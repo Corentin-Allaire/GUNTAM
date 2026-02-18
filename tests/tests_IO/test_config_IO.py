@@ -1,5 +1,6 @@
 import pytest
 import os
+import sys
 import tempfile
 from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
 
@@ -193,6 +194,146 @@ class TestPreprocessingConfig:
             assert loaded_config.vertex_cuts == [15, 250]
             assert loaded_config.hit_features == ["x", "y", "z", "r"]
             assert loaded_config.particle_features == ["eta", "phi", "pT", "d0"]
+
+    def test_parse_args_basic(self, monkeypatch):
+        """Test basic argument parsing with various parameters."""
+        argv = [
+            "prog",
+            "--input_path", "test_data",
+            "--input_format", "h5",
+            "--max_events", "500",
+            "--binning_strategy", "global",
+            "--bin_width", "0.08",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        
+        config = PreprocessingConfig()
+        config.parse_args()
+        
+        assert config.input_path == "test_data"
+        assert config.input_format == "h5"
+        assert config.max_events == 500
+        assert config.binning_strategy == "global"
+        assert config.bin_width == 0.08
+
+    def test_parse_args_eta_range(self, monkeypatch):
+        """Test parsing eta_range with two values."""
+        argv = [
+            "prog",
+            "--eta_range", "-2.5", "2.5",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        
+        config = PreprocessingConfig()
+        config.parse_args()
+        
+        assert config.eta_range == [-2.5, 2.5]
+
+    def test_parse_args_vertex_cuts(self, monkeypatch):
+        """Test parsing vertex_cuts with two values."""
+        argv = [
+            "prog",
+            "--vertex_cuts", "15.0", "250.0",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        
+        config = PreprocessingConfig()
+        config.parse_args()
+        
+        assert config.vertex_cuts == [15.0, 250.0]
+
+    def test_parse_args_feature_lists(self, monkeypatch):
+        """Test parsing feature lists with multiple values."""
+        argv = [
+            "prog",
+            "--hit_features", "x", "y", "z", "r", "phi",
+            "--particle_features", "eta", "phi", "pT", "d0", "z0",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        
+        config = PreprocessingConfig()
+        config.parse_args()
+        
+        assert config.hit_features == ["x", "y", "z", "r", "phi"]
+        assert config.particle_features == ["eta", "phi", "pT", "d0", "z0"]
+
+    def test_parse_args_orphan_hit_fraction_valid(self, monkeypatch):
+        """Test parsing valid orphan_hit_fraction."""
+        argv = [
+            "prog",
+            "--orphan_hit_fraction", "0.3",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        
+        config = PreprocessingConfig()
+        config.parse_args()
+        
+        assert config.orphan_hit_fraction == 0.3
+
+    def test_parse_args_orphan_hit_fraction_invalid_raises(self, monkeypatch):
+        """Test that orphan_hit_fraction outside [0, 1] raises ValueError."""
+        argv = [
+            "prog",
+            "--orphan_hit_fraction", "1.5",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        
+        config = PreprocessingConfig()
+        with pytest.raises(ValueError, match="orphan_hit_fraction must be between 0.0 and 1.0"):
+            config.parse_args()
+
+    def test_parse_args_binning_strategies(self, monkeypatch):
+        """Test all valid binning strategies."""
+        strategies = ["global", "neighbor", "margin", "no_bin"]
+        
+        for strategy in strategies:
+            argv = [
+                "prog",
+                "--binning_strategy", strategy,
+            ]
+            monkeypatch.setattr(sys, "argv", argv)
+            
+            config = PreprocessingConfig()
+            config.parse_args()
+            
+            assert config.binning_strategy == strategy
+
+    def test_parse_args_input_tensor_path_defaults_to_input_path(self, monkeypatch):
+        """Test that input_tensor_path defaults to input_path if not specified."""
+        argv = [
+            "prog",
+            "--input_path", "custom_data_path",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        
+        config = PreprocessingConfig()
+        config.parse_args()
+        
+        assert config.input_path == "custom_data_path"
+        assert config.input_tensor_path == "custom_data_path"
+
+    def test_print_config(self, capsys):
+        """Test that print_config outputs all configuration sections."""
+        config = PreprocessingConfig()
+        config.input_path = "custom_path"
+        config.input_format = "h5"
+        config.binning_strategy = "global"
+        config.max_events = 2000
+        config.orphan_hit_fraction = 0.25
+        
+        config.print_config()
+        
+        captured = capsys.readouterr()
+        output = captured.out
+        
+        # Check main sections are present
+        assert "Preprocessing Configuration:" in output
+        assert "Input/Output:" in output
+        assert "Processing:" in output
+        assert "Orphan Hit Removal:" in output
+        assert "Binning:" in output
+        assert "Selection:" in output
+        assert "Features:" in output
 
 
 if __name__ == "__main__":

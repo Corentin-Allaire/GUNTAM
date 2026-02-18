@@ -59,13 +59,7 @@ jobs:
         run: pdm install
 
       - name: Run tests
-        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=xml --ignore=tests/test_integration
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          file: coverage.xml
+        run: pdm run pytest --ignore=tests/test_integration
 
   Typing:
     runs-on: ubuntu-latest
@@ -102,6 +96,11 @@ jobs:
         run: pdm install
 
       - name: Run integration tests
-        run: pdm run pytest tests/test_integration/test_integration_seed.py
+        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=xml
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: coverage.xml
   
