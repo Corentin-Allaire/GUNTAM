@@ -238,7 +238,8 @@ class TestFullIntegration:
             "--eta_range", "-3.0", "3.0",
             "--vertex_cuts", "10", "200",
             "--hit_features", "x", "y", "z", "r", "phi", "eta",
-            "--particle_features", "d0", "z0", "phi", "eta", "pT", "q", "m"
+            "--particle_features", "d0", "z0", "phi", "eta", "pT", "q", "m",
+            "--timing_enabled"
         ]
         
         # Run the command
