@@ -183,7 +183,8 @@ class TestFullIntegration:
         # Build the command
         cmd = [
             sys.executable,
-            "-m", "GUNTAM.IO.Read_ACTS_Csv",
+            "-m", "coverage", "run", "--parallel-mode", "-m",
+            "GUNTAM.IO.Read_ACTS_Csv",
             "--input-path", test_data_dir,
             "--output-format", output_format,
             "--min-hits-per-particle", "9",
@@ -223,7 +224,8 @@ class TestFullIntegration:
         # Build the command
         cmd = [
             sys.executable,
-            "-m", "GUNTAM.IO.PrepareTensor",
+            "-m", "coverage", "run", "--parallel-mode", "-m",
+            "GUNTAM.IO.PrepareTensor",
             "--input_path", input_path,
             "--input_format", input_format,
             "--input_tensor_path", output_path,
@@ -269,7 +271,8 @@ class TestFullIntegration:
         # Build the command
         cmd = [
             sys.executable,
-            "-m", "GUNTAM.Seed.Train",
+            "-m", "coverage", "run", "--parallel-mode", "-m",
+            "GUNTAM.Seed.Train",
             "--input_path", input_path,
             "--input_format", input_format,
             "--input_tensor_path", input_tensor_path,
@@ -389,10 +392,30 @@ class TestFullIntegration:
         model_size = os.path.getsize(model_path)
         assert model_size > 0, f"Model file is empty: {model_path}"
         
+        # Check monitoring PNG files
+        # The monitoring plots are saved in the current working directory during training
+        expected_plots = [
+            "seeding_performance_analysis.png",
+            "bin_complexity_analysis.png",
+            "particle_reconstruction_comparison.png",
+            "seeding_efficiency_vs_truth_params.png",
+            "seeds_per_particle_vs_truth_params.png",
+            "efficiency_2d_heatmaps.png"
+        ]
+        
+        found_plots = []
+        for plot_file in expected_plots:
+            if os.path.exists(plot_file):
+                found_plots.append(plot_file)
+        
+        # At least one monitoring plot should be generated
+        assert len(found_plots) > 0, f"No monitoring PNG files found. Expected at least one of: {expected_plots}"
+        
         print("  All output files verified successfully")
         print(f"  - Read output: {read_output}")
         print(f"  - Preprocessing output: {preprocessing_output}")
         print(f"  - Model: {model_path} ({model_size / 1024:.2f} KB)")
+        print(f"  - Monitoring plots: {', '.join(found_plots)}")
 
 
 if __name__ == "__main__":
