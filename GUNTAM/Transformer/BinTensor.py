@@ -15,6 +15,9 @@ def no_bin(
     Returns:
         Tuple of (binned dataframe with shape (N, 3), num_bins)
     """
+    if values.shape[1] != 1:
+        raise ValueError(f"Input values must have shape [N, 1], got shape {values.shape}")
+
     bins_df = pd.DataFrame(
         {
             "bin0": np.zeros(len(values), dtype=int),
@@ -41,6 +44,9 @@ def global_bin(
     Returns:
         Tuple of (binned dataframe with shape (N, 3), num_bins)
     """
+    if values.shape[1] != 1:
+        raise ValueError(f"Input values must have shape [N, 1], got shape {values.shape}")
+
     min_value, max_value = value_range
     range_width = max_value - min_value
 
@@ -122,10 +128,10 @@ def margin_bin(
 
     # Check if value is in start margin (set bin0 to previous bin)
     in_start_margin = position_in_bin < margin
-    bin.loc[in_start_margin, "bin0"] = np.clip(bin_indices[in_start_margin] - 1, 0, bin_indices.max())
+    bin.loc[in_start_margin, "bin0"] = (bin_indices[in_start_margin] - 1) % num_bins
 
     # Check if value is in end margin (set bin2 to next bin)
     in_end_margin = position_in_bin > (bin_width - margin)
-    bin.loc[in_end_margin, "bin2"] = np.clip(bin_indices[in_end_margin] + 1, 0, bin_indices.max())
+    bin.loc[in_end_margin, "bin2"] = (bin_indices[in_end_margin] + 1) % num_bins
 
     return bin, num_bins
