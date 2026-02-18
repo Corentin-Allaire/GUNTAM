@@ -183,7 +183,7 @@ class TestFullIntegration:
         # Build the command
         cmd = [
             sys.executable,
-            "-m", "coverage", "run", "--parallel-mode", "-m",
+            "-m", "coverage", "run", "--parallel-mode", "--branch", "-m",
             "GUNTAM.IO.Read_ACTS_Csv",
             "--input-path", test_data_dir,
             "--output-format", output_format,
@@ -224,7 +224,7 @@ class TestFullIntegration:
         # Build the command
         cmd = [
             sys.executable,
-            "-m", "coverage", "run", "--parallel-mode", "-m",
+            "-m", "coverage", "run", "--parallel-mode", "--branch", "-m",
             "GUNTAM.IO.PrepareTensor",
             "--input_path", input_path,
             "--input_format", input_format,
@@ -271,7 +271,7 @@ class TestFullIntegration:
         # Build the command
         cmd = [
             sys.executable,
-            "-m", "coverage", "run", "--parallel-mode", "-m",
+            "-m", "coverage", "run", "--parallel-mode", "--branch", "-m",
             "GUNTAM.Seed.Train",
             "--input_path", input_path,
             "--input_format", input_format,
