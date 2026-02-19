@@ -11,7 +11,7 @@ For more information, you can refer to the presentation in the Connecting the Do
 
 ## Installation 
 
-This library utilises PDM for easy setup. To install the package, simply run:
+This library use PDM for easy setup. To install the package, simply run:
 ```
 pdm install
 eval "$(pdm venv activate)"
@@ -37,7 +37,7 @@ The first preprocessing pass can be performed using Read_ACTS_Csv.py. This file 
 python Read_ACTS_Csv.py --use-space-point --output-format h5 --file-number "$i" --dir-start "$start" --dir-end "$end" --input-path"$path"
 ```
 
-Among the options, "dir-start" and "dir-end" represent the id of the "odd_full_chain_X" directory you will be processing (and which are expected to be located at "path"), and the resulting file will have the id "i". Creating multiple files is useful, as the Dataloader used in the Transformer training is designed to load input files sequentially as needed, reducing the memory footprint. Those files will correspond to the one generated at this step (a size of 1000 has been shown to work well, but depending on the hardware used, larger files might work).
+Among the options, "dir-start" and "dir-end" represent the id of the "odd_full_chain_X" directory you will be processing (and which are expected to be located at "path"), and the resulting file will have the id "i". Creating multiple files is useful, as the Dataloader used in the Transformer training is designed to load input files sequentially as needed, reducing the memory footprint.
 
 I this step, some initial pre-processing will be performed sequentially:
 - Creating of matching particle ID for particles and hits
