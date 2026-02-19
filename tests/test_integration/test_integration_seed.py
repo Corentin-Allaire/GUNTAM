@@ -291,7 +291,7 @@ class TestFullIntegration:
             "--bin_width", "0.02",
             "--max_hit_input", "1200",
             "--eta_range", "-3.0", "3.0",
-            "--vertex_cuts", "10", "200"
+            "--vertex_cuts", "10", "200",
             "--timing_enabled"
         ]
         
