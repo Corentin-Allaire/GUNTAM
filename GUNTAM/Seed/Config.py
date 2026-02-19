@@ -61,7 +61,7 @@ class SeedConfig:
         self.model_path = "transformer.pt"
 
         # Model architecture parameters
-        self.nb_layers_t = 6
+        self.nb_layers_t = 4
         self.dim_embedding = 128
         self.nb_heads = 4
         self.dropout = 0.1

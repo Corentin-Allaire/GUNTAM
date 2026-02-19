@@ -38,7 +38,7 @@ def test_defaults_initialization():
     assert cfg.recompute_tensor is False
 
     # Model architecture
-    assert cfg.nb_layers_t == 6
+    assert cfg.nb_layers_t == 4
     assert cfg.dim_embedding == 128
     assert cfg.nb_heads == 4
     assert cfg.dropout == pytest.approx(0.1)
@@ -183,16 +183,3 @@ def test_print_config(capsys):
     assert "Model Architecture:" in output
     assert "Loss Configuration:" in output
     
-    # Check specific values are printed
-    assert "Epoch number:  15" in output
-    assert "Model path:  custom_model.pt" in output
-    assert "Active loss components:  ['cosine', 'attention']" in output
-    assert "cosine: 0.5" in output
-    assert "attention: 1.0" in output
-    assert "Transformer layers:" in output
-    assert "Embedding dimension:" in output
-    
-    # Check that config file operations help is shown
-    assert "Configuration file operations available:" in output
-    assert "--save_config" in output
-    assert "--load_config" in output

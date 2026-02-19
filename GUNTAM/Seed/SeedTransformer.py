@@ -84,8 +84,6 @@ class SeedTransformer(nn.Module):
         # Set input dimension for projection
         # fourier_encoding.output_dim already accounts for variable frequencies
         embedding_input_dim = self.fourier_encoding.output_dim
-        print(self.fourier_num_frequencies)
-        print(embedding_input_dim)
         self.embedding_projection = nn.Linear(embedding_input_dim, self.dim_embedding, device=self.device_acc)
 
         # Transformer model
@@ -122,8 +120,6 @@ class SeedTransformer(nn.Module):
             [hits[..., 3:4], torch.cos(hits[..., 4:5]), torch.sin(hits[..., 4:5]), hits[..., 5:6]],
             dim=-1,
         )
-        print(coord.shape)
-        print(high_level.shape)
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
         # Apply generic projection if needed
