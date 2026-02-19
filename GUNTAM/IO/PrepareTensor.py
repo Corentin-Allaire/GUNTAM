@@ -93,6 +93,11 @@ def _build_good_pairs_tensors(
     print("    Building good pairs tensor...")
     unique_events = data_batch["event_id"].unique()
     unique_bins = bins["bin1"].unique()
+    bin_only = bins[["bin0", "bin1", "bin2"]]
+    global_bin_mask = []
+    for bin_id in range(max(unique_bins) + 1):
+        mask = bin_only.eq(bin_id).any(axis=1)
+        global_bin_mask.append(mask)
 
     # Collect all pairs organized by event and bin
     all_pairs_by_event_bin: Dict[int, Dict[int, np.ndarray]] = {}
@@ -104,7 +109,7 @@ def _build_good_pairs_tensors(
 
         for bin_id in unique_bins:
             # Get all hits in this bin for this event
-            bin_mask = bins[["bin0", "bin1", "bin2"]].isin([bin_id]).any(axis=1) & event_mask
+            bin_mask = global_bin_mask[bin_id] & event_mask
             bin_hit_indices = data_batch[bin_mask].index
             bin_hit_to_particle = hit_to_particle[bin_mask]
 
@@ -184,6 +189,11 @@ def _to_tensor(
     unique_events = data_batch["event_id"].unique()
     unique_bins = bins["bin1"].unique()
     num_events_batch = len(unique_events)
+    bin_only = bins[["bin0", "bin1", "bin2"]]
+    global_bin_mask = []
+    for bin_id in range(max(unique_bins) + 1):
+        mask = bin_only.eq(bin_id).any(axis=1)
+        global_bin_mask.append(mask)
 
     # Determine max sizes for padding
     max_particles_per_event = particles_batch.groupby("event_id").size().max()
@@ -209,7 +219,7 @@ def _to_tensor(
         # Fill bin-organized hit tensors
         for bin_id in unique_bins:
             # Get all hits in this bin for this event
-            bin_mask = bins[["bin0", "bin1", "bin2"]].isin([bin_id]).any(axis=1) & event_mask
+            bin_mask = global_bin_mask[bin_id] & event_mask
             bin_hits = data_batch[bin_mask]
             num_bin_hits = len(bin_hits)
 
@@ -252,6 +262,11 @@ def _add_padding(
     # Get unique bins and events
     unique_bins = bins["bin1"].unique()
     unique_events = data_batch["event_id"].unique()
+    bin_only = bins[["bin0", "bin1", "bin2"]]
+    global_bin_mask = []
+    for bin_id in range(max(unique_bins) + 1):
+        mask = bin_only.eq(bin_id).any(axis=1)
+        global_bin_mask.append(mask)
 
     padding_data_rows = []
     padding_bin_rows = []
@@ -261,7 +276,7 @@ def _add_padding(
 
         for bin_id in unique_bins:
             # Get all hits in this bin for this event (check all three bin columns)
-            bin_mask = bins[["bin0", "bin1", "bin2"]].isin([bin_id]).any(axis=1) & event_mask
+            bin_mask = global_bin_mask[bin_id] & event_mask
             hits_in_bin_ = data_batch[bin_mask]
             num_hits = len(hits_in_bin_)
             # Remove excess hits if there are more than max_hit_input
@@ -358,6 +373,12 @@ def _create_padding_mask(
     """
     unique_bins = bins["bin1"].unique()
     unique_events = data_batch["event_id"].unique()
+    bin_only = bins[["bin0", "bin1", "bin2"]]
+    global_bin_mask = []
+    for bin_id in range(max(unique_bins) + 1):
+        mask = bin_only.eq(bin_id).any(axis=1)
+        global_bin_mask.append(mask)
+
     # Create padding mask tensor [num_events, num_bins, max_hit_input]
     print("    Creating padding mask...")
     num_events_batch = len(unique_events)
@@ -375,7 +396,7 @@ def _create_padding_mask(
 
         for bin_id in unique_bins:
             # Count real hits (non-padding) in this bin for this event
-            bin_mask = bins[["bin0", "bin1", "bin2"]].isin([bin_id]).any(axis=1) & event_mask
+            bin_mask = global_bin_mask[bin_id] & event_mask
             num_real_hits = (~data_batch[bin_mask]["is_padding"]).sum()
 
             if num_real_hits == 0:
@@ -520,7 +541,7 @@ def prepare_tensor(
     # Use feature lists from config
     hit_features = cfg.hit_features
     particle_features = cfg.particle_features
-
+    needed_columns = list(set(["event_id", "particle_id", "phi"] + hit_features))
     # Metadata variable to be used to describe the dataset and keep track of file paths
     # and event ranges for each tensor file
     total_events = 0
@@ -573,10 +594,10 @@ def prepare_tensor(
                 keys = [key.lstrip("/") for key in store.keys()]
 
                 if "space_points" in keys:
-                    data = store.get("space_points")
+                    data = store.select("space_points", columns=needed_columns)
                     print("  Loaded space_points data")
                 elif "hits" in keys:
-                    data = store.get("hits")
+                    data = store.select("hits", columns=needed_columns)
                     print("  Loaded hits data")
                 else:
                     raise KeyError(f"Neither 'space_points' nor 'hits' found in {data_file}. Available keys: {store.keys()}")
