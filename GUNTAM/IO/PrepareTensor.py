@@ -582,6 +582,7 @@ def prepare_tensor(
         raise ValueError(f"Unsupported input format: {input_format}. Use 'h5' or 'csv'")
 
     file_id = 0
+    tot_event = 0
     # Processing each file
     for file_idx, data_file in enumerate(data_files):
         print(f"Processing file {file_idx + 1}/{len(data_files)}")
@@ -614,13 +615,13 @@ def prepare_tensor(
 
         # Check if the number of events in data is divisible by the events_per_file
         num_events = len(data["event_id"].unique())
-
+        tot_event += num_events
         # Apply max_events limit if specified
-        if cfg.max_events > 0 and num_events > cfg.max_events:
+        if cfg.max_events > 0 and tot_event > cfg.max_events:
             print(f"  Limiting to {cfg.max_events} events (out of {num_events} available)")
-            num_events = cfg.max_events
+            num_events = cfg.max_events + num_events - tot_event
             # Filter data to only include the first max_events events
-            event_ids = sorted(data["event_id"].unique())[: cfg.max_events]
+            event_ids = sorted(data["event_id"].unique())[:num_events]
             data = data[data["event_id"].isin(event_ids)].reset_index(drop=True)
             particles = particles[particles["event_id"].isin(event_ids)].reset_index(drop=True)
 
