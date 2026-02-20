@@ -25,7 +25,7 @@ class SeedConfig:
             - dataset_name: str: Base name for dataset files (also in preprocessing_config)
             - recompute_tensor: bool: Whether to recompute tensors even if they already exist
             - model_path: str: Path to save/load the model
-            - test_only: bool: Only perform testing (requires a saved model)
+            - no_test: bool: Skip testing/evaluation phase after training
             - resume_training: bool: Resume training from an existing model checkpoint
             - device_acc: torch.device: The device to use (cpu/gpu)
 
@@ -73,7 +73,7 @@ class SeedConfig:
         self.loss_weights = []  # Default weights matching loss_components
 
         # Boolean configurations
-        self.test_only = False
+        self.no_test = False
         self.resume_training = False
         self.timing_enabled = False  # Timing measurements during training/testing
 
@@ -123,9 +123,9 @@ class SeedConfig:
             help="Recompute tensors even if preprocessed files already exist",
         )
         parser.add_argument(
-            "--test_only",
+            "--no_test",
             action="store_true",
-            help="Only perform testing on the model (requires a saved model)",
+            help="Skip testing/evaluation phase after training",
         )
         parser.add_argument(
             "--model_path",
@@ -328,7 +328,7 @@ class SeedConfig:
         self.input_tensor_path = args.input_tensor_path
         self.dataset_name = args.dataset_name
         self.recompute_tensor = args.recompute_tensor
-        self.test_only = args.test_only
+        self.no_test = args.no_test
         self.resume_training = args.resume_training
         self.model_path = args.model_path
 
@@ -502,7 +502,7 @@ class SeedConfig:
         print("Input tensor path: ", self.input_tensor_path)
         print("Dataset name: ", self.dataset_name)
         print("Recompute tensor: ", self.recompute_tensor)
-        print("Test only mode: ", self.test_only)
+        print("Skip testing: ", self.no_test)
         print("Resume training: ", self.resume_training)
 
         # Print model architecture

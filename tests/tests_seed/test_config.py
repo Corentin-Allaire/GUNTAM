@@ -36,6 +36,8 @@ def test_defaults_initialization():
     assert cfg.dataset_name == "seeding_data"
     assert cfg.model_path == "transformer.pt"
     assert cfg.recompute_tensor is False
+    assert cfg.no_test is False
+    assert cfg.resume_training is False
 
     # Model architecture
     assert cfg.nb_layers_t == 4

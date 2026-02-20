@@ -793,7 +793,7 @@ def main():
     model.print_model_info()
 
     # Keep training file order deterministic (no shuffling)
-    if not cfg.test_only:
+    if cfg.epoch_nb > 0:
         # Calculate the total number of training events across all training files
 
         ts_print(f"Training on {train_size} events across {len(train_file_indices)} files")
@@ -833,6 +833,10 @@ def main():
     writer.close()
     # Load model configuration from checkpoint or use config defaults
     model_val = SeedTransformer()
+
+    if cfg.no_test:
+        ts_print("Skipping evaluation")
+        return
 
     model_val.load(
         path=cfg.model_path,
