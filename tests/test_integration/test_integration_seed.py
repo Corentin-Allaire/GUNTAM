@@ -105,6 +105,66 @@ class TestFullIntegration:
         print(f"READ AND PREPROCESSING COMPLETED SUCCESSFULLY ({suffix})")
         print(f"{'=' * 80}\n")
 
+    def test_preprocessing_with_h5_tensor_output(self, temp_dir, test_data_dir):
+        """Test preprocessing with H5 format for tensor output"""
+        use_space_point = True
+        output_format = "csv"
+        suffix = "sp_csv_h5tensor"
+        
+        # Step 1: Read ACTS CSV data
+        print(f"\n{'=' * 80}")
+        print(f"STEP 1: Reading ACTS CSV data ({suffix})")
+        print(f"{'=' * 80}")
+        
+        self._run_read_acts_csv(
+            test_data_dir=test_data_dir,
+            use_space_point=use_space_point,
+            output_format=output_format
+        )
+        
+        # Step 2: Run preprocessing with H5 tensor output
+        print(f"\n{'=' * 80}")
+        print(f"STEP 2: Running preprocessing with H5 tensor output ({suffix})")
+        print(f"{'=' * 80}")
+        
+        preprocessing_output = os.path.join(temp_dir, f"preprocessing_output_{suffix}")
+        os.makedirs(preprocessing_output, exist_ok=True)
+        
+        self._run_preprocessing_with_tensor_format(
+            input_path=test_data_dir,
+            output_path=preprocessing_output,
+            input_format=output_format,
+            dataset_name=f"test_{suffix}",
+            tensor_format="h5",
+            max_events=1
+        )
+        
+        # Step 3: Verify H5 tensor outputs
+        print(f"\n{'=' * 80}")
+        print(f"STEP 3: Verifying H5 tensor outputs ({suffix})")
+        print(f"{'=' * 80}")
+        
+        # Check that metadata file exists
+        metadata_files = list(Path(preprocessing_output).glob("metadata_*.pt"))
+        assert len(metadata_files) > 0, f"No metadata files found in {preprocessing_output}"
+        
+        # Check that H5 tensor files were created instead of .pt files
+        h5_tensor_files = list(Path(preprocessing_output).rglob("tensor_data_*.h5"))
+        assert len(h5_tensor_files) > 0, f"No H5 tensor data files found in {preprocessing_output}"
+        
+        # Verify no .pt tensor files were created (only metadata should be .pt)
+        pt_tensor_files = list(Path(preprocessing_output).rglob("tensor_data_*.pt"))
+        assert len(pt_tensor_files) == 0, f"Found .pt tensor files when H5 format was requested: {pt_tensor_files}"
+        
+        print("  H5 tensor output verified successfully")
+        print(f"  - Read output: {test_data_dir}")
+        print(f"  - Preprocessing output: {preprocessing_output}")
+        print(f"  - H5 tensor files: {len(h5_tensor_files)}")
+        
+        print(f"\n{'=' * 80}")
+        print(f"PREPROCESSING WITH H5 TENSOR OUTPUT COMPLETED SUCCESSFULLY ({suffix})")
+        print(f"{'=' * 80}\n")
+
     # The training test is separate to allow verifying read/preprocessing outputs
     # before training, and to isolate training issues if they arise.
     def test_full_pipeline_with_training(self, temp_dir, test_data_dir):
@@ -256,6 +316,55 @@ class TestFullIntegration:
         
         # Check if command succeeded
         assert result.returncode == 0, f"PrepareTensor failed with return code {result.returncode}"
+
+    def _run_preprocessing_with_tensor_format(self, input_path, output_path, input_format, dataset_name, tensor_format, max_events=5):
+        """
+        Run the PrepareTensor.py script with specified tensor output format
+        
+        Args:
+            input_path: Directory containing input data
+            output_path: Directory for output tensors
+            input_format: Input format ('csv' or 'h5')
+            dataset_name: Name for the dataset
+            tensor_format: Tensor output format ('pt' or 'h5')
+            max_events: Maximum number of events to process (default: 5)
+        """
+        # Build the command
+        cmd = [
+            sys.executable,
+            "-m", "coverage", "run", "--parallel-mode", "--branch", "-m",
+            "GUNTAM.IO.PrepareTensor",
+            "--input_path", input_path,
+            "--input_format", input_format,
+            "--tensor_format", tensor_format,
+            "--input_tensor_path", output_path,
+            "--dataset_name", dataset_name,
+            "--events_per_file", "1",
+            "--max_events", str(max_events),
+            "--binning_strategy", "neighbor",
+            "--bin_width", "0.02",
+            "--max_hit_input", "1200",
+            "--eta_range", "-3.0", "3.0",
+            "--vertex_cuts", "10", "200",
+            "--hit_features", "x", "y", "z", "r", "phi", "eta",
+            "--particle_features", "d0", "z0", "phi", "eta", "pT", "q", "m",
+        ]
+        
+        # Run the command
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True
+        )
+        
+        print(f"PrepareTensor command: {' '.join(cmd)}")
+        print(f"Return code: {result.returncode}")
+        print(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            print(f"STDERR:\n{result.stderr}")
+        
+        # Check if command succeeded
+        assert result.returncode == 0, f"PrepareTensor with tensor_format={tensor_format} failed with return code {result.returncode}"
 
     def _run_training(self, input_path, input_tensor_path, model_path, dataset_name, input_format):
         """

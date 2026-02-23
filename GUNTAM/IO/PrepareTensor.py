@@ -10,6 +10,8 @@ import torch
 from GUNTAM.Transformer.BinTensor import global_bin, neighbor_bin, no_bin, margin_bin
 from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
 
+import h5py
+
 
 def _particle_selection(
     data_batch: pd.DataFrame, particles_batch: pd.DataFrame, bins: pd.DataFrame, hit_to_particle: pd.Series, cfg
@@ -104,7 +106,7 @@ def _build_good_pairs_tensors(
     max_pairs_per_bin = 0
 
     for event_id in unique_events:
-        event_mask = (data_batch["event_id"] == event_id) & (data_batch["particle_id"] != -1)
+        event_mask = data_batch["event_id"] == event_id
         all_pairs_by_event_bin[event_id] = {}
 
         for bin_id in unique_bins:
@@ -126,7 +128,9 @@ def _build_good_pairs_tensors(
                 # Create masks for valid pairs
                 not_self_mask = i_indices != j_indices
                 same_particle_mask = bin_particle_ids[i_indices] == bin_particle_ids[j_indices]
-                valid_mask = not_self_mask & same_particle_mask
+                # Exclude orphan hits (particle_id == -1) from pair construction
+                not_orphan_mask = (bin_particle_ids[i_indices] != -1) & (bin_particle_ids[j_indices] != -1)
+                valid_mask = not_self_mask & same_particle_mask & not_orphan_mask
 
                 # Get valid pair indices
                 i_valid, j_valid = np.where(valid_mask)
@@ -323,7 +327,7 @@ def _add_padding(
                     # Set other columns to default values (0 or NaN)
                     for col in data_batch.columns:
                         if col not in padding_data_row:
-                            padding_data_row[col] = np.nan
+                            padding_data_row[col] = 0
 
                     # Create corresponding padding bin row
                     padding_bin_row = {"bin0": bin_id, "bin1": bin_id, "bin2": bin_id}
@@ -468,6 +472,48 @@ def _bin_data(data_batch: pd.DataFrame, cfg: PreprocessingConfig) -> Tuple[pd.Da
     return bins, num_bins
 
 
+def _save_tensor_data(
+    file_data: Dict,
+    file_path: str,
+    tensor_format: str = "pt",
+) -> None:
+    """
+    Save tensor data to file in the specified format.
+
+    Args:
+        file_data: Dictionary containing all tensor data to save
+        file_path: Path to save the file (without extension)
+        tensor_format: Format to save data in ('pt' for PyTorch or 'h5' for HDF5)
+    """
+    if tensor_format == "pt":
+        # Save as PyTorch tensor file
+        torch.save(file_data, f"{file_path}.pt")
+    elif tensor_format == "h5":
+        # Save as compressed HDF5 file
+        with h5py.File(f"{file_path}.h5", "w") as f:
+            # Save tensor data with gzip compression
+            for key, value in file_data.items():
+                if isinstance(value, torch.Tensor):
+                    # Convert tensor to numpy array for HDF5 storage
+                    f.create_dataset(
+                        key,
+                        data=value.numpy(),
+                        compression="gzip",
+                        compression_opts=9,
+                    )
+                elif isinstance(value, list):
+                    # Save lists as attributes or datasets depending on content
+                    if key == "batch_events":
+                        f.create_dataset(key, data=np.array(value), compression="gzip")
+                    else:
+                        f.attrs[key] = value
+                else:
+                    # Save scalars as attributes
+                    f.attrs[key] = value
+    else:
+        raise ValueError(f"Unsupported tensor format: {tensor_format}. Use 'pt' or 'h5'")
+
+
 def compute_barcode(cfg: PreprocessingConfig) -> str:
     """
     Compute a barcode string based on the configuration parameters for easy identification of dataset variants.
@@ -501,17 +547,17 @@ def prepare_tensor(
     - Filtering particles based on eta range and removing associated hits
     - Converting all data to PyTorch tensors
 
-    For each batch of events, five tensor files are saved to disk:
-    - `hits_tensor_{file_id}_{barcode}.pt`: Hit data with shape
-      [num_events, num_bins, num_hits, num_hit_features]
-    - `particles_tensor_{file_id}_{barcode}.pt`: Particle data with shape
-      [num_events, num_particles, num_particle_features]
-    - `hit_to_particle_tensor_{file_id}_{barcode}.pt`: Hit-to-particle mapping with shape
-      [num_events, num_bins, num_hits, 1]
-    - `padding_mask_{file_id}_{barcode}.pt`: Padding mask with shape
-      [num_events, num_bins, max_hit_input, max_hit_input]
+    For each batch of events, a single data file is saved to disk in either PyTorch (.pt) or
+    compressed HDF5 (.h5) format containing:
+    - `hits_tensor`: Hit data with shape [num_events, num_bins, num_hits, num_hit_features]
+    - `particles_tensor`: Particle data with shape [num_events, num_particles, num_particle_features]
+    - `good_pairs`: Good pairs tensor for training
+    - `hit_to_particle_tensor`: Hit-to-particle mapping with shape [num_events, num_bins, num_hits, 1]
+    - `padding_mask`: Padding mask with shape [num_events, num_bins, max_hit_input]
+    - Metadata: start_event, end_event, nb_bins, batch_events
 
     A metadata file is also created containing information about the dataset structure and file paths.
+    The output format (PyTorch or HDF5) is controlled by cfg.tensor_format.
 
     Args:
         cfg: Configuration object containing all parameters including:
@@ -526,6 +572,7 @@ def prepare_tensor(
             - eta_range: Tuple specifying the eta range for particle selection
             - hit_features: List of column names to use as hit features
             - particle_features: List of column names to use as particle features
+            - tensor_format: Output tensor file format ('pt' for PyTorch or 'h5' for compressed HDF5)
 
     Returns:
         Dictionary containing metadata about the processed dataset including:
@@ -585,6 +632,10 @@ def prepare_tensor(
     tot_event = 0
     # Processing each file
     for file_idx, data_file in enumerate(data_files):
+        if cfg.max_events > 0 and tot_event > cfg.max_events:
+            print(f"Reached max_events limit of {cfg.max_events}. Stopping further processing.")
+            break
+
         print(f"Processing file {file_idx + 1}/{len(data_files)}")
 
         if input_format == "h5":
@@ -677,8 +728,8 @@ def prepare_tensor(
                 cfg.max_hit_input,
             )
 
-            full_path = f"{cfg.input_tensor_path}/seeding_data_{cfg.dataset_name}_{barcode}"
-            path = f"/seeding_data_{cfg.dataset_name}_{barcode}"
+            full_path = f"{cfg.input_tensor_path}/{cfg.dataset_name}_{barcode}"
+            path = f"/{cfg.dataset_name}_{barcode}"
 
             # Create the output directory if it doesn't exist
             os.makedirs(full_path, exist_ok=True)
@@ -699,13 +750,16 @@ def prepare_tensor(
                 "batch_events": batch_events,
             }
 
-            # Save single tensor file
-            tensor_file = f"{full_path}/tensor_data_{file_id}_{barcode}.pt"
-            torch.save(file_data, tensor_file)
+            # Save tensor file in the specified format
+            file_base = f"{full_path}/tensor_data_{file_id}_{barcode}"
+            _save_tensor_data(file_data, file_base, cfg.tensor_format)
 
-            print(f"  Saved tensor data for events {start_event} to {end_event - 1}")
+            # Determine file extension based on tensor format
+            file_ext = ".pt" if cfg.tensor_format == "pt" else ".h5"
+
+            print(f"  Saved tensor data for events {start_event} to {end_event - 1} ({cfg.tensor_format} format)")
             total_events += end_event - start_event
-            file_paths.append(f"{path}/tensor_data_{file_id}_{barcode}.pt")
+            file_paths.append(f"{path}/tensor_data_{file_id}_{barcode}{file_ext}")
             file_event_ranges.append((start_event, end_event))
             file_id = file_id + 1
 
@@ -716,6 +770,7 @@ def prepare_tensor(
         "nb_bins": nb_bins_max,
         "orphan_hit_fraction": orphan_hit_fraction,
         "eta_range": cfg.eta_range,
+        "tensor_format": cfg.tensor_format,
         "file_paths": file_paths,
         "file_event_ranges": file_event_ranges,
     }

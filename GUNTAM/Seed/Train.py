@@ -223,7 +223,7 @@ def train_model(
 
                         batch_bin_indices = valid_bins[batch_start : batch_start + batch_size]
                         batched_hits = batch_hits_tensor[batch_bin_indices]  # [batch_size, max_hit_input, num_hit_features]
-                        batched_masks = batch_padding_mask[batch_bin_indices]  # [batch_size, max_hit_input, 1]
+                        batched_masks = batch_padding_mask[batch_bin_indices]  # [batch_size, max_hit_input]
                         batched_pairs = batch_good_pairs[batch_bin_indices]  # [batch_size, num_pairs, 3]
                         batched_hit_to_particle_indices = batch_hit_to_particle_tensor[batch_bin_indices].squeeze(
                             -1

@@ -15,6 +15,7 @@ class PreprocessingConfig:
             - input_path: str: Path to the input data files
             - input_format: str: Format of input files ('csv' or 'h5')
             - input_tensor_path: str: Path where output tensors will be saved
+            - tensor_format: str: Format for output tensor files ('pt' for PyTorch tensors or 'h5' for compressed HDF5)
             - dataset_name: str: Base name for dataset files (will be combined with barcode)
 
             - events_per_file: int: Maximum number of events per output tensor file
@@ -38,6 +39,7 @@ class PreprocessingConfig:
         self.input_path = "odd_output"  # Path to input data files
         self.input_format = "csv"  # Format of input files: 'csv' or 'h5'
         self.input_tensor_path = "odd_output"  # Path where output tensors will be saved
+        self.tensor_format = "pt"  # Format for output tensor files: 'pt' (PyTorch) or 'h5' (HDF5)
         self.dataset_name = "seeding_data"  # Base name for dataset files
 
         # Processing parameters
@@ -89,6 +91,13 @@ class PreprocessingConfig:
             type=str,
             default=self.input_tensor_path,
             help="Path where output tensors will be saved (if None, uses input_path)",
+        )
+        parser.add_argument(
+            "--tensor_format",
+            type=str,
+            default=self.tensor_format,
+            choices=["pt", "h5"],
+            help="Format for output tensor files ('pt' for PyTorch tensors or 'h5' for compressed HDF5)",
         )
         parser.add_argument(
             "--dataset_name",
@@ -201,6 +210,7 @@ class PreprocessingConfig:
         self.input_path = args.input_path
         self.input_format = args.input_format
         self.input_tensor_path = args.input_tensor_path if args.input_tensor_path else args.input_path
+        self.tensor_format = args.tensor_format
         self.dataset_name = args.dataset_name
 
         self.events_per_file = args.events_per_file
@@ -273,6 +283,7 @@ class PreprocessingConfig:
         print("  Input path: ", self.input_path)
         print("  Input format: ", self.input_format)
         print("  Input tensor path: ", self.input_tensor_path)
+        print("  Tensor format: ", self.tensor_format)
         print("  Dataset name: ", self.dataset_name)
 
         print("\nProcessing:")

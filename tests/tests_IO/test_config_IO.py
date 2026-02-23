@@ -15,6 +15,7 @@ class TestPreprocessingConfig:
         # Input/Output paths
         assert config.input_path == "odd_output"
         assert config.input_format == "csv"
+        assert config.tensor_format == "pt"
         assert config.input_tensor_path == "odd_output"
         assert config.dataset_name == "seeding_data"
 
@@ -82,6 +83,7 @@ class TestPreprocessingConfig:
         assert isinstance(config_dict, dict)
         assert config_dict["input_path"] == "odd_output"
         assert config_dict["input_format"] == "csv"
+        assert config_dict["tensor_format"] == "pt"
         assert config_dict["binning_strategy"] == "neighbor"
         assert config_dict["eta_range"] == [-3.0, 3.0]
 
@@ -92,6 +94,7 @@ class TestPreprocessingConfig:
         test_dict = {
             "input_path": "test_path",
             "input_format": "h5",
+            "tensor_format": "h5",
             "events_per_file": 50,
             "max_events": 1000,
             "orphan_hit_fraction": 0.5,
@@ -104,6 +107,7 @@ class TestPreprocessingConfig:
 
         assert config.input_path == "test_path"
         assert config.input_format == "h5"
+        assert config.tensor_format == "h5"
         assert config.events_per_file == 50
         assert config.max_events == 1000
         assert config.orphan_hit_fraction == 0.5
@@ -112,14 +116,20 @@ class TestPreprocessingConfig:
         assert config.eta_range == [-2.0, 2.0]
 
     def test_config_format_choices(self):
-        """Test that valid input format choices are available."""
+        """Test that valid input and output format choices are available."""
         config = PreprocessingConfig()
 
-        # Valid formats
-        valid_formats = ["csv", "h5"]
-        for fmt in valid_formats:
+        # Valid input formats
+        valid_input_formats = ["csv", "h5"]
+        for fmt in valid_input_formats:
             config.input_format = fmt
             assert config.input_format == fmt
+        
+        # Valid tensor formats
+        valid_tensor_formats = ["pt", "h5"]
+        for fmt in valid_tensor_formats:
+            config.tensor_format = fmt
+            assert config.tensor_format == fmt
 
     def test_binning_strategy_choices(self):
         """Test that valid binning strategy choices are available."""
@@ -156,6 +166,7 @@ class TestPreprocessingConfig:
         # Modify all fields
         config.input_path = "modified_path"
         config.input_format = "h5"
+        config.tensor_format = "h5"
         config.input_tensor_path = "tensor_path"
         config.dataset_name = "modified_dataset"
         config.events_per_file = 150
@@ -181,6 +192,7 @@ class TestPreprocessingConfig:
             # Verify all fields
             assert loaded_config.input_path == "modified_path"
             assert loaded_config.input_format == "h5"
+            assert loaded_config.tensor_format == "h5"
             assert loaded_config.input_tensor_path == "tensor_path"
             assert loaded_config.dataset_name == "modified_dataset"
             assert loaded_config.events_per_file == 150
@@ -201,6 +213,7 @@ class TestPreprocessingConfig:
             "prog",
             "--input_path", "test_data",
             "--input_format", "h5",
+            "--tensor_format", "h5",
             "--max_events", "500",
             "--binning_strategy", "global",
             "--bin_width", "0.08",
@@ -212,6 +225,7 @@ class TestPreprocessingConfig:
         
         assert config.input_path == "test_data"
         assert config.input_format == "h5"
+        assert config.tensor_format == "h5"
         assert config.max_events == 500
         assert config.binning_strategy == "global"
         assert config.bin_width == 0.08

@@ -204,6 +204,13 @@ class SeedConfig:
             help="Input data format: 'csv' (default) or 'h5'",
         )
         parser.add_argument(
+            "--tensor_format",
+            type=str,
+            default=self.preprocessing_config.tensor_format,
+            choices=["pt", "h5"],
+            help="Output tensor format: 'pt' (PyTorch, default) or 'h5' (compressed HDF5)",
+        )
+        parser.add_argument(
             "--orphan_hit_fraction",
             type=float,
             default=self.preprocessing_config.orphan_hit_fraction,
@@ -343,6 +350,7 @@ class SeedConfig:
         self.preprocessing_config.events_per_file = args.events_per_file
         self.preprocessing_config.input_path = args.input_path
         self.preprocessing_config.input_format = args.input_format
+        self.preprocessing_config.tensor_format = args.tensor_format
         self.preprocessing_config.orphan_hit_fraction = args.orphan_hit_fraction
 
         # Sync overlapping values (so both configs have same values)

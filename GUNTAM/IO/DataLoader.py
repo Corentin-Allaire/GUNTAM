@@ -1,6 +1,8 @@
 import os
 from typing import Any, Dict, List, Optional, Tuple
 import torch
+import h5py
+import numpy as np
 from GUNTAM.Transformer.Utils import ts_print
 
 
@@ -21,6 +23,7 @@ class DataLoader:
         self.dataset_dir = dataset_dir
         self.dataset_name = dataset_name
         self.tensor_names = tensor_names if tensor_names is not None else []
+        self.tensor_format = "pt"  # Will be set from metadata
 
         # File-based storage attributes
         self.file_paths: List[str] = []
@@ -44,16 +47,37 @@ class DataLoader:
         Returns:
             Dictionary containing batch data
         """
-        """Load a dataset file directly without caching."""
         if file_idx >= len(self.file_paths):
             raise IndexError(f"File index {file_idx} out of range")
 
-        # Load file directly to GPU
-        file_data = torch.load(
-            self.file_paths[file_idx],
-            map_location=self.device,
-            weights_only=False,
-        )
+        file_path = self.file_paths[file_idx]
+
+        if self.tensor_format == "pt":
+            # Load PyTorch tensor file
+            file_data = torch.load(
+                file_path,
+                map_location=self.device,
+                weights_only=False,
+            )
+        elif self.tensor_format == "h5":
+            # Load HDF5 file
+            file_data = {}
+            with h5py.File(file_path, "r") as f:
+                # Load all datasets
+                for key in f.keys():
+                    data = f[key][:]
+                    # Convert numpy arrays to torch tensors and move to device
+                    if isinstance(data, np.ndarray):
+                        file_data[key] = torch.from_numpy(data).to(self.device)
+                    else:
+                        file_data[key] = data
+
+                # Load attributes (metadata)
+                for key in f.attrs.keys():
+                    file_data[key] = f.attrs[key]
+        else:
+            raise ValueError(f"Unsupported tensor format: {self.tensor_format}")
+
         return file_data
 
     def _load_metadata(self) -> None:
@@ -66,6 +90,10 @@ class DataLoader:
         self.total_events = metadata["total_events"]
         self.nb_bins = metadata["nb_bins"]
         self.file_event_ranges = metadata["file_event_ranges"]
+
+        # Detect tensor format from metadata (default to 'pt' if not specified)
+        self.tensor_format = metadata.get("tensor_format", "pt")
+        ts_print(f"Detected tensor format: {self.tensor_format}")
 
         # Reconstruct file paths using current dataset_dir and filenames from metadata
         # This allows the dataset to be moved to a different directory
