@@ -41,8 +41,9 @@ def compute_parameter_loss_norms(dataset: DataLoader) -> Dict[str, float]:
     # Compute normalization factors
     if valid_particles_list:
         all_valid_particles = torch.cat(valid_particles_list, dim=0)
-        stds = torch.std(all_valid_particles, dim=0)
-        std_pt = torch.std(1 / all_valid_particles[:, 3], dim=0)
+        flat = all_valid_particles.reshape(-1, all_valid_particles.shape[-1])
+        stds = torch.std(flat, dim=0)
+        std_pt = torch.std(1 / flat[:, 3], dim=0)
         norm_factors = {
             "z0": float(stds[1]),
             "eta": float(stds[3]),
