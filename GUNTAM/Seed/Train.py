@@ -290,6 +290,12 @@ def train_model(
                             pairs1, pairs2, target = batched_pairs[idx_in_batch].unbind(
                                 dim=1
                             )  # [num_pairs], [num_pairs], [num_pairs]
+
+                            # Skip bins with no valid pairs (all zeros after orphan filtering)
+                            if target.sum() == 0:
+                                print(f"Skipping bin {bin_idx.item()} in event {entry} due to no valid pairs after filtering.")
+                                continue
+
                             # Extract this bin's attention map and squeeze batch dim -> [seq_len, seq_len]
                             attention_map_bin = attention_maps[idx_in_batch].squeeze(0)
 
@@ -335,6 +341,13 @@ def train_model(
                             batch_loss["total"] += value
                             if status == "Training":
                                 accumulated_loss = accumulated_loss + cfg.get_loss_weight(key) * value
+
+                        # Check for NaN/Inf loss
+                        if torch.isnan(accumulated_loss) or torch.isinf(accumulated_loss):
+                            raise ValueError(
+                                f"Loss became NaN/Inf during training at epoch {epoch}, event {entry}, "
+                                f"file_idx {file_idx}, batch bins {batch_bin_indices}"
+                            )
 
                         event_losses["total"] += batch_loss["total"].detach()
 
