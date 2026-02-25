@@ -109,22 +109,17 @@ def _build_good_pairs_tensors(
         event_mask = data_batch["event_id"] == event_id
         all_pairs_by_event_bin[event_id] = {}
 
-        for bin_id in unique_bins:
+        for bin_id in range(max(unique_bins) + 1):
             # Get all hits in this bin for this event
             bin_mask = global_bin_mask[bin_id] & event_mask
             bin_hit_indices = data_batch[bin_mask].index
-            bin_hit_to_particle = hit_to_particle[bin_mask]
-
-            # Create pairs within this bin using vectorization
             bin_hit_indices_array = bin_hit_indices.to_numpy()
-            bin_particle_ids = bin_hit_to_particle.values
-
+            bin_particle_ids = hit_to_particle.loc[bin_hit_indices_array].values
             n_hits = len(bin_hit_indices_array)
             if n_hits > 0:
                 # Create all combinations using broadcasting
                 i_indices = np.arange(n_hits)[:, None]  # Shape (n_hits, 1)
                 j_indices = np.arange(n_hits)[None, :]  # Shape (1, n_hits)
-
                 # Create masks for valid pairs
                 not_self_mask = i_indices != j_indices
                 same_particle_mask = bin_particle_ids[i_indices] == bin_particle_ids[j_indices]
@@ -151,7 +146,7 @@ def _build_good_pairs_tensors(
     pairs_tensor = torch.zeros((num_events, num_bins, max_pairs_per_bin, 3), dtype=torch.long)
 
     for event_idx, event_id in enumerate(sorted(unique_events)):
-        for bin_id in unique_bins:
+        for bin_id in range(max(unique_bins) + 1):
             pairs = all_pairs_by_event_bin[event_id][bin_id]
             if len(pairs) > 0:
                 pairs_tensor[event_idx, bin_id, : len(pairs), :] = torch.tensor(pairs, dtype=torch.long)
@@ -221,7 +216,7 @@ def _to_tensor(
             )
 
         # Fill bin-organized hit tensors
-        for bin_id in unique_bins:
+        for bin_id in range(max(unique_bins) + 1):
             # Get all hits in this bin for this event
             bin_mask = global_bin_mask[bin_id] & event_mask
             bin_hits = data_batch[bin_mask]
@@ -343,15 +338,6 @@ def _add_padding(
         bins = pd.concat([bins, padding_bins_df], ignore_index=True)
         print(f"    Added {len(padding_data_rows)} padding hits")
 
-    # Sort by event_id and bin1 to ensure consistent ordering
-    # This ensures hits are grouped by event, then by bin, preserving the order
-    sort_columns = ["event_id", "bin1"] if "bin1" in bins.columns else ["event_id"]
-    combined_for_sort = data_batch.copy()
-    combined_for_sort["bin1"] = bins["bin1"].values
-    sort_indices = combined_for_sort.sort_values(by=sort_columns).index
-    data_batch = data_batch.loc[sort_indices].reset_index(drop=True)
-    bins = bins.loc[sort_indices].reset_index(drop=True)
-    print("    Sorted hits by event and bin to preserve ordering")
     return data_batch, bins
 
 
@@ -708,13 +694,13 @@ def prepare_tensor(
             # Create the hit_to_particle mapping for this batch (after all reordering)
             hit_to_particle = data_batch["particle_id"].copy()
 
-            # Create the good pairs tensor for this batch (after all reordering and padding)
-            good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max)
-
             # Apply specific particle selection as defined in the config
             data_batch, particles_batch, bins, hit_to_particle = _particle_selection(
                 data_batch, particles_batch, bins, hit_to_particle, cfg
             )
+
+            # Create the good pairs tensor for this batch
+            good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max)
 
             # Convert to tensors
             hits_tensor, particles_tensor, hit_to_particle_tensor = _to_tensor(

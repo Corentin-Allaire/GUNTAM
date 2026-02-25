@@ -206,12 +206,23 @@ class TestFullIntegration:
         
         model_path = os.path.join(temp_dir, f"model_{suffix}.pt")
         
+        # Run training with all possible loss components (choose MSE or L1, not both)
+        all_losses = [
+            "attention",
+            "full_attention",
+            "topk_attention",
+            "attention_next",
+            "attention_back",
+            "MSE",
+            "hit_BCE"
+        ]
         self._run_training(
             input_path=test_data_dir,
             input_tensor_path=preprocessing_output,
             model_path=model_path,
             dataset_name=f"test_{suffix}",
-            input_format=output_format
+            input_format=output_format,
+            loss_components=all_losses
         )
         
         # Step 4: Verify all outputs including model
@@ -373,11 +384,11 @@ class TestFullIntegration:
             print(f"STDERR:\n{result.stderr}")
         
         # Check if command succeeded
-            assert result.returncode == 0, (
-                f"PrepareTensor with tensor_format={tensor_format} failed with return code {result.returncode}"
-            )
+        assert result.returncode == 0, (
+            f"PrepareTensor with tensor_format={tensor_format} failed with return code {result.returncode}"
+        )
 
-    def _run_training(self, input_path, input_tensor_path, model_path, dataset_name, input_format):
+    def _run_training(self, input_path, input_tensor_path, model_path, dataset_name, input_format, loss_components=None):
         """
         Run the Train.py script
         
@@ -387,6 +398,7 @@ class TestFullIntegration:
             model_path: Path to save the trained model
             dataset_name: Name of the dataset
             input_format: Input format ('csv' or 'h5')
+            loss_components: List of loss components to use (optional)
         """
         # Build the command
         cmd = [
@@ -414,20 +426,23 @@ class TestFullIntegration:
             "--vertex_cuts", "10", "200",
             "--timing_enabled"
         ]
-        
+        # Add loss components if provided
+        if loss_components:
+            cmd += ["--loss_components"] + loss_components
+
         # Run the command
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True
         )
-        
+
         print(f"Training command: {' '.join(cmd)}")
         print(f"Return code: {result.returncode}")
         print(f"STDOUT:\n{result.stdout}")
         if result.stderr:
             print(f"STDERR:\n{result.stderr}")
-        
+
         # Check if command succeeded
         assert result.returncode == 0, f"Training failed with return code {result.returncode}"
 
