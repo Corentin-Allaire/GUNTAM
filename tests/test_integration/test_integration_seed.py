@@ -326,11 +326,18 @@ class TestFullIntegration:
             print(f"STDERR:\n{result.stderr}")
         
         # Check if command succeeded
-        assert result.returncode == 0, f"PrepareTensor failed with return code {result.returncode}"
+            assert result.returncode == 0, (
+                f"PrepareTensor failed with return code {result.returncode}"
+            )
 
     def _run_preprocessing_with_tensor_format(
-        self, input_path, output_path, input_format, dataset_name, tensor_format, max_events=5
-    ):
+            self,
+            input_path,
+            output_path,
+            input_format,
+            dataset_name,
+            tensor_format,
+            max_events=5):
         """
         Run the PrepareTensor.py script with specified tensor output format
         

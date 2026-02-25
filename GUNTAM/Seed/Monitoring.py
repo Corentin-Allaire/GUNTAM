@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -10,20 +10,6 @@ from GUNTAM.Seed.MonitoringPlot import (
     create_seeds_per_particle_vs_truth_param_plots,
     create_2d_efficiency_heatmaps,
 )
-
-SeedErrors = Dict[str, List[float]]
-SeedMetrics = List[Dict[str, Any]]
-BinSummary = Dict[str, Any]
-EventData = Tuple[
-    np.ndarray,  # event_hits
-    np.ndarray,  # event_particles
-    np.ndarray,  # event_reconstructed
-    Sequence[Any],  # event_pairs
-    Sequence[Any],  # event_seeds
-    np.ndarray,  # event_hit_to_particle
-    Optional[np.ndarray],  # event_map
-    np.ndarray,  # event_mask
-]
 
 
 def _to_numpy(x: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
@@ -61,250 +47,567 @@ def angular_difference(angle1: np.ndarray, angle2: np.ndarray) -> np.ndarray:
 
 
 class PerformanceMonitor:
-    """
-    Monitor and visualize seeding and reconstruction performance across events/bins.
-    - Computes:
-        - Per-bin particle grouping and seed→particle associations (≥ `min_common_hits`).
-        - Best seed selection per particle (prefer pure, then most common hits).
-        - Global seeding and pure-seeding efficiencies and bin-wise statistics.
-        - Seed-resolution metrics for `z`, `eta`, `phi`, and `pt`.
-        - Bin complexity trends and optional attention-map diagnostics.
-    - Plotting: if `save_plots=True`, summary and comparison figures are saved.
-
-    Configuration:
-    - `event_idx_list`, `bin_idx_list`: focus indices for detailed printing/visualization.
-    - `full_print`: enable per-hit diagnostics in `analyze_event_bins`.
-    - `min_common_hits`: hits threshold to accept a seed→particle association.
-    - `min_truth_hits`: unique truth hits (across bins) required to count a particle.
-    - `truth_r_tol`: radial tolerance used to deduplicate hits across bins.
-    - `save_plots`: toggle creation of output plots.
-
-    Input expectations for `seeding_performance(...)`:
-    - All event-level arrays/lists share the same number of events.
-    - Arrays (`hits_test`, `hit_to_particle_test`, `padding_mask_test`)
-        have identical bin dimensions per event.
-    - `particles_test` is per-event (not binned): `[event, particle, features]`.
-    - `padding_mask_test[event][bin]` marks padded hits; valid hits are
-        those where the mask is False.
-    """
 
     def __init__(
         self,
-        event_idx_list: Optional[Sequence[int]] = None,
-        bin_idx_list: Optional[Sequence[int]] = None,
         full_print: bool = False,
         save_plots: bool = True,
         min_common_hits: int = 3,
         min_truth_hits: int = 3,
         truth_r_tol: float = 1e-3,
-    ) -> None:
-        """
-        Initialize the PerformanceMonitor with configuration only.
+    ):
 
-        Args:
-            event_idx_list: Optional list of event indices to analyze in detail
-            bin_idx_list: Optional list of bin indices to analyze in detail
-            full_print: Enable detailed per-hit/seed diagnostics in analysis
-            save_plots: Whether to save performance plots in `seeding_performance`
-            min_common_hits: Minimum hits in common to accept seed→particle association
-            min_truth_hits: Minimum unique truth hits per particle (global across bins)
-            truth_r_tol: Radial tolerance to deduplicate hits across bins
-        """
-        self.event_idx_list = event_idx_list or []
-        self.bin_idx_list = bin_idx_list or []
         self.full_print = full_print
         self.save_plots = save_plots
         self.min_common_hits = min_common_hits
         self.min_truth_hits = min_truth_hits
         self.truth_r_tol = truth_r_tol
 
-    def _get_event(
+        self.seed_errors: dict[str, list[float]] = {
+            "z": [],
+            "eta": [],
+            "phi": [],
+            "pt": [],
+        }
+
+        self.all_seed_metrics: list[dict[str, Any]] = []
+
+        self.eligible_particles: list[dict[str, Any]] = []
+
+        self.bin_summaries: list[dict[str, Any]] = []
+
+        self.total_seeds = 0
+
+    def _build_bin_particles(
         self,
-        hits_test: np.ndarray,
-        particles_test: np.ndarray,
-        hit_to_particle_test: np.ndarray,
-        padding_mask_test: np.ndarray,
-        seeds_test: Sequence[Sequence[Any]],
-        reconstructed_parameters: Sequence[Sequence[Any]],
-        all_pairs_test: Sequence[Sequence[Any]],
-        attention_maps: Optional[Sequence[Sequence[Any]]],
-        event_idx: int,
-    ) -> EventData:
+        particles: np.ndarray,
+        hit_to_particle: np.ndarray,
+    ) -> Dict[int, Dict[str, Any]]:
+        """Build per-bin particle dictionary from valid hits and hit_to_particle mapping.
+
+        hit_to_particle: shape [n_hits], each entry is the index of the associated particle in the event (or <0 for orphan)
+        particles: shape [n_particles, ...], all particles in the event (not binned)
+
+        Returns a dict mapping particle_id (index in event) -> {
+            'hit_indices': list[int],
+            'true_params': np.ndarray,  # parameters from particles[particle_id]
+        }
         """
-        Retrieve and package one event into an EventData tuple.
+        hit_to_particle = np.asarray(hit_to_particle).reshape(-1)
+        particles = np.asarray(particles)
+
+        bin_particles = {}
+        for hit_idx, particle_idx in enumerate(hit_to_particle):
+            if particle_idx < 0:
+                continue  # Orphan hit
+            particle_idx = int(particle_idx)
+            if particle_idx not in bin_particles:
+                bin_particles[particle_idx] = {
+                    "hit_indices": [],
+                    "true_params": particles[particle_idx].copy(),
+                }
+            bin_particles[particle_idx]["hit_indices"].append(hit_idx)
+
+        return bin_particles
+
+    def _associate_seeds_to_particles(
+        self,
+        bin_seeds: Sequence[Tuple[Sequence[int], Sequence[float]]],
+        hit_to_particle: np.ndarray,
+        min_common_hits: int = 3,
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Associate seeds to particles based on most hits in common.
 
         Args:
-            event_idx: Index of the event to retrieve.
+            bin_seeds: list of seed objects (each must have `.hits` and `.parameters`)
+            bin_particles: dict mapping particle_id -> {
+                "hit_indices": list[int],  # hit indices belonging to this particle
+                "true_params": np.ndarray, # true particle parameters
+            }
+            hit_to_particle: array of particle IDs per hit for this bin (aligned with hits)
+            min_common_hits: minimum number of common hits to form an association (default: 3)
 
         Returns:
-            EventData: (
-                event_hits, event_particles, event_reconstructed,
-                event_pairs, event_seeds, event_hit_to_particle, event_map, event_mask
-            )
+            seeded_particle: dict mapping particle_id -> list of dicts:
+                {
+                    "seed_idx": int,
+                    "n_common_hits": int,
+                    "seed_params": np.ndarray,
+                    "is_pure": bool,    # True if ALL hits of the seed belong to this particle
+                }
         """
-        test_size = len(hits_test)
-        if event_idx < 0 or event_idx >= test_size:
-            raise IndexError(f"Event index {event_idx} is out of range (0 to {test_size - 1})")
+        seeded_particle: Dict[int, List[Dict[str, Any]]] = {}
 
-        event_hits: np.ndarray = np.asarray(hits_test[event_idx])
-        event_particles: np.ndarray = np.asarray(particles_test[event_idx])  # [num_particles, features]
-        event_reconstructed: np.ndarray = np.asarray(reconstructed_parameters[event_idx])
-        event_pairs: Sequence[Any] = all_pairs_test[event_idx]
-        event_seeds: Sequence[Any] = seeds_test[event_idx]
-        event_hit_to_particle: np.ndarray = np.asarray(hit_to_particle_test[event_idx])
-        # Normalize hit_to_particle shape: remove trailing dimension if present
-        if event_hit_to_particle.ndim == 3 and event_hit_to_particle.shape[-1] == 1:
-            event_hit_to_particle = event_hit_to_particle[..., 0]
+        for seed_idx, seed in enumerate(bin_seeds):
+            seed_hit_indices = set(seed[0])
 
-        event_mask: np.ndarray = np.asarray(padding_mask_test[event_idx])
-        # Normalize padding mask shape: remove trailing dimension if present
-        if event_mask.ndim == 3 and event_mask.shape[-1] == 1:
-            event_mask = event_mask[..., 0]
+            seed_ids = hit_to_particle[list(seed_hit_indices)]
+            # Candidate particle IDs are those present among this seed's hits
+            seed_unique_ids = set(np.unique(seed_ids))
 
-        event_map: Optional[np.ndarray] = np.asarray(attention_maps[event_idx]) if attention_maps is not None else None
+            for particle_id in seed_unique_ids:
+                if particle_id < 0:
+                    continue
 
-        return (
-            event_hits,
-            event_particles,
-            event_reconstructed,
-            event_pairs,
-            event_seeds,
-            event_hit_to_particle,
-            event_map,
-            event_mask,
-        )
+                n_hits_common = np.sum(seed_ids == particle_id)
 
-    def _get_bin(
+                if n_hits_common >= min_common_hits:
+                    # Seed is pure for this particle if ALL its hits belong to this particle
+                    is_pure_for_particle = len(seed_unique_ids) == 1
+                    seeded_particle.setdefault(particle_id, []).append(
+                        {
+                            "seed_idx": seed_idx,
+                            "particle_id": particle_id,
+                            "n_common_hits": n_hits_common,
+                            "seed_params": np.array(seed[1], copy=True),
+                            "is_pure": is_pure_for_particle,
+                        }
+                    )
+
+        return seeded_particle
+
+    def _select_best_seed_for_particles(
         self,
-        event_data: EventData,
+        seeded_particle: Dict[int, List[Dict[str, Any]]],
+        bin_particles: Dict[int, Dict[str, Any]],
+    ) -> Dict[int, Dict[str, Any]]:
+        """
+        Select the best seed for each particle in a single bin.
+
+        This function operates on per-bin data. For each particle present in the bin,
+        it chooses the best associated seed (prioritizing pure seeds, then by number of common hits),
+        and attaches this information to the bin's particle dictionary.
+        The following keys are added to bin_particles[pid]:
+            - 'best_seed_idx': index of the best seed in this bin
+            - 'n_common_hits': number of hits in common with the best seed
+            - 'param_distance': distance between seed and true parameters
+            - 'seed_params': parameters of the best seed
+            - 'is_pure': whether the best seed is pure
+
+        Args:
+                seeded_particle: dict mapping particle_id -> list of seed dicts (output of associate_seeds_to_particles)
+                bin_particles: dict mapping particle_id -> particle info (with "true_params")
+
+        Returns:
+                bin_particles enriched with best seed association info per particle (for this bin only)
+        """
+
+        for particle_id, seed_list in seeded_particle.items():
+            true_params = bin_particles[particle_id]["true_params"]
+
+            # Selection priority: prefer pure seeds first, then by n_common_hits
+            candidates = []
+            for s in seed_list:
+                seed_params = s["seed_params"]
+                # Indices: 0-d0, 1-z0, 2-phi, 3-eta, 4-pT, 5-q, 6-m
+                # For distance: use z0 (1), eta (3), phi (2)
+                param_diff = np.array(
+                    [
+                        seed_params[1] - true_params[1],  # z0
+                        seed_params[3] - true_params[3],  # eta
+                        angular_difference(seed_params[2], true_params[2]),  # phi
+                    ]
+                )
+                param_diff[0] /= 100.0  # scale z0
+                param_distance = np.linalg.norm(param_diff)
+
+                candidates.append(
+                    {
+                        "best_seed_idx": s["seed_idx"],
+                        "n_common_hits": s["n_common_hits"],
+                        "param_distance": param_distance,
+                        "seed_params": seed_params,
+                        "true_params": true_params,
+                        "is_pure": s.get("is_pure", False),
+                    }
+                )
+
+            # If any pure candidates exist, consider only them
+            pure_candidates = [c for c in candidates if c.get("is_pure", False)]
+            if pure_candidates:
+                chosen = max(pure_candidates, key=lambda x: x["n_common_hits"])
+            else:
+                chosen = max(candidates, key=lambda x: x["n_common_hits"])
+
+            # Enrich bin_particles with best candidate info (in-place)
+
+            bin_particles[particle_id]["best_seed_idx"] = chosen["best_seed_idx"]
+            bin_particles[particle_id]["nb_seed"] = len(seed_list)
+            bin_particles[particle_id]["n_common_hits"] = chosen["n_common_hits"]
+            bin_particles[particle_id]["param_distance"] = chosen["param_distance"]
+            # store a copy to avoid external mutation
+            bin_particles[particle_id]["seed_params"] = np.array(chosen["seed_params"], copy=True)
+            bin_particles[particle_id]["is_pure"] = chosen.get("is_pure", False)
+
+        return bin_particles
+
+    def _update_event_particle_bins(
+        self,
+        event_particle_bins: Dict[int, Dict[str, Any]],
+        bin_particles: Dict[int, Dict[str, Any]],
+        hits: np.ndarray,
         bin_idx: int,
-    ) -> Tuple[
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,  # bin_pairs - tensor/array [num_pairs, 3]
-        Sequence[Any],
-        Optional[np.ndarray],
-    ]:
-        """
-        Retrieve per-bin slices from an EventData tuple.
+        truth_r_tol: float,
+    ) -> None:
+        """Update per-event particle tracking with info from one bin.
+
+        For each particle appearing in the current bin, this:
+        - Initializes its entry in event_particle_bins if needed
+        - Accumulates unique hit-radius keys (r quantized by truth_r_tol)
+        - Records that the particle appeared in this bin
+        - Records whether it has any associated seed in this bin
+        - Records whether the selected association is pure in this bin
+        - Records the number of associated seeds (and pure seeds) in this bin
 
         Args:
-            event_data: EventData produced by `_get_event`.
-            bin_idx: Index of the bin to retrieve.
+            event_particle_bins: dict mutated in place, keyed by particle_id
+            bin_particles: dict produced by _build_bin_particles
+            hits: numpy array of hits for this bin (unpadded)
+            bin_idx: current bin index
+            best_associations: mapping particle_id -> association dict for this bin
+            truth_r_tol: radial tolerance used to deduplicate hits across bins
+        """
+        for particle_id, pdata in bin_particles.items():
+            # Initialize per-particle structure if first time seen this event
+            if particle_id not in event_particle_bins:
+                event_particle_bins[particle_id] = {
+                    "true_params": pdata["true_params"].copy(),
+                    "bins": [],
+                    "has_seed_in_bins": [],
+                    "has_pure_seed_in_bins": [],
+                    # Track unique hits across detector using r-quantization
+                    "unique_r_keys": set(),
+                    # Track seeds associated per bin
+                    "n_seeds_in_bins": [],
+                }
+
+            # Accumulate unique r keys for this particle in this bin
+            hit_indices = pdata.get("hit_indices", [])
+            if len(hit_indices) > 0:
+                tx_ty_tz = hits[hit_indices, :3]
+                rs = np.sqrt(np.sum(np.square(tx_ty_tz), axis=1))
+                r_keys = np.round(rs / truth_r_tol)
+                for k in r_keys:
+                    event_particle_bins[particle_id]["unique_r_keys"].add(int(k))
+
+            # Record bin index and seed presence flags
+            event_particle_bins[particle_id]["bins"].append(bin_idx)
+            has_seed = pdata.get("best_seed_idx") is not None
+            event_particle_bins[particle_id]["has_seed_in_bins"].append(has_seed)
+            event_particle_bins[particle_id]["has_pure_seed_in_bins"].append(has_seed and pdata.get("is_pure", False))
+
+            # Record number of seeds associated to this particle in this bin
+            event_particle_bins[particle_id]["n_seeds_in_bins"].append(pdata.get("nb_seed", 0))
+
+    def _update_best_seed_selection(
+        self,
+        event_particle_best_seeds: Dict[int, Dict[str, Any]],
+        particle_id: int,
+        data: Dict[str, Any],
+    ) -> None:
+        """
+        Update the best seed selection for each particle across all bins in an event.
+
+        This function accumulates and compares the best seed info for each particle as bins are processed,
+        ensuring that the event-level best seed is the purest and/or has the most common hits.
+        If a new candidate is purer or has more common hits than the current event-level best, it replaces it.
+
+        Selection rule:
+        - Prefer pure seeds first
+        - If same purity, prefer higher n_common_hits
+        - If still tied, keep current selection (no distance tie-break)
+
+        Args:
+            event_particle_best_seeds: dict mapping particle_id -> best seed info across all bins
+            particle_id: ID of the particle being updated
+            data: best seed info from the current bin
 
         Returns:
-            Tuple of (bin_hits, bin_particles, bin_hit_to_particle, bin_reconstructed,
-            bin_pairs, bin_seed, bin_map).
+            None (updates event_particle_best_seeds in place)
         """
-        (
-            event_hits,
-            event_particles,
-            event_reconstructed,
-            event_pairs,
-            event_seeds,
-            event_hit_to_particle,
-            event_map,
-            event_mask,
-        ) = event_data
+        # Sanitize data by removing best seed identifier
+        best_data = dict(data)
+        best_data.pop("best_seed_idx", None)
 
-        if bin_idx < 0 or bin_idx >= event_hits.shape[0]:
-            raise IndexError(f"Bin index {bin_idx} is out of range (0 to {event_hits.shape[0] - 1})")
+        if particle_id not in event_particle_best_seeds:
+            event_particle_best_seeds[particle_id] = best_data
+            return
 
-        bin_mask = ~event_mask[bin_idx].astype(bool)
+        cur = event_particle_best_seeds[particle_id]
+        a_pure = bool(best_data.get("is_pure", False))
+        b_pure = bool(cur.get("is_pure", False))
+        if a_pure and not b_pure:
+            event_particle_best_seeds[particle_id] = best_data
+        elif a_pure == b_pure and best_data.get("n_common_hits", 0) > cur.get("n_common_hits", 0):
+            event_particle_best_seeds[particle_id] = best_data
 
-        bin_hits = event_hits[bin_idx][bin_mask]
+    def _process_bin_best_associations(
+        self,
+        best_associations: Dict[int, Dict[str, Any]],
+        event_idx: int,
+        bin_idx: int,
+    ) -> None:
+        """Record per-bin seed metrics for best associations.
 
-        # Get hit-to-particle mapping for this bin's valid hits
-        bin_hit_to_particle = event_hit_to_particle[bin_idx]
-        if bin_hit_to_particle.ndim > 1:
-            bin_hit_to_particle = bin_hit_to_particle.reshape(-1)
-        bin_hit_to_particle = bin_hit_to_particle[bin_mask].astype(int)
+        For each particle's best association in a bin, compute error components
+        and append them into `seed_errors`, and store a metrics record into
+        `all_seed_metrics` for downstream aggregation.
+        """
+        for particle_id, data in best_associations.items():
+            if "best_seed_idx" not in data:
+                continue
+            seed_params = data["seed_params"]
+            true_params = data["true_params"]
 
-        # Construct bin_particles by mapping each hit to its particle using hit_to_particle
-        # event_particles has shape [num_particles, features]
-        # bin_hit_to_particle contains particle indices for each valid hit in this bin
-        if event_particles.ndim == 2 and event_particles.shape[0] > 0:
-            # For each hit, get the corresponding particle parameters
-            num_particle_features = event_particles.shape[1]
-            bin_particles = np.zeros((len(bin_hit_to_particle), num_particle_features), dtype=event_particles.dtype)
+            # Errors for resolution metrics
+            # Indices: 0-d0, 1-z0, 2-phi, 3-eta, 4-pT, 5-q, 6-m
+            errors = np.zeros(4)
+            errors[0] = seed_params[1] - true_params[1]  # z0
+            errors[1] = seed_params[3] - true_params[3]  # eta
+            errors[2] = angular_difference(seed_params[2], true_params[2])  # phi
+            errors[3] = seed_params[4] - true_params[4]  # pT
 
-            # Map valid particle IDs (>= 0 and within bounds)
-            valid_pid_mask = (bin_hit_to_particle >= 0) & (bin_hit_to_particle < event_particles.shape[0])
-            if np.any(valid_pid_mask):
-                bin_particles[valid_pid_mask] = event_particles[bin_hit_to_particle[valid_pid_mask]]
-        else:
-            # No particles available - create empty array with correct shape
-            bin_particles = np.zeros((len(bin_hit_to_particle), 0), dtype=event_hits.dtype)
+            self.seed_errors["z"].append(errors[0])
+            self.seed_errors["eta"].append(errors[1])
+            self.seed_errors["phi"].append(errors[2])
+            self.seed_errors["pt"].append(errors[3])
 
-        # Get reconstructed parameters for this bin's valid hits
-        bin_reconstructed = event_reconstructed[bin_idx]
-        if bin_reconstructed is None:
-            bin_reconstructed = np.zeros((len(bin_hits), 0), dtype=event_hits.dtype)
-        else:
-            bin_reconstructed = np.asarray(bin_reconstructed)
-            # Only apply mask if bin_reconstructed has the same length as the bin
-            if bin_reconstructed.shape[0] == event_mask[bin_idx].shape[0]:
-                bin_reconstructed = bin_reconstructed[bin_mask]
+            self.all_seed_metrics.append(
+                {
+                    "event_idx": event_idx,
+                    "bin_idx": bin_idx,
+                    "particle_id": particle_id,
+                    "seed_idx": data["best_seed_idx"],
+                    "n_hits_common": data["n_common_hits"],
+                    "is_pure": data.get("is_pure", False),
+                    "param_distance": data["param_distance"],
+                    "true_params": true_params,
+                    "seed_params": seed_params.copy(),
+                    "errors": errors.copy(),
+                }
+            )
 
-        bin_pairs = event_pairs[bin_idx]
-        bin_seed = event_seeds[bin_idx]
-        bin_map = event_map[bin_idx] if event_map is not None else None
+    def _finalize_event_particle_status(
+        self,
+        event_particle_bins: Dict[int, Dict[str, Any]],
+        event_idx: int,
+        min_truth_hits: int,
+    ) -> None:
+        """Finalize per-event particle status and append to a unified list.
 
-        return (
-            bin_hits,
-            bin_particles,
-            bin_hit_to_particle,
-            bin_reconstructed,
-            bin_pairs,
-            bin_seed,
-            bin_map,
+        Applies the global eligibility rule (>= min_truth_hits unique r-deduped hits)
+        and appends a per-particle info dict with seed flags to eligible_particles.
+        """
+        for particle_id, info in event_particle_bins.items():
+            # Determine eligibility based on unique hit count across detector (dedup by r)
+            n_truth_hits = int(len(info.get("unique_r_keys", set())))
+            is_eligible = n_truth_hits >= min_truth_hits
+            if not is_eligible:
+                continue
+
+            true_params = np.asarray(info["true_params"], dtype=float)
+
+            # Particle has seed globally if it has seed in ANY bin
+            has_seed_globally = any(bool(x) for x in info.get("has_seed_in_bins", []))
+            has_pure_seed_globally = any(bool(x) for x in info.get("has_pure_seed_in_bins", []))
+
+            # Aggregate seed counts across all bins for this particle
+            n_seeds_total = int(np.sum(info.get("n_seeds_in_bins", [])))
+
+            info = {
+                "particle_id": particle_id,
+                "event_idx": event_idx,
+                "bins_appeared": info.get("bins", []),
+                "true_params": true_params.copy(),
+                "n_hits": n_truth_hits,
+                "had_seed": has_seed_globally,
+                "had_pure_seed": has_pure_seed_globally,
+                "n_seeds": n_seeds_total,
+            }
+
+            self.eligible_particles.append(info)
+
+    def _annotate_deltaR_min(self, eligible_particles: List[Dict[str, Any]]) -> None:
+        """Compute and attach per-particle nearest-neighbor ΔR in (eta, phi).
+
+        For each event, compute ΔR_i = min_{j != i} sqrt((Δη)^2 + (Δφ)^2), where Δφ is computed
+        with angular wrapping. Mutates each particle dict in eligible_particles to add:
+        - 'deltaR_min': float (np.inf if no other particle in the event)
+
+        Notes:
+        - Only particles that passed eligibility are considered for the neighborhood within each event.
+        - Particles with no neighbor will have deltaR_min = np.inf (these are ignored by plotting).
+        """
+        if not eligible_particles:
+            return
+
+        # Group by event
+        by_event: dict[int, list[dict]] = {}
+        for p in eligible_particles:
+            by_event.setdefault(p["event_idx"], []).append(p)
+
+        # Compute per event
+        for ev, plist in by_event.items():
+            if len(plist) <= 1:
+                # No neighbor available
+                for p in plist:
+                    p["deltaR_min"] = float("inf")
+                continue
+
+            etas = np.array([p["true_params"][1] for p in plist], dtype=float)
+            phis = np.array([p["true_params"][2] for p in plist], dtype=float)
+
+            # Build pairwise Δη, Δφ and ΔR
+            dEta = etas[:, None] - etas[None, :]
+
+            # Use angular_difference for φ wrapping
+            def _ang_diff_matrix(a):
+                # vectorized angular difference using existing helper
+                # angular_difference expects two angles; we broadcast pairwise
+                A = np.repeat(a[:, None], len(a), axis=1)
+                B = np.repeat(a[None, :], len(a), axis=0)
+                return angular_difference(A, B)
+
+            dPhi = _ang_diff_matrix(phis)
+            dR = np.sqrt(dEta**2 + dPhi**2)
+            np.fill_diagonal(dR, np.inf)
+
+            # Min ΔR per particle
+            min_dR = np.min(dR, axis=1)
+            for p, dr in zip(plist, min_dR):
+                p["deltaR_min"] = float(dr)
+
+    def bin_seeding_performance(self, event_idx: int, event_hits, event_particles, event_hit_to_particle, event_seeds):
+
+        event_particle_best_seeds: Dict[int, Dict[str, Any]] = {}
+        event_particle_bins: Dict[int, Dict[str, Any]] = {}
+
+        for bin_idx in range(event_hits.shape[0]):
+            hits = event_hits[bin_idx]
+            particles = event_particles
+            hit_to_particle = event_hit_to_particle[bin_idx]
+            seeds = event_seeds[bin_idx]
+            self.total_seeds += len(seeds)
+
+            # --- Build bin_particles dict ---
+            bin_particles = self._build_bin_particles(particles, hit_to_particle)
+
+            # --- Step 1 & 2: associate and select best seeds ---
+            seeded_particle = self._associate_seeds_to_particles(seeds, hit_to_particle, self.min_common_hits)
+            bin_particles = self._select_best_seed_for_particles(seeded_particle, bin_particles)
+
+            # --- Collect stats ---
+            bin_total_particles = len(bin_particles)
+            # Count particles with any associated seed in this bin
+            bin_particles_with_seeds = sum(1 for pid, pdata in bin_particles.items() if "best_seed_idx" in pdata)
+            # Count particles with a pure associated seed in this bin
+            bin_particles_with_pure_seeds = sum(1 for pid, pdata in bin_particles.items() if pdata.get("is_pure", False))
+
+            self._update_event_particle_bins(
+                event_particle_bins,
+                bin_particles,
+                hits,
+                bin_idx,
+                self.truth_r_tol,
+            )
+
+            # Update per-event best seed selection directly from seeding_performance
+            for pid, pdata in bin_particles.items():
+                self._update_best_seed_selection(event_particle_best_seeds, pid, pdata)
+
+            # Store resolution data (per bin best seeds)
+            self._process_bin_best_associations(
+                bin_particles,
+                event_idx,
+                bin_idx,
+            )
+
+            # Bin summary
+            self.bin_summaries.append(
+                {
+                    "event_idx": event_idx,
+                    "bin_idx": bin_idx,
+                    "n_particles": bin_total_particles,
+                    "n_seeds": len(seeds),
+                    "particles_with_seeds": bin_particles_with_seeds,
+                    "seeding_efficiency": (bin_particles_with_seeds / bin_total_particles if bin_total_particles > 0 else 0.0),
+                    "particles_with_pure_seeds": bin_particles_with_pure_seeds,
+                    "pure_seeding_efficiency": (
+                        bin_particles_with_pure_seeds / bin_total_particles if bin_total_particles > 0 else 0.0
+                    ),
+                }
+            )
+
+        # After processing all bins in this event, determine global particle status
+        self._finalize_event_particle_status(
+            event_particle_bins,
+            event_idx,
+            self.min_truth_hits,
         )
 
-    def _validate_inputs(
-        self,
-        hits_test: np.ndarray,
-        particles_test: np.ndarray,
-        hit_to_particle_test: np.ndarray,
-        padding_mask_test: np.ndarray,
-        seeds_test: Sequence[Sequence[Any]],
-        reconstructed_parameters: Sequence[Sequence[Any]],
-        all_pairs_test: Sequence[Sequence[Any]],
-        attention_maps: Optional[Sequence[Sequence[Any]]],
-    ) -> None:
-        """Validate shapes and per-event bin counts for inputs.
+    def performance_analysis(self) -> None:
 
-        Ensures: same number of events across all inputs; same number of bins
-        for tensor-like arrays; and consistent per-event bin lengths for
-        nested-list inputs.
-        """
-        test_size = len(hits_test)
-        if (
-            len(particles_test) != test_size
-            or len(hit_to_particle_test) != test_size
-            or len(padding_mask_test) != test_size
-            or len(seeds_test) != test_size
-            or len(reconstructed_parameters) != test_size
-            or len(all_pairs_test) != test_size
-            or (attention_maps is not None and len(attention_maps) != test_size)
-        ):
-            raise ValueError(f"All inputs must have the same number of events ({test_size})")
+        total_unique_particles = len(self.eligible_particles)
+        particles_with_seeds_count = sum(1 for p in self.eligible_particles if p.get("had_seed", False))
+        particles_with_pure_seeds_count = sum(1 for p in self.eligible_particles if p.get("had_pure_seed", False))
+        seeding_efficiency = (particles_with_seeds_count / total_unique_particles) if total_unique_particles > 0 else 0.0
+        pure_seeding_efficiency = (
+            (particles_with_pure_seeds_count / total_unique_particles) if total_unique_particles > 0 else 0.0
+        )
 
-        expected_bins = hits_test.shape[1] if test_size > 0 else 0
-        if expected_bins == 0 or hit_to_particle_test.shape[1] != expected_bins or padding_mask_test.shape[1] != expected_bins:
-            raise ValueError("hits/hit_to_particle/mask must have the same number of bins per event")
+        resolution_metrics = {}
+        for param, errors in self.seed_errors.items():
+            if errors:
+                arr = np.array(errors)
+                resolution_metrics[param] = {
+                    "mean_error": np.mean(arr),
+                    "std_error": np.std(arr),
+                    "rms_error": np.sqrt(np.mean(arr**2)),
+                    "median_error": np.median(arr),
+                    "n_seeds": len(arr),
+                }
+            else:
+                resolution_metrics[param] = {k: 0.0 for k in ["mean_error", "std_error", "rms_error", "median_error"]}
+                resolution_metrics[param]["n_seeds"] = 0
 
-        for ev in range(test_size):
-            if (
-                len(seeds_test[ev]) != expected_bins
-                or len(reconstructed_parameters[ev]) != expected_bins
-                or len(all_pairs_test[ev]) != expected_bins
-                or (attention_maps is not None and len(attention_maps[ev]) != expected_bins)
-            ):
-                raise ValueError(f"Event {ev}: list inputs must have {expected_bins} bins")
+        performance_results = {
+            "efficiency_metrics": {
+                "total_particles": total_unique_particles,
+                "total_seeds": self.total_seeds,
+                "particles_with_seeds": particles_with_seeds_count,
+                "seeding_efficiency": seeding_efficiency,
+                "particles_with_pure_seeds": particles_with_pure_seeds_count,
+                "pure_seeding_efficiency": pure_seeding_efficiency,
+                "total_bins_processed": len(self.bin_summaries),
+            },
+            "resolution_metrics": resolution_metrics,
+            "bin_statistics": {
+                "mean_efficiency": np.mean([b["seeding_efficiency"] for b in self.bin_summaries]),
+                "std_efficiency": np.std([b["seeding_efficiency"] for b in self.bin_summaries]),
+                "mean_pure_efficiency": np.mean([b["pure_seeding_efficiency"] for b in self.bin_summaries]),
+                "std_pure_efficiency": np.std([b["pure_seeding_efficiency"] for b in self.bin_summaries]),
+            },
+            "bin_complexity_analysis": self._analyze_bin_complexity(self.bin_summaries),
+        }
 
-    def analyze_event_bins(
+        # Print
+        self._print_seeding_performance_results(performance_results)
+
+        # Plots
+        if self.save_plots:
+            create_seeding_performance_plots(performance_results, self.all_seed_metrics, self.seed_errors, self.bin_summaries)
+            if self.eligible_particles:
+                create_particle_reconstruction_comparison_plots(self.eligible_particles)
+            try:
+                self._annotate_deltaR_min(self.eligible_particles)
+                create_efficiency_vs_truth_param_plots(self.eligible_particles)
+                create_seeds_per_particle_vs_truth_param_plots(self.eligible_particles)
+                create_2d_efficiency_heatmaps(self.eligible_particles)
+            except Exception as e:
+                print(f"Error creating efficiency-vs-parameter plots: {e}")
+
+    def analyse_bin_performance(
         self,
         event_idx: int,
         bin_idx: int,
@@ -332,14 +635,6 @@ class PerformanceMonitor:
         """
 
         print(f"Number of valid hits in event {event_idx} bin {bin_idx}: {len(hits)}")
-
-        # Count orphan hits (hits without particle associations)
-        orphan_mask = particles[:, 3] <= 0.0  # pT <= 0 indicates orphan hit
-        n_orphan_hits = np.sum(orphan_mask)
-        n_particle_hits = len(hits) - n_orphan_hits
-
-        print(f"  - Hits with particle associations: {n_particle_hits}")
-        print(f"  - Orphan hits (detector noise): {n_orphan_hits}")
 
         # If full_print is enabled, print hit-by-hit information for de purpose
         if self.full_print:
@@ -429,712 +724,7 @@ class PerformanceMonitor:
 
         print("=" * 120)
 
-    def analyze_events(
-        self,
-        hits_test: np.ndarray,
-        particles_test: np.ndarray,
-        hit_to_particle_test: np.ndarray,
-        padding_mask_test: np.ndarray,
-        seeds_test: Sequence[Sequence[Any]],
-        reconstructed_parameters: Sequence[Sequence[Any]],
-        all_pairs_test: Sequence[Sequence[Any]],
-        attention_maps: Sequence[Sequence[Any]],
-    ) -> None:
-        """
-        Optional function letting us run the event analysis independently of the seeding performance function.
-        In the futur this could be use to minimise the ammount of attention maps to be stored during inference.
-
-        Args:
-            hits_test, hit_to_particle_test, padding_mask_test: arrays with per-event bins
-            particles_test: per-event particle arrays `[events, particles, features]`
-            seeds_test, reconstructed_parameters, all_pairs_test, attention_maps: nested lists `[events][bins]`
-
-        Returns:
-            None
-        """
-        # Validate inputs and derive test sizes
-        self._validate_inputs(
-            hits_test,
-            particles_test,
-            hit_to_particle_test,
-            padding_mask_test,
-            seeds_test,
-            reconstructed_parameters,
-            all_pairs_test,
-            attention_maps,
-        )
-
-        test_size = len(hits_test)
-        print(f"\nAnalyzing {len(self.event_idx_list)} events for monitoring...")
-
-        for event_idx in self.event_idx_list:
-            if event_idx < 0 or event_idx >= test_size:
-                raise IndexError(f"Event index {event_idx} is out of range (0 to {test_size - 1})")
-
-            # Load event data via helper
-            event = self._get_event(
-                hits_test,
-                particles_test,
-                hit_to_particle_test,
-                padding_mask_test,
-                seeds_test,
-                reconstructed_parameters,
-                all_pairs_test,
-                attention_maps,
-                event_idx,
-            )
-
-            # === Loop over bins ===
-            for bin_idx in range(event[0].shape[0]):
-                hits, particles, hit_to_particle, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
-                # If in the event/bin selection lists run the detailed analysis
-                if attn_map is not None and event_idx in self.event_idx_list and bin_idx in self.bin_idx_list:
-                    self.analyze_event_bins(
-                        event_idx,
-                        bin_idx,
-                        hits,
-                        particles,
-                        reconstructed_params,
-                        seeds,
-                        pair,
-                        attn_map,
-                    )
-
-    def seeding_performance(
-        self,
-        hits_test: np.ndarray,
-        particles_test: np.ndarray,
-        hit_to_particle_test: np.ndarray,
-        padding_mask_test: np.ndarray,
-        seeds_test: Sequence[Sequence[Any]],
-        reconstructed_parameters: Sequence[Sequence[Any]],
-        all_pairs_test: Sequence[Sequence[Any]],
-        attention_maps: Optional[Sequence[Sequence[Any]]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Evaluate seeding performance by analyzing the relationship between reconstructed seeds and true particles.
-
-        Steps:
-            1. Build particle database per bin (true hits, params, reco params)
-            2. Associate seeds to particles (≥ min_common_hits hits in common)
-            3. Select best seed per particle (most hits, then closest params)
-            4. Compute efficiencies and seed resolution
-            5. Aggregate results and optionally create plots
-
-        Args:
-            hits_test, hit_to_particle_test, padding_mask_test: arrays with per-event bins
-            particles_test: per-event particle arrays `[events, particles, features]`
-            seeds_test, reconstructed_parameters, all_pairs_test, attention_maps: nested lists `[events][bins]`
-
-        Returns:
-            Dictionary containing seeding performance metrics
-        """
-        # Validate inputs and derive test sizes
-        self._validate_inputs(
-            hits_test,
-            particles_test,
-            hit_to_particle_test,
-            padding_mask_test,
-            seeds_test,
-            reconstructed_parameters,
-            all_pairs_test,
-            attention_maps,
-        )
-
-        test_size = len(hits_test)
-        print(f"\nEvaluating seeding performance across {test_size} events...")
-        print(f"Using min_common_hits = {self.min_common_hits}")
-        print(
-            "Requiring at least "
-            f"{self.min_truth_hits} unique truth hits per particle (global); "
-            f"dedup by radius with tol={self.truth_r_tol}"
-        )
-
-        # Global accumulators
-        total_seeds = 0
-        eligible_particles: List[Dict[str, Any]] = []  # unified list with flags: had_seed, had_pure_seed
-
-        seed_errors: SeedErrors = {"z": [], "eta": [], "phi": [], "pt": []}
-        all_seed_metrics: SeedMetrics = []
-        bin_summaries: List[BinSummary] = []
-
-        # === Loop over events ===
-        for event_idx in range(test_size):
-
-            event_particle_best_seeds: Dict[int, Dict[str, Any]] = {}  # track per event best seed for each particle
-            event_particle_bins: Dict[int, Dict[str, Any]] = (
-                {}
-            )  # track bins where each particle appears, seed status, and hit stats
-
-            # Load event data via helper
-            event = self._get_event(
-                hits_test,
-                particles_test,
-                hit_to_particle_test,
-                padding_mask_test,
-                seeds_test,
-                reconstructed_parameters,
-                all_pairs_test,
-                attention_maps,
-                event_idx,
-            )
-
-            # === Loop over bins ===
-            for bin_idx in range(event[0].shape[0]):
-
-                hits, particles, hit_to_particle, reconstructed_params, pair, seeds, attn_map = self._get_bin(event, bin_idx)
-                # If in the event/bin selection lists run the detailed analysis
-                if attn_map is not None and event_idx in self.event_idx_list and bin_idx in self.bin_idx_list:
-                    self.analyze_event_bins(
-                        event_idx,
-                        bin_idx,
-                        hits,
-                        particles,
-                        reconstructed_params,
-                        seeds,
-                        pair,
-                        attn_map,
-                    )
-
-                total_seeds += len(seeds)
-
-                # --- Build bin_particles dict ---
-                bin_particles = self._build_bin_particles(particles, hit_to_particle)
-
-                # --- Step 1 & 2: associate and select best seeds ---
-                seeded_particle = self._associate_seeds_to_particles(seeds, bin_particles, hit_to_particle, self.min_common_hits)
-                bin_particles = self._select_best_seed_for_particles(seeded_particle, bin_particles)
-
-                # --- Collect stats ---
-                bin_total_particles = len(bin_particles)
-                # Count particles with any associated seed in this bin
-                bin_particles_with_seeds = sum(1 for pid, pdata in bin_particles.items() if "best_seed_idx" in pdata)
-                # Count particles with a pure associated seed in this bin
-                bin_particles_with_pure_seeds = sum(1 for pid, pdata in bin_particles.items() if pdata.get("is_pure", False))
-
-                self._update_event_particle_bins(
-                    event_particle_bins,
-                    bin_particles,
-                    hits,
-                    bin_idx,
-                    self.truth_r_tol,
-                )
-
-                # Update per-event best seed selection directly from seeding_performance
-                for pid, pdata in bin_particles.items():
-                    self._update_best_seed_selection(event_particle_best_seeds, pid, pdata)
-
-                # Store resolution data (per bin best seeds)
-                self._process_bin_best_associations(
-                    bin_particles,
-                    event_idx,
-                    bin_idx,
-                    seed_errors,
-                    all_seed_metrics,
-                )
-
-                # Bin summary
-                bin_summaries.append(
-                    {
-                        "event_idx": event_idx,
-                        "bin_idx": bin_idx,
-                        "n_particles": bin_total_particles,
-                        "n_seeds": len(seeds),
-                        "particles_with_seeds": bin_particles_with_seeds,
-                        "seeding_efficiency": (
-                            bin_particles_with_seeds / bin_total_particles if bin_total_particles > 0 else 0.0
-                        ),
-                        "particles_with_pure_seeds": bin_particles_with_pure_seeds,
-                        "pure_seeding_efficiency": (
-                            bin_particles_with_pure_seeds / bin_total_particles if bin_total_particles > 0 else 0.0
-                        ),
-                    }
-                )
-
-            # After processing all bins in this event, determine global particle status
-            self._finalize_event_particle_status(
-                event_particle_bins,
-                event_idx,
-                self.min_truth_hits,
-                eligible_particles,
-            )
-
-        # === Aggregate results ===
-        total_unique_particles = len(eligible_particles)
-        particles_with_seeds_count = sum(1 for p in eligible_particles if p.get("had_seed", False))
-        particles_with_pure_seeds_count = sum(1 for p in eligible_particles if p.get("had_pure_seed", False))
-        seeding_efficiency = (particles_with_seeds_count / total_unique_particles) if total_unique_particles > 0 else 0.0
-        pure_seeding_efficiency = (
-            (particles_with_pure_seeds_count / total_unique_particles) if total_unique_particles > 0 else 0.0
-        )
-
-        resolution_metrics = {}
-        for param, errors in seed_errors.items():
-            if errors:
-                arr = np.array(errors)
-                resolution_metrics[param] = {
-                    "mean_error": np.mean(arr),
-                    "std_error": np.std(arr),
-                    "rms_error": np.sqrt(np.mean(arr**2)),
-                    "median_error": np.median(arr),
-                    "n_seeds": len(arr),
-                }
-            else:
-                resolution_metrics[param] = {k: 0.0 for k in ["mean_error", "std_error", "rms_error", "median_error"]}
-                resolution_metrics[param]["n_seeds"] = 0
-
-        performance_results = {
-            "efficiency_metrics": {
-                "total_particles": total_unique_particles,
-                "total_seeds": total_seeds,
-                "particles_with_seeds": particles_with_seeds_count,
-                "seeding_efficiency": seeding_efficiency,
-                "particles_with_pure_seeds": particles_with_pure_seeds_count,
-                "pure_seeding_efficiency": pure_seeding_efficiency,
-                "total_bins_processed": len(bin_summaries),
-            },
-            "resolution_metrics": resolution_metrics,
-            "bin_statistics": {
-                "mean_efficiency": np.mean([b["seeding_efficiency"] for b in bin_summaries]),
-                "std_efficiency": np.std([b["seeding_efficiency"] for b in bin_summaries]),
-                "mean_pure_efficiency": np.mean([b["pure_seeding_efficiency"] for b in bin_summaries]),
-                "std_pure_efficiency": np.std([b["pure_seeding_efficiency"] for b in bin_summaries]),
-            },
-            "bin_complexity_analysis": self._analyze_bin_complexity(bin_summaries),
-        }
-
-        # Print
-        self._print_seeding_performance_results(performance_results)
-
-        # Plots
-        if self.save_plots:
-            create_seeding_performance_plots(performance_results, all_seed_metrics, seed_errors, bin_summaries)
-            if eligible_particles:
-                create_particle_reconstruction_comparison_plots(eligible_particles)
-            try:
-                self._annotate_deltaR_min(eligible_particles)
-                create_efficiency_vs_truth_param_plots(eligible_particles)
-                create_seeds_per_particle_vs_truth_param_plots(eligible_particles)
-                create_2d_efficiency_heatmaps(eligible_particles)
-            except Exception as e:
-                print(f"Error creating efficiency-vs-parameter plots: {e}")
-
-        # Build optional split lists for backward compatibility in return payload
-        with_list = [p for p in eligible_particles if p.get("had_seed", False)]
-        without_list = [p for p in eligible_particles if not p.get("had_seed", False)]
-
-        return {
-            "performance_results": performance_results,
-            "seed_metrics": all_seed_metrics,
-            "bin_summaries": bin_summaries,
-            "eligible_particles": eligible_particles,
-            "particles_with_seeds": with_list,
-            "particles_without_seeds": without_list,
-        }
-
-    def _build_bin_particles(
-        self,
-        particles: np.ndarray,
-        hit_to_particle: np.ndarray,
-    ) -> Dict[int, Dict[str, Any]]:
-        """Build per-bin particle dictionary from valid hits and hit_to_particle mapping.
-
-        Returns a dict mapping particle_id -> {
-            'hit_indices': list[int],
-            'true_params': np.ndarray,  # parameters from first occurrence
-        }
-
-        Notes:
-        - Skips Orphan hits (particle ID < 0 or pT <= 0)
-        - Assumes reconstructed_params is aligned with hits
-        """
-        # Normalize shapes: expect flat per-hit hit_to_particle aligned with particles
-        hit_to_particle = np.asarray(hit_to_particle).reshape(-1)
-        particles = np.asarray(particles)
-
-        # Apply mask to select non orphan hits
-        pt = particles[:, 3]
-        mask = (hit_to_particle >= 0) & (pt > 0.0)
-
-        # Indices of selected hits and corresponding particle IDs
-        idx = np.nonzero(mask)[0]
-        mask_ids = hit_to_particle[mask]
-
-        # Group valid indices by particle ID using sorting + unique
-        order = np.argsort(mask_ids, kind="stable")
-        ids_sorted = mask_ids[order]
-        idx_sorted = idx[order]
-
-        unique_ids, _, counts = np.unique(ids_sorted, return_index=True, return_counts=True)
-
-        bin_particles = {}
-        # Split the sorted indices into per-particle groups
-        split_points = np.cumsum(counts)[:-1]
-        groups = np.split(idx_sorted, split_points)
-
-        for pid, grp in zip(unique_ids.tolist(), groups):
-            if grp.size == 0:
-                continue
-            first = int(grp[0])
-            bin_particles[int(pid)] = {
-                "hit_indices": grp.tolist(),
-                "true_params": particles[first].copy(),
-            }
-
-        return bin_particles
-
-    def _associate_seeds_to_particles(
-        self,
-        bin_seeds: Sequence[Tuple[Sequence[int], Sequence[float]]],
-        bin_particles: Dict[int, Dict[str, Any]],
-        hit_to_particle: np.ndarray,
-        min_common_hits: int = 3,
-    ) -> Dict[int, List[Dict[str, Any]]]:
-        """
-        Associate seeds to particles based on most hits in common.
-
-        Args:
-            bin_seeds: list of seed objects (each must have `.hits` and `.parameters`)
-            bin_particles: dict mapping particle_id -> {
-                "hit_indices": list[int],  # hit indices belonging to this particle
-                "true_params": np.ndarray, # true particle parameters
-            }
-            hit_to_particle: array of particle IDs per hit for this bin (aligned with hits)
-            min_common_hits: minimum number of common hits to form an association (default: 3)
-
-        Returns:
-            seeded_particle: dict mapping particle_id -> list of dicts:
-                {
-                    "seed_idx": int,
-                    "n_common_hits": int,
-                    "seed_params": np.ndarray,
-                    "is_pure": bool,    # True if ALL hits of the seed belong to this particle
-                }
-        """
-        seeded_particle: Dict[int, List[Dict[str, Any]]] = {}
-
-        # Precompute available particle IDs in this bin
-        bin_particle_ids = set(bin_particles.keys())
-
-        for seed_idx, seed in enumerate(bin_seeds):
-            seed_hit_indices = set(seed[0])
-
-            # Candidate particle IDs are those present among this seed's hits
-            seed_ids = set(np.unique(hit_to_particle[list(seed_hit_indices)]))
-            candidate_particle_ids = {pid for pid in seed_ids if pid in bin_particle_ids}
-
-            for particle_id in candidate_particle_ids:
-                pdata = bin_particles[particle_id]
-                particle_hit_indices = set(pdata["hit_indices"])
-                n_hits_common = len(seed_hit_indices & particle_hit_indices)
-
-                if n_hits_common >= min_common_hits:
-                    # Seed is pure for this particle if ALL its hits belong to this particle
-                    is_pure_for_particle = seed_hit_indices.issubset(particle_hit_indices)
-                    seeded_particle.setdefault(particle_id, []).append(
-                        {
-                            "seed_idx": seed_idx,
-                            "particle_id": particle_id,
-                            "n_common_hits": n_hits_common,
-                            "seed_params": np.array(seed[1], copy=True),
-                            "is_pure": is_pure_for_particle,
-                        }
-                    )
-
-        return seeded_particle
-
-    def _select_best_seed_for_particles(
-        self,
-        seeded_particle: Dict[int, List[Dict[str, Any]]],
-        bin_particles: Dict[int, Dict[str, Any]],
-    ) -> Dict[int, Dict[str, Any]]:
-        """
-        For each particle, select the best associated seed.
-
-        Mutates bin_particles in place by attaching the best association info to
-        each particle entry that has at least one candidate. The following keys
-        are added to bin_particles[pid]:
-          - 'best_seed_idx'
-          - 'n_common_hits'
-          - 'param_distance'
-          - 'seed_params'
-          - 'is_pure'
-
-        Args:
-            seeded_particle: dict mapping particle_id -> list of seed dicts
-                            (output of associate_seeds_to_particles)
-            bin_particles: dict mapping particle_id -> particle info (with "true_params")
-
-        Returns:
-            bin_particles enriched with best seed association info per particle
-        """
-
-        for particle_id, seed_list in seeded_particle.items():
-            true_params = bin_particles[particle_id]["true_params"]
-
-            # Selection priority: prefer pure seeds first, then by n_common_hits
-            candidates = []
-            for s in seed_list:
-                seed_params = s["seed_params"]
-                param_diff = np.array(seed_params[:3]) - np.array(true_params[:3])
-                param_diff[0] /= 100.0  # scale z0
-                param_diff[2] = angular_difference(seed_params[2], true_params[2])
-                param_distance = np.linalg.norm(param_diff)
-
-                candidates.append(
-                    {
-                        "best_seed_idx": s["seed_idx"],
-                        "n_common_hits": s["n_common_hits"],
-                        "param_distance": param_distance,
-                        "seed_params": seed_params,
-                        "true_params": true_params,
-                        "is_pure": s.get("is_pure", False),
-                    }
-                )
-
-            # If any pure candidates exist, consider only them
-            pure_candidates = [c for c in candidates if c.get("is_pure", False)]
-            if pure_candidates:
-                chosen = max(pure_candidates, key=lambda x: x["n_common_hits"])  # no distance tie-breaker
-            else:
-                chosen = max(candidates, key=lambda x: x["n_common_hits"])  # no distance tie-breaker
-
-            # Enrich bin_particles with best candidate info (in-place)
-
-            bin_particles[particle_id]["best_seed_idx"] = chosen["best_seed_idx"]
-            bin_particles[particle_id]["nb_seed"] = len(seed_list)
-            bin_particles[particle_id]["n_common_hits"] = chosen["n_common_hits"]
-            bin_particles[particle_id]["param_distance"] = chosen["param_distance"]
-            # store a copy to avoid external mutation
-            bin_particles[particle_id]["seed_params"] = np.array(chosen["seed_params"], copy=True)
-            bin_particles[particle_id]["is_pure"] = chosen.get("is_pure", False)
-
-        return bin_particles
-
-    def _update_event_particle_bins(
-        self,
-        event_particle_bins: Dict[int, Dict[str, Any]],
-        bin_particles: Dict[int, Dict[str, Any]],
-        hits: np.ndarray,
-        bin_idx: int,
-        truth_r_tol: float,
-    ) -> None:
-        """Update per-event particle tracking with info from one bin.
-
-        For each particle appearing in the current bin, this:
-        - Initializes its entry in event_particle_bins if needed
-        - Accumulates unique hit-radius keys (r quantized by truth_r_tol)
-        - Records that the particle appeared in this bin
-        - Records whether it has any associated seed in this bin
-        - Records whether the selected association is pure in this bin
-        - Records the number of associated seeds (and pure seeds) in this bin
-
-        Args:
-            event_particle_bins: dict mutated in place, keyed by particle_id
-            bin_particles: dict produced by _build_bin_particles
-            hits: numpy array of hits for this bin (unpadded)
-            bin_idx: current bin index
-            best_associations: mapping particle_id -> association dict for this bin
-            truth_r_tol: radial tolerance used to deduplicate hits across bins
-        """
-        for particle_id, pdata in bin_particles.items():
-            # Initialize per-particle structure if first time seen this event
-            if particle_id not in event_particle_bins:
-                event_particle_bins[particle_id] = {
-                    "true_params": pdata["true_params"].copy(),
-                    "bins": [],
-                    "has_seed_in_bins": [],
-                    "has_pure_seed_in_bins": [],
-                    # Track unique hits across detector using r-quantization
-                    "unique_r_keys": set(),
-                    # Track seeds associated per bin
-                    "n_seeds_in_bins": [],
-                }
-
-            # Accumulate unique r keys for this particle in this bin
-            hit_indices = pdata.get("hit_indices", [])
-            if len(hit_indices) > 0:
-                tx_ty = hits[hit_indices, :2]
-                rs = np.sqrt(np.sum(np.square(tx_ty), axis=1))
-                r_keys = np.round(rs / truth_r_tol)
-                ur = event_particle_bins[particle_id]["unique_r_keys"]
-                for k in r_keys:
-                    ur.add(int(k))
-
-            # Record bin index and seed presence flags
-            event_particle_bins[particle_id]["bins"].append(bin_idx)
-            has_seed = pdata.get("best_seed_idx") is not None
-            event_particle_bins[particle_id]["has_seed_in_bins"].append(has_seed)
-            event_particle_bins[particle_id]["has_pure_seed_in_bins"].append(has_seed and pdata.get("is_pure", False))
-
-            # Record number of seeds associated to this particle in this bin
-            event_particle_bins[particle_id]["n_seeds_in_bins"].append(pdata.get("nb_seed", 0))
-
-    def _update_best_seed_selection(
-        self,
-        event_particle_best_seeds: Dict[int, Dict[str, Any]],
-        particle_id: int,
-        data: Dict[str, Any],
-    ) -> None:
-        """Update per-event best seed for a particle.
-
-        Selection rule:
-        - Prefer pure seeds first
-        - If same purity, prefer higher n_common_hits
-        - If still tied, keep current selection (no distance tie-break)
-        """
-        # Sanitize data by removing best seed identifier
-        best_data = dict(data)
-        best_data.pop("best_seed_idx", None)
-
-        if particle_id not in event_particle_best_seeds:
-            event_particle_best_seeds[particle_id] = best_data
-            return
-
-        cur = event_particle_best_seeds[particle_id]
-        a_pure = bool(best_data.get("is_pure", False))
-        b_pure = bool(cur.get("is_pure", False))
-        if a_pure and not b_pure:
-            event_particle_best_seeds[particle_id] = best_data
-        elif a_pure == b_pure and best_data.get("n_common_hits", 0) > cur.get("n_common_hits", 0):
-            event_particle_best_seeds[particle_id] = best_data
-
-    def _process_bin_best_associations(
-        self,
-        best_associations: Dict[int, Dict[str, Any]],
-        event_idx: int,
-        bin_idx: int,
-        seed_errors: SeedErrors,
-        all_seed_metrics: SeedMetrics,
-    ) -> None:
-        """Record per-bin seed metrics for best associations.
-
-        For each particle's best association in a bin, compute error components
-        and append them into `seed_errors`, and store a metrics record into
-        `all_seed_metrics` for downstream aggregation.
-        """
-        for particle_id, data in best_associations.items():
-            if "best_seed_idx" not in data:
-                continue
-            seed_params = data["seed_params"]
-            true_params = data["true_params"]
-
-            # Errors for resolution metrics
-            errors = seed_params[0:4] - true_params
-            errors[2] = angular_difference(seed_params[2], true_params[2])
-
-            seed_errors["z"].append(errors[0])
-            seed_errors["eta"].append(errors[1])
-            seed_errors["phi"].append(errors[2])
-            seed_errors["pt"].append(errors[3])
-
-            all_seed_metrics.append(
-                {
-                    "event_idx": event_idx,
-                    "bin_idx": bin_idx,
-                    "particle_id": particle_id,
-                    "seed_idx": data["best_seed_idx"],
-                    "n_hits_common": data["n_common_hits"],
-                    "is_pure": data.get("is_pure", False),
-                    "param_distance": data["param_distance"],
-                    "true_params": true_params,
-                    "seed_params": seed_params.copy(),
-                    "errors": errors.copy(),
-                }
-            )
-
-    def _finalize_event_particle_status(
-        self,
-        event_particle_bins: Dict[int, Dict[str, Any]],
-        event_idx: int,
-        min_truth_hits: int,
-        eligible_particles: List[Dict[str, Any]],
-    ) -> None:
-        """Finalize per-event particle status and append to a unified list.
-
-        Applies the global eligibility rule (>= min_truth_hits unique r-deduped hits)
-        and appends a per-particle info dict with seed flags to eligible_particles.
-        """
-        for particle_id, info in event_particle_bins.items():
-            # Determine eligibility based on unique hit count across detector (dedup by r)
-            n_truth_hits = int(len(info.get("unique_r_keys", set())))
-            is_eligible = n_truth_hits >= min_truth_hits
-            if not is_eligible:
-                continue
-
-            true_params = np.asarray(info["true_params"], dtype=float)
-
-            # Particle has seed globally if it has seed in ANY bin
-            has_seed_globally = any(bool(x) for x in info.get("has_seed_in_bins", []))
-            has_pure_seed_globally = any(bool(x) for x in info.get("has_pure_seed_in_bins", []))
-
-            # Aggregate seed counts across all bins for this particle
-            n_seeds_total = int(np.sum(info.get("n_seeds_in_bins", [])))
-
-            info = {
-                "particle_id": particle_id,
-                "event_idx": event_idx,
-                "bins_appeared": info.get("bins", []),
-                "true_params": true_params.copy(),
-                "n_hits": n_truth_hits,
-                "had_seed": has_seed_globally,
-                "had_pure_seed": has_pure_seed_globally,
-                "n_seeds": n_seeds_total,
-            }
-
-            eligible_particles.append(info)
-
-    def _annotate_deltaR_min(self, eligible_particles: List[Dict[str, Any]]) -> None:
-        """Compute and attach per-particle nearest-neighbor ΔR in (eta, phi).
-
-        For each event, compute ΔR_i = min_{j != i} sqrt((Δη)^2 + (Δφ)^2), where Δφ is computed
-        with angular wrapping. Mutates each particle dict in eligible_particles to add:
-        - 'deltaR_min': float (np.inf if no other particle in the event)
-
-        Notes:
-        - Only particles that passed eligibility are considered for the neighborhood within each event.
-        - Particles with no neighbor will have deltaR_min = np.inf (these are ignored by plotting).
-        """
-        if not eligible_particles:
-            return
-
-        # Group by event
-        by_event: dict[int, list[dict]] = {}
-        for p in eligible_particles:
-            by_event.setdefault(p["event_idx"], []).append(p)
-
-        # Compute per event
-        for ev, plist in by_event.items():
-            if len(plist) <= 1:
-                # No neighbor available
-                for p in plist:
-                    p["deltaR_min"] = float("inf")
-                continue
-
-            etas = np.array([p["true_params"][1] for p in plist], dtype=float)
-            phis = np.array([p["true_params"][2] for p in plist], dtype=float)
-
-            # Build pairwise Δη, Δφ and ΔR
-            dEta = etas[:, None] - etas[None, :]
-
-            # Use angular_difference for φ wrapping
-            def _ang_diff_matrix(a):
-                # vectorized angular difference using existing helper
-                # angular_difference expects two angles; we broadcast pairwise
-                A = np.repeat(a[:, None], len(a), axis=1)
-                B = np.repeat(a[None, :], len(a), axis=0)
-                return angular_difference(A, B)
-
-            dPhi = _ang_diff_matrix(phis)
-            dR = np.sqrt(dEta**2 + dPhi**2)
-            np.fill_diagonal(dR, np.inf)
-
-            # Min ΔR per particle
-            min_dR = np.min(dR, axis=1)
-            for p, dr in zip(plist, min_dR):
-                p["deltaR_min"] = float(dr)
-
-    def _analyze_bin_complexity(self, bin_summaries: Sequence[BinSummary]) -> Dict[str, Any]:
+    def _analyze_bin_complexity(self, bin_summaries) -> Dict[str, Any]:
         """Analyze seeding efficiency as a function of bin complexity (number of particles and seeds)."""
         if not bin_summaries:
             return {}
