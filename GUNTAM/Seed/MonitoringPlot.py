@@ -628,30 +628,33 @@ def create_particle_reconstruction_comparison_plots(eligible_particles: Sequence
     """
 
     fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-    param_names = ["z0", "eta", "phi", "pT", "n_hits"]
-    param_units = ["[mm]", "", "[rad]", "[GeV]", ""]
-    param_labels = ["Z0", "Eta", "Phi", "pT", "Number of Hits"]
+    # New parameter order: ["d0", "z0", "phi", "eta", "pT", "q", "m"]
+    param_names = ["d0", "z0", "phi", "eta", "pT", "n_hits"]
+    param_units = ["[mm]", "[mm]", "[rad]", "", "[GeV]", ""]
+    param_labels = ["d0", "z0", "phi", "eta", "pT", "Number of Hits"]
 
     particles_with_seeds = [p for p in eligible_particles if p.get("had_seed", False)]
     particles_without_seeds = [p for p in eligible_particles if not p.get("had_seed", False)]
 
     with_seeds_data = {
-        "z0": [p["true_params"][0] for p in particles_with_seeds],
-        "eta": [p["true_params"][1] for p in particles_with_seeds],
+        "d0": [p["true_params"][0] for p in particles_with_seeds],
+        "z0": [p["true_params"][1] for p in particles_with_seeds],
         "phi": [p["true_params"][2] for p in particles_with_seeds],
-        "pT": [p["true_params"][3] for p in particles_with_seeds],
+        "eta": [p["true_params"][3] for p in particles_with_seeds],
+        "pT": [p["true_params"][4] for p in particles_with_seeds],
         "n_hits": [p["n_hits"] for p in particles_with_seeds],
     }
     without_seeds_data = {
-        "z0": [p["true_params"][0] for p in particles_without_seeds],
-        "eta": [p["true_params"][1] for p in particles_without_seeds],
+        "d0": [p["true_params"][0] for p in particles_without_seeds],
+        "z0": [p["true_params"][1] for p in particles_without_seeds],
         "phi": [p["true_params"][2] for p in particles_without_seeds],
-        "pT": [p["true_params"][3] for p in particles_without_seeds],
+        "eta": [p["true_params"][3] for p in particles_without_seeds],
+        "pT": [p["true_params"][4] for p in particles_without_seeds],
         "n_hits": [p["n_hits"] for p in particles_without_seeds],
     }
 
     for i, (param, unit, label) in enumerate(zip(param_names, param_units, param_labels)):
-        if i < 5:
+        if i < 6:  # Now 6 params: d0, z0, phi, eta, pT, n_hits
             row, col = i // 3, i % 3
             ax = axes[row, col]
             with_data = np.array(with_seeds_data[param])
@@ -756,27 +759,6 @@ def create_particle_reconstruction_comparison_plots(eligible_particles: Sequence
                 )
                 ax.set_title(f"{label} Distribution Comparison")
 
-    ax = axes[1, 2]
-    total_particles = len(particles_with_seeds) + len(particles_without_seeds)
-    efficiency = len(particles_with_seeds) / total_particles if total_particles > 0 else 0.0
-    categories = ["With Seeds", "Without Seeds"]
-    counts = [len(particles_with_seeds), len(particles_without_seeds)]
-    colors = ["green", "red"]
-    bars = ax.bar(categories, counts, color=colors, alpha=0.7, edgecolor="black")
-    for bar, count in zip(bars, counts):
-        height = bar.get_height()
-        ax.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            height + height * 0.01,
-            f"{count}\n({count / total_particles:.1%})",
-            ha="center",
-            va="bottom",
-            fontweight="bold",
-        )
-    ax.set_ylabel("Number of Particles")
-    ax.set_title(f"Particle Reconstruction Summary\nEfficiency: {efficiency:.1%}")
-    ax.grid(True, alpha=0.3, axis="y")
-
     plt.tight_layout()
     plot_filename = "particle_reconstruction_comparison.png"
     plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
@@ -812,10 +794,12 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
     has_seed_flags = np.array([bool(p.get("had_seed", False)) for p in eligible_particles], dtype=bool)
     has_pure_seed_flags = np.array([bool(p.get("had_pure_seed", False)) for p in eligible_particles], dtype=bool)
 
-    z0 = truth_params[:, 0]
-    eta = truth_params[:, 1]
+    # New order: [d0, z0, phi, eta, pT, q, m]
+    d0 = truth_params[:, 0]
+    z0 = truth_params[:, 1]
     phi = truth_params[:, 2]
-    pt = truth_params[:, 3]
+    eta = truth_params[:, 3]
+    pt = truth_params[:, 4]
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
 
     def compute_efficiency(
@@ -847,6 +831,7 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
             hi += 1e-6
         return (lo, hi)
 
+    bins_d0 = np.linspace(*pct_bounds(d0), num=20)
     bins_eta = np.linspace(*pct_bounds(eta), num=20)
     bins_phi = np.linspace(-np.pi, np.pi, num=21)
     bins_z0 = np.linspace(*pct_bounds(z0), num=20)
@@ -864,6 +849,7 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
     else:
         bins_dr = None
 
+    c_d0, e_d0, e_d0_err, ep_d0, ep_d0_err, n_d0, w_d0 = compute_efficiency(d0, has_seed_flags, has_pure_seed_flags, bins_d0)
     c_eta, e_eta, e_eta_err, ep_eta, ep_eta_err, n_eta, w_eta = compute_efficiency(
         eta, has_seed_flags, has_pure_seed_flags, bins_eta
     )
@@ -939,30 +925,18 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
 
         plot_ax(
             axes[0],
-            c_eta,
-            w_eta,
-            n_eta,
-            e_eta,
-            e_eta_err,
-            ep_eta,
-            ep_eta_err,
-            "Truth η",
-            "Efficiency vs η",
+            c_d0,
+            w_d0,
+            n_d0,
+            e_d0,
+            e_d0_err,
+            ep_d0,
+            ep_d0_err,
+            "Truth d0 [mm]",
+            "Efficiency vs d0",
         )
         plot_ax(
             axes[1],
-            c_phi,
-            w_phi,
-            n_phi,
-            e_phi,
-            e_phi_err,
-            ep_phi,
-            ep_phi_err,
-            "Truth φ [rad]",
-            "Efficiency vs φ",
-        )
-        plot_ax(
-            axes[2],
             c_z0,
             w_z0,
             n_z0,
@@ -974,7 +948,31 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
             "Efficiency vs z0",
         )
         plot_ax(
+            axes[2],
+            c_phi,
+            w_phi,
+            n_phi,
+            e_phi,
+            e_phi_err,
+            ep_phi,
+            ep_phi_err,
+            "Truth phi [rad]",
+            "Efficiency vs phi",
+        )
+        plot_ax(
             axes[3],
+            c_eta,
+            w_eta,
+            n_eta,
+            e_eta,
+            e_eta_err,
+            ep_eta,
+            ep_eta_err,
+            "Truth eta",
+            "Efficiency vs eta",
+        )
+        plot_ax(
+            axes[4],
             c_pt,
             w_pt,
             n_pt,
@@ -987,7 +985,7 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
         )
         if plot_dr:
             plot_ax(
-                axes[4],
+                axes[5],
                 c_dr,
                 w_dr,
                 n_dr,
@@ -1033,10 +1031,12 @@ def create_seeds_per_particle_vs_truth_param_plots(
 
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     n_seeds = np.array([int(p.get("n_seeds", 0)) for p in eligible_particles])
-    z0 = truth_params[:, 0]
-    eta = truth_params[:, 1]
+    # [d0, z0, phi, eta, pT, q, m]
+    d0 = truth_params[:, 0]
+    z0 = truth_params[:, 1]
     phi = truth_params[:, 2]
-    pt = truth_params[:, 3]
+    eta = truth_params[:, 3]
+    pt = truth_params[:, 4]
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
 
     def pct_bounds(arr: np.ndarray) -> tuple[float, float]:
@@ -1050,6 +1050,7 @@ def create_seeds_per_particle_vs_truth_param_plots(
             hi += 1e-6
         return (lo, hi)
 
+    bins_d0 = np.linspace(*pct_bounds(d0), num=20)
     bins_eta = np.linspace(*pct_bounds(eta), num=20)
     bins_phi = np.linspace(-np.pi, np.pi, num=21)
     bins_z0 = np.linspace(*pct_bounds(z0), num=20)
@@ -1068,13 +1069,14 @@ def create_seeds_per_particle_vs_truth_param_plots(
         half_widths = 0.5 * (edges[1:] - edges[:-1])
         return centers, half_widths, mean_counts, sem_counts
 
+    c_d0, w_d0, msp_d0, msp_d0_sem = compute_mean_counts(d0, n_seeds, bins_d0)
     c_eta, w_eta, msp_eta, msp_eta_sem = compute_mean_counts(eta, n_seeds, bins_eta)
     c_phi, w_phi, msp_phi, msp_phi_sem = compute_mean_counts(phi, n_seeds, bins_phi)
     c_z0, w_z0, msp_z0, msp_z0_sem = compute_mean_counts(z0, n_seeds, bins_z0)
     c_pt, w_pt, msp_pt, msp_pt_sem = compute_mean_counts(pt, n_seeds, bins_pt)
 
     try:
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         axes = axes.flatten()
 
         def plot_ax(ax, centers, widths, mean_counts, mean_sem, xlabel, title):
@@ -1105,24 +1107,15 @@ def create_seeds_per_particle_vs_truth_param_plots(
 
         plot_ax(
             axes[0],
-            c_eta,
-            w_eta,
-            msp_eta,
-            msp_eta_sem,
-            "Truth η",
-            "Seeds/particle vs η",
+            c_d0,
+            w_d0,
+            msp_d0,
+            msp_d0_sem,
+            "Truth d0 [mm]",
+            "Seeds/particle vs d0",
         )
         plot_ax(
             axes[1],
-            c_phi,
-            w_phi,
-            msp_phi,
-            msp_phi_sem,
-            "Truth φ [rad]",
-            "Seeds/particle vs φ",
-        )
-        plot_ax(
-            axes[2],
             c_z0,
             w_z0,
             msp_z0,
@@ -1131,7 +1124,25 @@ def create_seeds_per_particle_vs_truth_param_plots(
             "Seeds/particle vs z0",
         )
         plot_ax(
+            axes[2],
+            c_phi,
+            w_phi,
+            msp_phi,
+            msp_phi_sem,
+            "Truth phi [rad]",
+            "Seeds/particle vs phi",
+        )
+        plot_ax(
             axes[3],
+            c_eta,
+            w_eta,
+            msp_eta,
+            msp_eta_sem,
+            "Truth eta",
+            "Seeds/particle vs eta",
+        )
+        plot_ax(
+            axes[4],
             c_pt,
             w_pt,
             msp_pt,
@@ -1174,10 +1185,12 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     has_seed = np.array([bool(p.get("had_seed", False)) for p in eligible_particles])
 
-    z0 = truth_params[:, 0]
-    eta = truth_params[:, 1]
+    # [d0, z0, phi, eta, pT, q, m]
+    d0 = truth_params[:, 0]
+    z0 = truth_params[:, 1]
     phi = truth_params[:, 2]
-    pt = truth_params[:, 3]
+    eta = truth_params[:, 3]
+    pt = truth_params[:, 4]
 
     # Normalize phi to [-π, π]
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
@@ -1188,12 +1201,16 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
 
     # Define parameter pairs and their labels
     param_pairs = [
-        (z0, eta, "z0 [mm]", "η", "z0_eta"),
-        (z0, phi, "z0 [mm]", "φ [rad]", "z0_phi"),
+        (d0, z0, "d0 [mm]", "z0 [mm]", "d0_z0"),
+        (d0, phi, "d0 [mm]", "phi [rad]", "d0_phi"),
+        (d0, eta, "d0 [mm]", "eta", "d0_eta"),
+        (d0, pt, "d0 [mm]", "pT [GeV]", "d0_pt"),
+        (z0, phi, "z0 [mm]", "phi [rad]", "z0_phi"),
+        (z0, eta, "z0 [mm]", "eta", "z0_eta"),
         (z0, pt, "z0 [mm]", "pT [GeV]", "z0_pt"),
-        (eta, phi, "η", "φ [rad]", "eta_phi"),
-        (eta, pt, "η", "pT [GeV]", "eta_pt"),
-        (phi, pt, "φ [rad]", "pT [GeV]", "phi_pt"),
+        (phi, eta, "phi [rad]", "eta", "phi_eta"),
+        (phi, pt, "phi [rad]", "pT [GeV]", "phi_pt"),
+        (eta, pt, "eta", "pT [GeV]", "eta_pt"),
     ]
 
     # Add deltaR pairs if available
