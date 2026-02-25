@@ -158,8 +158,6 @@ def test_seeding_performance_basic():
         min_truth_hits=3,
         truth_r_tol=1e-3,
     )
-    
-
     # Process all events (usually one) using per-event inputs
     for ev in range(len(hits_test)):
         monitor.bin_seeding_performance(ev, hits_test[ev], particles_test[ev], ID_test[ev], seeds_test[ev])
@@ -183,17 +181,29 @@ def test_seeding_performance_basic():
     else:
         pairs_np = np.asarray(pairs)
 
-    monitor.analyse_bin_performance(ev0, b0, hits_test[0, 0], particles_per_hit, reconstructed_parameters[0][0], seeds_test[0][0], pairs_np, attention_maps[0][0])
+    monitor.analyse_bin_performance(
+        ev0,
+        b0,
+        hits_test[0, 0],
+        particles_per_hit,
+        reconstructed_parameters[0][0],
+        seeds_test[0][0],
+        pairs_np,
+        attention_maps[0][0],
+    )
     monitor.performance_analysis()
 
     # Build performance and resolution dicts from monitor internal state
+    total_particles = len(monitor.eligible_particles)
+    particles_with_seeds = sum(1 for p in monitor.eligible_particles if p.get("had_seed", False))
+    particles_with_pure_seeds = sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False))
     perf = {
-        "total_particles": len(monitor.eligible_particles),
+        "total_particles": total_particles,
         "total_seeds": monitor.total_seeds,
-        "particles_with_seeds": sum(1 for p in monitor.eligible_particles if p.get("had_seed", False)),
-        "seeding_efficiency": (sum(1 for p in monitor.eligible_particles if p.get("had_seed", False)) / len(monitor.eligible_particles)) if monitor.eligible_particles else 0.0,
-        "particles_with_pure_seeds": sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False)),
-        "pure_seeding_efficiency": (sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False)) / len(monitor.eligible_particles)) if monitor.eligible_particles else 0.0,
+        "particles_with_seeds": particles_with_seeds,
+        "seeding_efficiency": (particles_with_seeds / total_particles) if total_particles > 0 else 0.0,
+        "particles_with_pure_seeds": particles_with_pure_seeds,
+        "pure_seeding_efficiency": (particles_with_pure_seeds / total_particles) if total_particles > 0 else 0.0,
         "total_bins_processed": len(monitor.bin_summaries),
     }
 
@@ -233,14 +243,11 @@ def test_input_validation_mismatched_bins_raises():
         hits_test,
         particles_test,
         ID_test,
-        seeds_test,
-        reconstructed_parameters,
-        all_pairs_test,
-        attention_maps,
+        _,
+        _,
+        _,
+        _,
     ) = make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=4)
-
-    # Introduce mismatch: attention_maps has two bins
-    attention_maps = [[np.zeros((4, 4)), np.zeros((4, 4))]]
 
     monitor = PerformanceMonitor(save_plots=False)
 
@@ -289,16 +296,29 @@ def test_min_common_hits_threshold_blocks_association():
     else:
         pairs_np = np.asarray(pairs)
 
-    monitor.analyse_bin_performance(ev0, b0, hits_test[0, 0], particles_per_hit, reconstructed_parameters[0][0], seeds_test[0][0], pairs_np, attention_maps[0][0])
+    monitor.analyse_bin_performance(
+        ev0,
+        b0,
+        hits_test[0, 0],
+        particles_per_hit,
+        reconstructed_parameters[0][0],
+        seeds_test[0][0],
+        pairs_np,
+        attention_maps[0][0],
+    )
     monitor.performance_analysis()
 
+    # Build performance dict
+    total_particles = len(monitor.eligible_particles)
+    particles_with_seeds = sum(1 for p in monitor.eligible_particles if p.get("had_seed", False))
+    particles_with_pure_seeds = sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False))
     perf = {
-        "total_particles": len(monitor.eligible_particles),
+        "total_particles": total_particles,
         "total_seeds": monitor.total_seeds,
-        "particles_with_seeds": sum(1 for p in monitor.eligible_particles if p.get("had_seed", False)),
-        "seeding_efficiency": (sum(1 for p in monitor.eligible_particles if p.get("had_seed", False)) / len(monitor.eligible_particles)) if monitor.eligible_particles else 0.0,
-        "particles_with_pure_seeds": sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False)),
-        "pure_seeding_efficiency": (sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False)) / len(monitor.eligible_particles)) if monitor.eligible_particles else 0.0,
+        "particles_with_seeds": particles_with_seeds,
+        "seeding_efficiency": (particles_with_seeds / total_particles) if total_particles > 0 else 0.0,
+        "particles_with_pure_seeds": particles_with_pure_seeds,
+        "pure_seeding_efficiency": (particles_with_pure_seeds / total_particles) if total_particles > 0 else 0.0,
         "total_bins_processed": len(monitor.bin_summaries),
     }
     # Eligible particle exists, but should have no seed association
@@ -312,11 +332,11 @@ def test_multi_event_multi_bin_distribution():
         hits_test,
         particles_test,
         ID_test,
-        padding_mask_hit_test,
+        _,
         seeds_test,
-        reconstructed_parameters,
-        all_pairs_test,
-        attention_maps,
+        _,
+        _,
+        _,
     ) = make_multi_event_multi_bin_setup()
 
     monitor = PerformanceMonitor(save_plots=False, min_common_hits=3, min_truth_hits=3)
@@ -325,19 +345,21 @@ def test_multi_event_multi_bin_distribution():
         monitor.bin_seeding_performance(ev, hits_test[ev], particles_test[ev], ID_test[ev], seeds_test[ev])
     monitor.performance_analysis()
 
+    total_particles = len(monitor.eligible_particles)
+    particles_with_seeds = sum(1 for p in monitor.eligible_particles if p.get("had_seed", False))
+    particles_with_pure_seeds = sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False))
     perf = {
-        "total_particles": len(monitor.eligible_particles),
+        "total_particles": total_particles,
         "total_seeds": monitor.total_seeds,
-        "particles_with_seeds": sum(1 for p in monitor.eligible_particles if p.get("had_seed", False)),
-        "seeding_efficiency": (sum(1 for p in monitor.eligible_particles if p.get("had_seed", False)) / len(monitor.eligible_particles)) if monitor.eligible_particles else 0.0,
-        "particles_with_pure_seeds": sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False)),
-        "pure_seeding_efficiency": (sum(1 for p in monitor.eligible_particles if p.get("had_pure_seed", False)) / len(monitor.eligible_particles)) if monitor.eligible_particles else 0.0,
+        "particles_with_seeds": particles_with_seeds,
+        "seeding_efficiency": (particles_with_seeds / total_particles) if total_particles > 0 else 0.0,
+        "particles_with_pure_seeds": particles_with_pure_seeds,
+        "pure_seeding_efficiency": (particles_with_pure_seeds / total_particles) if total_particles > 0 else 0.0,
         "total_bins_processed": len(monitor.bin_summaries),
     }
 
-    bin_stats = {
-        "mean_efficiency": np.mean([b["seeding_efficiency"] for b in monitor.bin_summaries]) if monitor.bin_summaries else 0.0
-    }
+    efficiencies = [b["seeding_efficiency"] for b in monitor.bin_summaries] if monitor.bin_summaries else []
+    bin_stats = {"mean_efficiency": np.mean(efficiencies) if efficiencies else 0.0}
 
     # Particles: 5 in event 1 + 2 in event 2 = 7
     assert perf["total_particles"] == 7
