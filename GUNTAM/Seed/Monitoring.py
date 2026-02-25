@@ -607,12 +607,6 @@ class PerformanceMonitor:
             except Exception as e:
                 print(f"Error creating efficiency-vs-parameter plots: {e}")
 
-        # Build optional split lists for backward compatibility in return payload
-        with_list = [p for p in self.eligible_particles if p.get("had_seed", False)]
-        without_list = [p for p in self.eligible_particles if not p.get("had_seed", False)]
-
-        # No return value expected
-
     def analyse_bin_performance(
         self,
         event_idx: int,
