@@ -434,7 +434,8 @@ def train_model(
 
 def run_model(
     model: SeedTransformer,
-    batch_data: Dict[str, torch.Tensor],
+    hits_tensor: torch.Tensor,
+    padding_mask: torch.Tensor,
     cfg: SeedConfig,
 ) -> tuple:
     """Run inference over files and return per-bin artifacts.
@@ -450,175 +451,145 @@ def run_model(
         - attention_maps: per-bin np.ndarray[num_valid_hits, num_valid_hits] used for seeding, or None.
     """
 
+    event_duration = 0.0
+    transformer_duration = 0.0
+    regression_duration = 0.0
+    seed_reconstruction_duration = 0.0
+
     # Initialize speed monitoring
     # Use high-resolution clock; sync once to avoid overlapping prior kernels
     if cfg.timing_enabled:
         Utils.sync_device(cfg.device_acc)
-    processing_times = []
-    transformer_times = []
-    regression_times = []
-    seed_reconstruction_times = []
 
-    # Loop over the number of epoch starting from start_epoch
-    print("Starting the running of the transformer model for seed reconstruction")
-    seeds = []  # refined seeds
-    model_outputs = []
-    reconstructed_parameters = []
-    attention_maps = []
+    # for event_idx in range(min(num_events_in_batch, 20)):
+    if cfg.timing_enabled:
+        Utils.sync_device(cfg.device_acc)
+        event_start_time = time.perf_counter()
 
-    hits_tensor = batch_data["hits_tensor"].to(cfg.device_acc)
-    padding_mask = batch_data["padding_mask"].to(cfg.device_acc)
+    event_seeds: List[Any] = []
+    event_encoded_points: List[Optional[np.ndarray]] = []
+    event_parameters: List[Optional[np.ndarray]] = []
+    event_attention_maps: List[Optional[np.ndarray]] = []
 
-    # Process each event in the batch
-    num_events_in_batch = hits_tensor.shape[0]
-    for event_idx in range(num_events_in_batch):
-        # for event_idx in range(min(num_events_in_batch, 20)):
+    with torch.no_grad():
+        # Timing: Transformer inference (encoding + attention)
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
-            event_start_time = time.perf_counter()
+            t0 = time.perf_counter()
 
-        # Extract data for this specific event
-        batch_hits_tensor = hits_tensor[event_idx]
-        batch_padding_mask = padding_mask[event_idx]
+        # Obtain encoded embeddings and attention weights from the model
+        encoded_space_point, attention_weights = model(hits_tensor, padding_mask)
 
-        event_seeds: List[Any] = []
-        event_encoded_points: List[Optional[np.ndarray]] = []
-        event_parameters: List[Optional[np.ndarray]] = []
-        event_attention_maps: List[Optional[np.ndarray]] = []
-
-        with torch.no_grad():
-            # Timing: Transformer inference (encoding + attention)
-            if cfg.timing_enabled:
-                Utils.sync_device(cfg.device_acc)
-                t0 = time.perf_counter()
-
-            # Obtain encoded embeddings and attention weights from the model
-            encoded_space_point, attention_weights = model(batch_hits_tensor, batch_padding_mask)
-
-            if cfg.timing_enabled:
-                Utils.sync_device(cfg.device_acc)
-                transformer_duration = time.perf_counter() - t0
-
-            # Timing: Parameter regression (+ optional pairwise scoring)
-            if cfg.timing_enabled:
-                Utils.sync_device(cfg.device_acc)
-                r0 = time.perf_counter()
-
-            ts_print("Reconstructed parameters computation not implemented....")
-            # Initialize parameters with zeros having shape [bins, hits, 5]
-            parameters = torch.zeros(
-                (batch_hits_tensor.shape[0], batch_hits_tensor.shape[1], 5),
-                device=cfg.device_acc,
-                dtype=batch_hits_tensor.dtype,
-            )
-
-            if cfg.timing_enabled:
-                Utils.sync_device(cfg.device_acc)
-                regression_duration = time.perf_counter() - r0
-
-        # Timing: Seed reconstruction across all bins
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
-            seed_reconstruction_start = time.perf_counter()
+            transformer_duration = time.perf_counter() - t0
 
-        for bin_idx in range(batch_hits_tensor.shape[0]):
+        # Timing: Parameter regression (+ optional pairwise scoring)
+        if cfg.timing_enabled:
+            Utils.sync_device(cfg.device_acc)
+            r0 = time.perf_counter()
 
-            # Get valid hits in this bin
-            bin_mask = ~batch_padding_mask[bin_idx].bool()
-            if not torch.any(bin_mask):
-                # Maintain positional consistency with explicit None placeholders
-                event_encoded_points.append(None)
-                event_parameters.append(None)
-                event_attention_maps.append(None)
-                event_seeds.append([])
-                continue
+        ts_print("Reconstructed parameters computation not implemented....")
+        # Initialize parameters with zeros having shape [bins, hits, 5]
+        parameters = torch.zeros(
+            (hits_tensor.shape[0], hits_tensor.shape[1], 5),
+            device=cfg.device_acc,
+            dtype=hits_tensor.dtype,
+        )
 
-            # Get encoded space points for valid hits
-            valid_sp = encoded_space_point[bin_idx].cpu().detach()
-            valid_parameters = parameters[bin_idx].cpu().detach()
-            valid_attention_weights = attention_weights[bin_idx].squeeze(0).detach().cpu()
-            bin_mask_cpu = bin_mask.detach().cpu()
+        if cfg.timing_enabled:
+            Utils.sync_device(cfg.device_acc)
+            regression_duration = time.perf_counter() - r0
 
-            # Store the encoded space points
-            event_encoded_points.append(valid_sp.numpy())
-            event_parameters.append(valid_parameters.numpy())
+    # Timing: Seed reconstruction across all bins
+    if cfg.timing_enabled:
+        Utils.sync_device(cfg.device_acc)
+        seed_reconstruction_start = time.perf_counter()
 
-            # Extract attention weights for this bin from single layer
-            if valid_attention_weights is not None:
+    for bin_idx in range(hits_tensor.shape[0]):
 
-                # Apply masking for valid hits only
-                neighbor_matrix_masked = valid_attention_weights[bin_mask_cpu, :][:, bin_mask_cpu]
+        # Get valid hits in this bin
+        bin_mask = ~padding_mask[bin_idx].bool()
+        if not torch.any(bin_mask):
+            # Maintain positional consistency with explicit None placeholders
+            event_encoded_points.append(None)
+            event_parameters.append(None)
+            event_attention_maps.append(None)
+            event_seeds.append([])
+            continue
 
-                # Choose clustering method based on loss configuration (mutually exclusive)
-                if cfg.has_loss_component("attention_next"):
-                    # Use attention-next based reconstruction (row-normalized scores)
-                    neighbor_matrix_masked.fill_diagonal_(float("-inf"))
-                    neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
-                    bin_seeds = Reconstruction.chained_seed_reconstruction(
-                        neighbor_matrix_masked,
-                        valid_parameters,
-                        score_threshold=0.2,
-                        max_chain_length=5,
-                    )
-                elif cfg.has_loss_component("attention_back"):
-                    # Use attention-back based reconstruction (row-normalized scores)
-                    neighbor_matrix_masked.fill_diagonal_(float("-inf"))
-                    neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
-                    bin_seeds = Reconstruction.back_chained_seed_reconstruction(
-                        neighbor_matrix_masked,
-                        valid_parameters,
-                        score_threshold=0.2,
-                        max_chain_length=5,
-                    )
-                else:
-                    # Fall back to attention-based reconstruction (thresholded k-NN)
-                    neighbor_matrix_masked = torch.sigmoid(neighbor_matrix_masked)
-                    bin_seeds = Reconstruction.topk_seed_reconstruction(
-                        neighbor_matrix_masked,
-                        valid_parameters,
-                        threshold=0.8,
-                        max_selection=5,
-                    )
-                event_seeds.append(bin_seeds)
+        # Get encoded space points for valid hits
+        valid_sp = encoded_space_point[bin_idx].cpu().detach()
+        valid_parameters = parameters[bin_idx].cpu().detach()
+        valid_attention_weights = attention_weights[bin_idx].squeeze(0).detach().cpu()
+        bin_mask_cpu = bin_mask.detach().cpu()
 
-                # Apply softmax row-wise to attention weights for monitoring
-                attention_softmax = torch.softmax(valid_attention_weights, dim=-1)
-                event_attention_maps.append(attention_softmax.cpu().detach().numpy())
+        # Store the encoded space points
+        event_encoded_points.append(valid_sp.numpy())
+        event_parameters.append(valid_parameters.numpy())
+
+        # Extract attention weights for this bin from single layer
+        if valid_attention_weights is not None:
+
+            # Apply masking for valid hits only
+            neighbor_matrix_masked = valid_attention_weights[bin_mask_cpu, :][:, bin_mask_cpu]
+
+            # Choose clustering method based on loss configuration (mutually exclusive)
+            if cfg.has_loss_component("attention_next"):
+                # Use attention-next based reconstruction (row-normalized scores)
+                neighbor_matrix_masked.fill_diagonal_(float("-inf"))
+                neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
+                bin_seeds = Reconstruction.chained_seed_reconstruction(
+                    neighbor_matrix_masked,
+                    valid_parameters,
+                    score_threshold=0.2,
+                    max_chain_length=5,
+                )
+            elif cfg.has_loss_component("attention_back"):
+                # Use attention-back based reconstruction (row-normalized scores)
+                neighbor_matrix_masked.fill_diagonal_(float("-inf"))
+                neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
+                bin_seeds = Reconstruction.back_chained_seed_reconstruction(
+                    neighbor_matrix_masked,
+                    valid_parameters,
+                    score_threshold=0.2,
+                    max_chain_length=5,
+                )
             else:
-                # No attention weights or pairwise scores available - append placeholder to keep alignment
-                event_seeds.append([])
-                event_attention_maps.append(None)
+                # Fall back to attention-based reconstruction (thresholded k-NN)
+                neighbor_matrix_masked = torch.sigmoid(neighbor_matrix_masked)
+                bin_seeds = Reconstruction.topk_seed_reconstruction(
+                    neighbor_matrix_masked,
+                    valid_parameters,
+                    threshold=0.8,
+                    max_selection=5,
+                )
+            event_seeds.append(bin_seeds)
 
-        # End seed reconstruction timing
-        if cfg.timing_enabled:
-            Utils.sync_device(cfg.device_acc)
-            seed_reconstruction_end = time.perf_counter()
-            seed_reconstruction_duration = seed_reconstruction_end - seed_reconstruction_start
+            # Apply softmax row-wise to attention weights for monitoring
+            attention_softmax = torch.softmax(valid_attention_weights, dim=-1)
+            event_attention_maps.append(attention_softmax.cpu().detach().numpy())
+        else:
+            # No attention weights or pairwise scores available - append placeholder to keep alignment
+            event_seeds.append([])
+            event_attention_maps.append(None)
 
-        seeds.append(event_seeds)
-        model_outputs.append(event_encoded_points)
-        reconstructed_parameters.append(event_parameters)
-        attention_maps.append(event_attention_maps)
-
-        # Record event processing times by component
-        if cfg.timing_enabled:
-            Utils.sync_device(cfg.device_acc)
-            event_end_time = time.perf_counter()
-            event_duration = event_end_time - event_start_time
-            processing_times.append(event_duration)
-            transformer_times.append(transformer_duration)
-            regression_times.append(regression_duration)
-            seed_reconstruction_times.append(seed_reconstruction_duration)
+    # End seed reconstruction timing
+    if cfg.timing_enabled:
+        Utils.sync_device(cfg.device_acc)
+        seed_reconstruction_end = time.perf_counter()
+        seed_reconstruction_duration = seed_reconstruction_end - seed_reconstruction_start
+        event_duration = time.perf_counter() - event_start_time
 
     return (
-        seeds,
-        model_outputs,
-        reconstructed_parameters,
-        attention_maps,
-        processing_times,
-        transformer_times,
-        regression_times,
-        seed_reconstruction_times,
+        event_seeds,
+        event_encoded_points,
+        event_parameters,
+        event_attention_maps,
+        event_duration,
+        transformer_duration,
+        regression_duration,
+        seed_reconstruction_duration,
     )
 
 
@@ -810,52 +781,52 @@ def main():
         end_event = start_event + dataset.get_batch_size(file_idx, file_idx)
         event_counter += end_event - start_event
 
-        start_time = time.perf_counter() if cfg.timing_enabled else None
-        (
-            batch_seeds,
-            _,
-            batch_reconstructed_parameters,
-            batch_attention_maps,
-            batch_processing_times,
-            batch_transformer_times,
-            batch_regression_times,
-            batch_seed_reconstruction_times,
-        ) = run_model(model_val, batch_data, cfg)
-        total_time += time.perf_counter() - start_time if cfg.timing_enabled else 0.0
-
-        # Accumulate timings for speed summary
-        if cfg.timing_enabled:
-            processing_times.extend(batch_processing_times)
-            transformer_times.extend(batch_transformer_times)
-            regression_times.extend(batch_regression_times)
-            seed_reconstruction_times.extend(batch_seed_reconstruction_times)
-
         for events in range(start_event, end_event):
             event_idx = events - start_event
+
+            start_time = time.perf_counter() if cfg.timing_enabled else None
+            (
+                batch_seeds,
+                _,
+                batch_reconstructed_parameters,
+                batch_attention_maps,
+                batch_processing_times,
+                batch_transformer_times,
+                batch_regression_times,
+                batch_seed_reconstruction_times,
+            ) = run_model(model_val, batch_data["hits_tensor"][event_idx], batch_data["padding_mask"][event_idx], cfg)
+            total_time += time.perf_counter() - start_time if cfg.timing_enabled else 0.0
+
+            # Accumulate timings for speed summary
+            if cfg.timing_enabled:
+                processing_times.extend(batch_processing_times)
+                transformer_times.extend(batch_transformer_times)
+                regression_times.extend(batch_regression_times)
+                seed_reconstruction_times.extend(batch_seed_reconstruction_times)
+                del batch_processing_times
+                del batch_transformer_times
+                del batch_regression_times
+                del batch_seed_reconstruction_times
+
             if event_idx in event_idx_list:
                 for bin_idx in bin_idx_list:
                     monitoring.analyse_bin_performance(
                         event_idx=event_idx,
                         bin_idx=bin_idx,
-                        hits=batch_data["hits_tensor"][event_idx, bin_idx].cpu().numpy(),
+                        hits=batch_data["hits_tensor"][event_idx][bin_idx].cpu().numpy(),
                         particles=batch_data["particles_tensor"][event_idx].cpu().numpy(),
-                        reco_params=batch_reconstructed_parameters[event_idx][bin_idx],
-                        seeds=batch_seeds[event_idx][bin_idx],
+                        reco_params=batch_reconstructed_parameters[bin_idx],
+                        seeds=batch_seeds[bin_idx],
                         pairs=batch_data["good_pairs"][event_idx][bin_idx].cpu().numpy(),
-                        attention_map=batch_attention_maps[event_idx][bin_idx],
+                        attention_map=batch_attention_maps[bin_idx],
                     )
-                if events > max(event_idx_list):
-                    print(f"Completed detailed analysis for events {event_idx_list} and bins {bin_idx_list}.")
-                    print("Removing large intermediate tensors from memory to free up space for remaining evaluation")
-                    del batch_attention_maps
-                    del batch_reconstructed_parameters
 
             monitoring.bin_seeding_performance(
                 event_idx=event_idx,
                 event_hits=batch_data["hits_tensor"][event_idx].cpu().numpy(),
                 event_particles=batch_data["particles_tensor"][event_idx].cpu().numpy(),
                 event_hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx].cpu().numpy(),
-                event_seeds=batch_seeds[event_idx],
+                event_seeds=batch_seeds,
             )
 
             start_event = end_event
