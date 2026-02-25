@@ -329,7 +329,6 @@ def visualize_attention_map(
 
 def create_seeding_performance_plots(
     results: Mapping[str, Any],
-    seed_metrics: Sequence[Mapping[str, Any]],
     error_arrays: Mapping[str, Sequence[float]],
     bin_summaries: Sequence[Mapping[str, Any]],
 ) -> None:
@@ -357,7 +356,7 @@ def create_seeding_performance_plots(
     - Saves `seeding_performance_analysis.png`. May also call `create_bin_complexity_plots`.
     """
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
     params = [
         {"key": "z", "label": "Z", "unit": "[mm]"},
@@ -413,73 +412,6 @@ def create_seeding_performance_plots(
                 fontsize=14,
             )
             ax.set_title(f"{meta['label']} Seed Resolution")
-
-    ax = axes[1, 2]
-    efficiencies = [b["seeding_efficiency"] for b in bin_summaries]
-    pure_efficiencies = [b.get("pure_seeding_efficiency", 0.0) for b in bin_summaries]
-    all_vals = np.array(efficiencies + pure_efficiencies)
-    bins = min(30, max(10, len(all_vals) // 10)) if len(all_vals) > 0 else 10
-    ax.hist(
-        efficiencies,
-        bins=bins,
-        alpha=0.6,
-        color="skyblue",
-        edgecolor="black",
-        linewidth=0.5,
-        label=f"Regular (mean {np.mean(efficiencies):.1%} ± {np.std(efficiencies):.1%})",
-    )
-    ax.hist(
-        pure_efficiencies,
-        bins=bins,
-        alpha=0.6,
-        color="orange",
-        edgecolor="black",
-        linewidth=0.5,
-        label=f"Pure (mean {np.mean(pure_efficiencies):.1%} ± {np.std(pure_efficiencies):.1%})",
-    )
-    ax.set_title("Bin-wise Seeding Efficiency (Regular vs Pure)")
-    ax.set_xlabel("Seeding Efficiency")
-    ax.set_ylabel("Number of Bins")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-
-    ax = axes[0, 2]
-    hits_common = [s["n_hits_common"] for s in seed_metrics]
-    if hits_common:
-        hit_counts = np.bincount(hits_common)
-        hit_values = np.arange(len(hit_counts))
-        mask = hit_counts > 0
-        PlotUtility.create_bar_plot(
-            ax,
-            hit_values[mask],
-            hit_counts[mask],
-            title="Distribution of Hits in Common",
-            xlabel="Number of Hits in Common",
-            ylabel="Number of Seed-Particle Associations",
-            color="lightgreen",
-        )
-        stats_text = f"Mean: {np.mean(hits_common):.2f}\nMax: {np.max(hits_common)}\nAssociations: {len(hits_common)}"
-        ax.text(
-            0.95,
-            0.95,
-            stats_text,
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment="top",
-            horizontalalignment="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        )
-    else:
-        ax.text(
-            0.5,
-            0.5,
-            "No seed-particle associations found",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=14,
-        )
-        ax.set_title("Distribution of Hits in Common")
 
     plt.tight_layout()
     plot_filename = "seeding_performance_analysis.png"

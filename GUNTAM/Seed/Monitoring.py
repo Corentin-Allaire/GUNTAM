@@ -70,8 +70,6 @@ class PerformanceMonitor:
             "pt": [],
         }
 
-        self.all_seed_metrics: list[dict[str, Any]] = []
-
         self.eligible_particles: list[dict[str, Any]] = []
 
         self.bin_summaries: list[dict[str, Any]] = []
@@ -342,12 +340,7 @@ class PerformanceMonitor:
         elif a_pure == b_pure and best_data.get("n_common_hits", 0) > cur.get("n_common_hits", 0):
             event_particle_best_seeds[particle_id] = best_data
 
-    def _process_bin_best_associations(
-        self,
-        best_associations: Dict[int, Dict[str, Any]],
-        event_idx: int,
-        bin_idx: int,
-    ) -> None:
+    def _process_bin_best_associations(self, best_associations: Dict[int, Dict[str, Any]]) -> None:
         """Record per-bin seed metrics for best associations.
 
         For each particle's best association in a bin, compute error components
@@ -372,21 +365,6 @@ class PerformanceMonitor:
             self.seed_errors["eta"].append(errors[1])
             self.seed_errors["phi"].append(errors[2])
             self.seed_errors["pt"].append(errors[3])
-
-            self.all_seed_metrics.append(
-                {
-                    "event_idx": event_idx,
-                    "bin_idx": bin_idx,
-                    "particle_id": particle_id,
-                    "seed_idx": data["best_seed_idx"],
-                    "n_hits_common": data["n_common_hits"],
-                    "is_pure": data.get("is_pure", False),
-                    "param_distance": data["param_distance"],
-                    "true_params": true_params,
-                    "seed_params": seed_params.copy(),
-                    "errors": errors.copy(),
-                }
-            )
 
     def _finalize_event_particle_status(
         self,
@@ -519,8 +497,6 @@ class PerformanceMonitor:
             # Store resolution data (per bin best seeds)
             self._process_bin_best_associations(
                 bin_particles,
-                event_idx,
-                bin_idx,
             )
 
             # Bin summary
@@ -596,7 +572,7 @@ class PerformanceMonitor:
 
         # Plots
         if self.save_plots:
-            create_seeding_performance_plots(performance_results, self.all_seed_metrics, self.seed_errors, self.bin_summaries)
+            create_seeding_performance_plots(performance_results, self.seed_errors, self.bin_summaries)
             if self.eligible_particles:
                 create_particle_reconstruction_comparison_plots(self.eligible_particles)
             try:

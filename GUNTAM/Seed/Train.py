@@ -844,6 +844,11 @@ def main():
                         pairs=batch_data["good_pairs"][event_idx][bin_idx].cpu().numpy(),
                         attention_map=batch_attention_maps[event_idx][bin_idx],
                     )
+                if events > max(event_idx_list):
+                    print(f"Completed detailed analysis for events {event_idx_list} and bins {bin_idx_list}.")
+                    print("Removing large intermediate tensors from memory to free up space for remaining evaluation")
+                    del batch_attention_maps
+                    del batch_reconstructed_parameters
 
             monitoring.bin_seeding_performance(
                 event_idx=event_idx,
@@ -855,6 +860,7 @@ def main():
 
             start_event = end_event
 
+    print("Model evaluation completed.")
     monitoring.performance_analysis()
 
     # Final speed summary with component breakdown
