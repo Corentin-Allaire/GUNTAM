@@ -781,8 +781,7 @@ def main():
         end_event = start_event + dataset.get_batch_size(file_idx, file_idx)
         event_counter += end_event - start_event
 
-        for events in range(start_event, end_event):
-            event_idx = events - start_event
+        for event_idx in range(start_event, end_event):
 
             start_time = time.perf_counter() if cfg.timing_enabled else None
             (
