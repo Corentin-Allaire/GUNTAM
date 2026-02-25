@@ -799,10 +799,10 @@ def main():
 
             # Accumulate timings for speed summary
             if cfg.timing_enabled:
-                processing_times.extend(batch_processing_times)
-                transformer_times.extend(batch_transformer_times)
-                regression_times.extend(batch_regression_times)
-                seed_reconstruction_times.extend(batch_seed_reconstruction_times)
+                processing_times.append(batch_processing_times)
+                transformer_times.append(batch_transformer_times)
+                regression_times.append(batch_regression_times)
+                seed_reconstruction_times.append(batch_seed_reconstruction_times)
                 del batch_processing_times
                 del batch_transformer_times
                 del batch_regression_times
