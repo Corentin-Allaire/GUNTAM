@@ -780,9 +780,8 @@ def main():
         batch_data = dataset.get_file(file_idx)
         end_event = start_event + dataset.get_batch_size(file_idx, file_idx)
         event_counter += end_event - start_event
-
-        for event_idx in range(start_event, end_event):
-
+        for event in range(start_event, end_event):
+            event_idx = event - start_event
             start_time = time.perf_counter() if cfg.timing_enabled else None
             (
                 batch_seeds,
@@ -807,7 +806,7 @@ def main():
                 del batch_regression_times
                 del batch_seed_reconstruction_times
 
-            if event_idx in event_idx_list:
+            if event in event_idx_list:
                 for bin_idx in bin_idx_list:
                     monitoring.analyse_bin_performance(
                         event_idx=event_idx,
@@ -828,7 +827,7 @@ def main():
                 event_seeds=batch_seeds,
             )
 
-            start_event = end_event
+        start_event = end_event
 
     print("Model evaluation completed.")
     monitoring.performance_analysis()

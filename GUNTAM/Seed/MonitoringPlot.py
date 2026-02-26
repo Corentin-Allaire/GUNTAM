@@ -752,22 +752,11 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
         half_widths = 0.5 * (edges[1:] - edges[:-1])
         return centers, eff, err_eff, eff_pure, err_eff_pure, counts_all, half_widths
 
-    def pct_bounds(arr: np.ndarray) -> tuple[float, float]:
-        if len(arr) == 0:
-            return (0.0, 1.0)
-        arr_f = np.asarray(arr, dtype=float)
-        lo = float(np.percentile(arr_f, 0.0))
-        hi = float(np.percentile(arr_f, 100.0))
-        if lo == hi:
-            lo -= 1e-6
-            hi += 1e-6
-        return (lo, hi)
-
-    bins_d0 = np.linspace(*pct_bounds(d0), num=20)
-    bins_eta = np.linspace(*pct_bounds(eta), num=20)
+    bins_d0 = np.linspace(0, 10, num=20)
+    bins_eta = np.linspace(-3, 3, num=20)
     bins_phi = np.linspace(-np.pi, np.pi, num=21)
-    bins_z0 = np.linspace(*pct_bounds(z0), num=20)
-    bins_pt = np.linspace(*pct_bounds(pt), num=20)
+    bins_z0 = np.linspace(-150, 150, num=20)
+    bins_pt = np.linspace(0, 10, num=20)
 
     deltaR = np.array([p.get("deltaR_min", np.inf) for p in eligible_particles], dtype=float)
     finite_dr = np.isfinite(deltaR)
@@ -971,22 +960,11 @@ def create_seeds_per_particle_vs_truth_param_plots(
     pt = truth_params[:, 4]
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
 
-    def pct_bounds(arr: np.ndarray) -> tuple[float, float]:
-        if len(arr) == 0:
-            return (0.0, 1.0)
-        arr_f = np.asarray(arr, dtype=float)
-        lo = float(np.percentile(arr_f, 1))
-        hi = float(np.percentile(arr_f, 99))
-        if lo == hi:
-            lo -= 1e-6
-            hi += 1e-6
-        return (lo, hi)
-
-    bins_d0 = np.linspace(*pct_bounds(d0), num=20)
-    bins_eta = np.linspace(*pct_bounds(eta), num=20)
+    bins_d0 = np.linspace(0, 10, num=20)
+    bins_eta = np.linspace(-3, 3, num=20)
     bins_phi = np.linspace(-np.pi, np.pi, num=21)
-    bins_z0 = np.linspace(*pct_bounds(z0), num=20)
-    bins_pt = np.linspace(*pct_bounds(pt), num=20)
+    bins_z0 = np.linspace(-150, 150, num=20)
+    bins_pt = np.linspace(0, 10, num=20)
 
     def compute_mean_counts(xvals, counts, bins):
         sum_counts, edges = np.histogram(xvals, bins=bins, weights=counts)
