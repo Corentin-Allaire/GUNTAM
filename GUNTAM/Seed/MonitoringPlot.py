@@ -698,7 +698,10 @@ def create_particle_reconstruction_comparison_plots(eligible_particles: Sequence
     plt.close()
 
 
-def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[str, Any]]) -> None:
+def create_efficiency_vs_truth_param_plots(
+    eligible_particles: Sequence[Mapping[str, Any]],
+    exclude_crossing: bool = False,
+) -> None:
     """
     Plot seeding efficiency (regular and pure) versus truth parameters.
 
@@ -709,18 +712,33 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
         - `"had_seed"`: bool flag for at least one seed.
         - `"had_pure_seed"`: bool flag for a pure seed.
         - Optional `"deltaR_min"`: float for ΔR to closest neighbor (used if present).
+        - Optional `"crosses_z0"`: bool, True if particle has hits on both +Z and -Z.
+    - exclude_crossing: bool (default False)
+        When True, particles whose hits span both positive and negative Z are removed
+        before computing efficiencies. Output is saved with a ``_no_crossz`` suffix.
 
     Plots
     - Errorbar plots of efficiency vs each parameter: η, φ [rad], z0 [mm], pT [GeV],
         and ΔR when available. Both regular and pure efficiencies are shown.
 
     Output
-    - Saves `seeding_efficiency_vs_truth_params.png`.
+    - Saves `seeding_efficiency_vs_truth_params.png` (or ``_no_crossz.png`` variant).
     """
 
     if not eligible_particles:
         print("No eligible particles for efficiency-vs-parameter plots")
         return
+
+    if exclude_crossing:
+        eligible_particles = [p for p in eligible_particles if not p.get("crosses_z0", False)]
+        if not eligible_particles:
+            print("No non-crossing particles for efficiency-vs-parameter plots")
+            return
+        out_name = "seeding_efficiency_vs_truth_params_no_crossz.png"
+        title_tag = " (non-crossing only)"
+    else:
+        out_name = "seeding_efficiency_vs_truth_params.png"
+        title_tag = ""
 
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     has_seed_flags = np.array([bool(p.get("had_seed", False)) for p in eligible_particles], dtype=bool)
@@ -844,82 +862,19 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
             ax.grid(True, alpha=0.3)
             ax.legend()
 
-        plot_ax(
-            axes[0],
-            c_d0,
-            w_d0,
-            n_d0,
-            e_d0,
-            e_d0_err,
-            ep_d0,
-            ep_d0_err,
-            "Truth d0 [mm]",
-            "Efficiency vs d0",
-        )
-        plot_ax(
-            axes[1],
-            c_z0,
-            w_z0,
-            n_z0,
-            e_z0,
-            e_z0_err,
-            ep_z0,
-            ep_z0_err,
-            "Truth z0 [mm]",
-            "Efficiency vs z0",
-        )
-        plot_ax(
-            axes[2],
-            c_phi,
-            w_phi,
-            n_phi,
-            e_phi,
-            e_phi_err,
-            ep_phi,
-            ep_phi_err,
-            "Truth phi [rad]",
-            "Efficiency vs phi",
-        )
-        plot_ax(
-            axes[3],
-            c_eta,
-            w_eta,
-            n_eta,
-            e_eta,
-            e_eta_err,
-            ep_eta,
-            ep_eta_err,
-            "Truth eta",
-            "Efficiency vs eta",
-        )
-        plot_ax(
-            axes[4],
-            c_pt,
-            w_pt,
-            n_pt,
-            e_pt,
-            e_pt_err,
-            ep_pt,
-            ep_pt_err,
-            "Truth pT [GeV]",
-            "Efficiency vs pT",
-        )
+        plot_ax(axes[0], c_d0, w_d0, n_d0, e_d0, e_d0_err, ep_d0, ep_d0_err, "Truth d0 [mm]", "Efficiency vs d0")
+        plot_ax(axes[1], c_z0, w_z0, n_z0, e_z0, e_z0_err, ep_z0, ep_z0_err, "Truth z0 [mm]", "Efficiency vs z0")
+        plot_ax(axes[2], c_phi, w_phi, n_phi, e_phi, e_phi_err, ep_phi, ep_phi_err, "Truth phi [rad]", "Efficiency vs phi")
+        plot_ax(axes[3], c_eta, w_eta, n_eta, e_eta, e_eta_err, ep_eta, ep_eta_err, "Truth eta", "Efficiency vs eta")
+        plot_ax(axes[4], c_pt, w_pt, n_pt, e_pt, e_pt_err, ep_pt, ep_pt_err, "Truth pT [GeV]", "Efficiency vs pT")
         if plot_dr:
-            plot_ax(
-                axes[5],
-                c_dr,
-                w_dr,
-                n_dr,
-                e_dr,
-                e_dr_err,
-                ep_dr,
-                ep_dr_err,
-                "ΔR to closest particle",
-                "Efficiency vs ΔR",
-            )
+            plot_ax(axes[5], c_dr, w_dr, n_dr, e_dr, e_dr_err, ep_dr, ep_dr_err, "ΔR to closest particle", "Efficiency vs ΔR")
 
+        fig.suptitle(
+            f"Seeding efficiency vs truth parameters{title_tag}  (N={len(eligible_particles)})",
+            fontsize=10,
+        )
         plt.tight_layout()
-        out_name = "seeding_efficiency_vs_truth_params.png"
         plt.savefig(out_name, dpi=300, bbox_inches="tight")
         print("Efficiency vs truth-parameter plots saved as:", out_name)
         plt.close()
@@ -929,6 +884,7 @@ def create_efficiency_vs_truth_param_plots(eligible_particles: Sequence[Mapping[
 
 def create_seeds_per_particle_vs_truth_param_plots(
     eligible_particles: Sequence[Mapping[str, Any]],
+    exclude_crossing: bool = False,
 ) -> None:
     """
     Plot the mean number of seeds per particle versus truth parameters.
@@ -938,17 +894,32 @@ def create_seeds_per_particle_vs_truth_param_plots(
         Required keys per particle:
         - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
         - `"n_seeds"`: int number of seeds created for the particle.
+        - Optional `"crosses_z0"`: bool, True if particle has hits on both +Z and -Z.
+    - exclude_crossing: bool (default False)
+        When True, particles whose hits span both positive and negative Z are removed
+        before computing means. Output is saved with a ``_no_crossz`` suffix.
 
     Plots
     - Errorbar plots of mean seeds-per-particle vs η, φ [rad], z0 [mm], pT [GeV].
 
     Output
-    - Saves `seeds_per_particle_vs_truth_params.png`.
+    - Saves `seeds_per_particle_vs_truth_params.png` (or ``_no_crossz.png`` variant).
     """
 
     if not eligible_particles:
         print("No eligible particles for seeds-per-particle-vs-parameter plots")
         return
+
+    if exclude_crossing:
+        eligible_particles = [p for p in eligible_particles if not p.get("crosses_z0", False)]
+        if not eligible_particles:
+            print("No non-crossing particles for seeds-per-particle-vs-parameter plots")
+            return
+        out_name = "seeds_per_particle_vs_truth_params_no_crossz.png"
+        title_tag = " (non-crossing only)"
+    else:
+        out_name = "seeds_per_particle_vs_truth_params.png"
+        title_tag = ""
 
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     n_seeds = np.array([int(p.get("n_seeds", 0)) for p in eligible_particles])
@@ -998,7 +969,7 @@ def create_seeds_per_particle_vs_truth_param_plots(
                 fmt="o",
                 linestyle="none",
                 color="tab:blue",
-                label="All seeds",
+                label="Seeds per particle",
                 capsize=0,
                 linewidth=1,
             )
@@ -1015,54 +986,17 @@ def create_seeds_per_particle_vs_truth_param_plots(
             ax.set_ylim(0.0, y_max)
             ax.legend()
 
-        plot_ax(
-            axes[0],
-            c_d0,
-            w_d0,
-            msp_d0,
-            msp_d0_sem,
-            "Truth d0 [mm]",
-            "Seeds/particle vs d0",
-        )
-        plot_ax(
-            axes[1],
-            c_z0,
-            w_z0,
-            msp_z0,
-            msp_z0_sem,
-            "Truth z0 [mm]",
-            "Seeds/particle vs z0",
-        )
-        plot_ax(
-            axes[2],
-            c_phi,
-            w_phi,
-            msp_phi,
-            msp_phi_sem,
-            "Truth phi [rad]",
-            "Seeds/particle vs phi",
-        )
-        plot_ax(
-            axes[3],
-            c_eta,
-            w_eta,
-            msp_eta,
-            msp_eta_sem,
-            "Truth eta",
-            "Seeds/particle vs eta",
-        )
-        plot_ax(
-            axes[4],
-            c_pt,
-            w_pt,
-            msp_pt,
-            msp_pt_sem,
-            "Truth pT [GeV]",
-            "Seeds/particle vs pT",
-        )
+        plot_ax(axes[0], c_d0, w_d0, msp_d0, msp_d0_sem, "Truth d0 [mm]", "Seeds/particle vs d0")
+        plot_ax(axes[1], c_z0, w_z0, msp_z0, msp_z0_sem, "Truth z0 [mm]", "Seeds/particle vs z0")
+        plot_ax(axes[2], c_phi, w_phi, msp_phi, msp_phi_sem, "Truth phi [rad]", "Seeds/particle vs phi")
+        plot_ax(axes[3], c_eta, w_eta, msp_eta, msp_eta_sem, "Truth eta", "Seeds/particle vs eta")
+        plot_ax(axes[4], c_pt, w_pt, msp_pt, msp_pt_sem, "Truth pT [GeV]", "Seeds/particle vs pT")
 
+        fig.suptitle(
+            f"Seeds per particle vs truth parameters{title_tag}  (N={len(eligible_particles)})",
+            fontsize=10,
+        )
         plt.tight_layout()
-        out_name = "seeds_per_particle_vs_truth_params.png"
         plt.savefig(out_name, dpi=300, bbox_inches="tight")
         print("Seeds-per-particle vs truth-parameter plots saved as:", out_name)
         plt.close()
@@ -1070,7 +1004,10 @@ def create_seeds_per_particle_vs_truth_param_plots(
         print(f"Error while plotting seeds-per-particle vs parameters: {e}")
 
 
-def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]]) -> None:
+def create_2d_efficiency_heatmaps(
+    eligible_particles: Sequence[Mapping[str, Any]],
+    exclude_crossing: bool = False,
+) -> None:
     """
     Create 2D heatmaps showing seeding efficiency as a function of pairs of truth parameters.
 
@@ -1080,17 +1017,32 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
         - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
         - `"had_seed"`: bool flag for at least one seed.
         - Optional `"deltaR_min"`: float for ΔR to closest neighbor.
+        - Optional `"crosses_z0"`: bool, True if particle has hits on both +Z and -Z.
+    - exclude_crossing: bool (default False)
+        When True, particles whose hits span both positive and negative Z are removed
+        before computing efficiencies. Output is saved with a ``_no_crossz`` suffix.
 
     Plots
-    - 2D heatmaps for all pairs including deltaR when available
+    - 2D heatmaps for all pairs including deltaR when available.
 
     Output
-    - Saves `efficiency_2d_heatmaps.png`.
+    - Saves `efficiency_2d_heatmaps.png` (or ``_no_crossz.png`` variant).
     """
 
     if not eligible_particles:
         print("No eligible particles for 2D efficiency heatmaps")
         return
+
+    if exclude_crossing:
+        eligible_particles = [p for p in eligible_particles if not p.get("crosses_z0", False)]
+        if not eligible_particles:
+            print("No non-crossing particles for 2D efficiency heatmaps")
+            return
+        out_name = "efficiency_2d_heatmaps_no_crossz.png"
+        title_tag = " (non-crossing only)"
+    else:
+        out_name = "efficiency_2d_heatmaps.png"
+        title_tag = ""
 
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     has_seed = np.array([bool(p.get("had_seed", False)) for p in eligible_particles])
@@ -1240,8 +1192,8 @@ def create_2d_efficiency_heatmaps(eligible_particles: Sequence[Mapping[str, Any]
     for idx in range(n_plots, len(axes)):
         axes[idx].axis("off")
 
+    fig.suptitle(f"2D seeding efficiency heatmaps{title_tag}  (N={len(eligible_particles)})", fontsize=12)
     plt.tight_layout()
-    out_name = "efficiency_2d_heatmaps.png"
     plt.savefig(out_name, dpi=300, bbox_inches="tight")
     print("2D efficiency heatmap plots saved as:", out_name)
     plt.close()

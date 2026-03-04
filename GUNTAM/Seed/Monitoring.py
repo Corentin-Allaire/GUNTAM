@@ -278,6 +278,9 @@ class PerformanceMonitor:
                     "unique_r_keys": set(),
                     # Track seeds associated per bin
                     "n_seeds_in_bins": [],
+                    # Track whether particle has hits at positive and negative Z
+                    "has_pos_z": False,
+                    "has_neg_z": False,
                 }
 
             # Accumulate unique r keys for this particle in this bin
@@ -288,6 +291,12 @@ class PerformanceMonitor:
                 r_keys = np.round(rs / truth_r_tol)
                 for k in r_keys:
                     event_particle_bins[particle_id]["unique_r_keys"].add(int(k))
+                # Track whether the particle has hits at positive / negative Z
+                zs = tx_ty_tz[:, 2]
+                if np.any(zs > 0):
+                    event_particle_bins[particle_id]["has_pos_z"] = True
+                if np.any(zs < 0):
+                    event_particle_bins[particle_id]["has_neg_z"] = True
 
             # Record bin index and seed presence flags
             event_particle_bins[particle_id]["bins"].append(bin_idx)
@@ -393,6 +402,8 @@ class PerformanceMonitor:
             # Aggregate seed counts across all bins for this particle
             n_seeds_total = int(np.sum(info.get("n_seeds_in_bins", [])))
 
+            crosses_z0 = info.get("has_pos_z", False) and info.get("has_neg_z", False)
+
             info = {
                 "particle_id": particle_id,
                 "event_idx": event_idx,
@@ -402,6 +413,7 @@ class PerformanceMonitor:
                 "had_seed": has_seed_globally,
                 "had_pure_seed": has_pure_seed_globally,
                 "n_seeds": n_seeds_total,
+                "crosses_z0": crosses_z0,
             }
 
             self.eligible_particles.append(info)
@@ -433,8 +445,8 @@ class PerformanceMonitor:
                     p["deltaR_min"] = float("inf")
                 continue
 
-            etas = np.array([p["true_params"][1] for p in plist], dtype=float)
-            phis = np.array([p["true_params"][2] for p in plist], dtype=float)
+            etas = np.array([p["true_params"][3] for p in plist], dtype=float)  # index 3 = eta
+            phis = np.array([p["true_params"][2] for p in plist], dtype=float)  # index 2 = phi
 
             # Build pairwise Δη, Δφ and ΔR
             dEta = etas[:, None] - etas[None, :]
@@ -580,6 +592,9 @@ class PerformanceMonitor:
                 create_efficiency_vs_truth_param_plots(self.eligible_particles)
                 create_seeds_per_particle_vs_truth_param_plots(self.eligible_particles)
                 create_2d_efficiency_heatmaps(self.eligible_particles)
+                create_efficiency_vs_truth_param_plots(self.eligible_particles, exclude_crossing=True)
+                create_seeds_per_particle_vs_truth_param_plots(self.eligible_particles, exclude_crossing=True)
+                create_2d_efficiency_heatmaps(self.eligible_particles, exclude_crossing=True)
             except Exception as e:
                 print(f"Error creating efficiency-vs-parameter plots: {e}")
 
