@@ -202,3 +202,106 @@ def back_chained_seed_reconstruction(
             seeds.append((chain_indices.cpu().numpy(), chain_params.cpu().numpy()))
 
     return seeds
+
+
+def weighted_chained_seed_reconstruction(
+    attention_map: torch.Tensor,
+    reconstructed_parameters: torch.Tensor,
+    score_threshold: float = 0.01,
+    max_chain_length: int = 5,
+    pairs_per_hit: int = 2,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Weighted chain seeding: build chains of hits by extending forward/backward
+    along the highest-attention edges.
+
+    For each hit, the `pairs_per_hit` highest-attention neighbors above `score_threshold`
+    are selected. Only forward pairs (hit_i < hit_j) are retained, de-duplicated across
+    hits, and processed in descending score order. Each pair seeds a chain that is
+    iteratively extended: at every step the algorithm looks at the best outgoing edge
+    from the current chain head (forward extension) and the best incoming edge to the
+    current chain tail (backward extension), picks whichever has the higher score, and
+    appends that hit. Once a hit has been added to a chain it is removed from the
+    candidate pool so it cannot be reused. Chains with fewer than 3 hits are discarded.
+
+    Args:
+        attention_map: 2D tensor [N, N] with attention weights
+        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
+        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
+        max_chain_length: Maximum length of the chain (default: 5)
+        pairs_per_hit: Number of top-attention neighbors to consider per hit when
+            building the initial pair list (default: 2).
+
+    Returns:
+        List of (hit_indices, avg_parameters) tuples for initial per-hit chains
+    """
+
+    device = attention_map.device
+    num_hits = attention_map.size(0)
+    seeds: List[Tuple[np.ndarray, np.ndarray]] = []
+
+    # For each hit, keep the top pairs_per_hit neighbors above score_threshold
+    k = min(pairs_per_hit, num_hits - 1)
+    att = attention_map.clone()
+    att.fill_diagonal_(float("-inf"))  # exclude self-pairs
+
+    topk_vals, topk_idx = torch.topk(att, k, dim=1, largest=True, sorted=True)  # [N, k]
+
+    # Flatten into (hit_i, hit_j, score) rows, filtering by threshold
+    hit_i_list = torch.arange(num_hits, device=device).unsqueeze(1).expand_as(topk_idx).reshape(-1).long()
+    hit_j_list = topk_idx.reshape(-1).long()
+    scores_list = topk_vals.reshape(-1)
+
+    above_thresh = scores_list >= score_threshold
+    forward_pairs = hit_i_list < hit_j_list
+    mask = above_thresh & forward_pairs
+    hit_i_np = hit_i_list[mask].cpu().numpy()
+    hit_j_np = hit_j_list[mask].cpu().numpy()
+    scores_np = scores_list[mask].cpu().numpy()
+
+    sort_order = np.argsort(-scores_np)
+    hit_i_np = hit_i_np[sort_order]
+    hit_j_np = hit_j_np[sort_order]
+    scores_np = scores_np[sort_order]
+
+    if len(hit_i_np) == 0:
+        return seeds
+
+    for i in range(len(hit_i_np)):
+        hit_i = hit_i_np[i]
+        hit_j = hit_j_np[i]
+        score = scores_np[i]
+        to_remove = []
+
+        if score < 0:
+            continue
+
+        to_remove.append(hit_j)
+        seed = [hit_i, hit_j]
+        while len(seed) < max_chain_length:
+            # Identify the highest forward and back attention scores for hit_i and hit_j
+            backward_mask = hit_j_np == hit_i
+            forward_mask = hit_i_np == hit_j
+            max_forward_id = np.argmax(scores_np[forward_mask]) if forward_mask.any() else None
+            max_backward_id = np.argmax(scores_np[backward_mask]) if backward_mask.any() else None
+            max_forward_score = scores_np[forward_mask][max_forward_id] if forward_mask.any() else 0
+            max_backward_score = scores_np[backward_mask][max_backward_id] if backward_mask.any() else 0
+            if max_forward_score > max_backward_score:
+                hit_j = hit_j_np[forward_mask][max_forward_id]
+                seed.append(hit_j)
+                to_remove.append(hit_j)
+            elif max_backward_score > max_forward_score:
+                to_remove.append(hit_i)
+                hit_i = hit_i_np[backward_mask][max_backward_id]
+                seed.append(hit_i)
+            else:
+                break
+
+        if len(seed) >= 3:
+            for hit in to_remove:
+                scores_np[hit_j_np == hit] = 0
+            seed_indices = torch.tensor(seed, device=device)
+            seed_params = reconstructed_parameters[seed_indices].mean(dim=0)
+            seeds.append((seed_indices.cpu().numpy(), seed_params.cpu().numpy()))
+
+    return seeds

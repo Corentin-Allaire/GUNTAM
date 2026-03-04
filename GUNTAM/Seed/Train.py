@@ -162,6 +162,7 @@ def train_model(
 
     if optimiser and scheduler:
         scheduler.step()
+        print(f"Initial learning rate: {scheduler.get_last_lr()}")
 
     for epoch in range(start_epoch, start_epoch + epoch_nb):
         ts_print("Epoch: ", epoch)
@@ -534,9 +535,18 @@ def run_model(
             # Apply masking for valid hits only
             neighbor_matrix_masked = valid_attention_weights[bin_mask_cpu, :][:, bin_mask_cpu]
 
-            # Choose clustering method based on loss configuration (mutually exclusive)
-            if cfg.has_loss_component("attention_next"):
-                # Use attention-next based reconstruction (row-normalized scores)
+            # Determine reconstruction method: explicit config takes priority,
+            # otherwise auto-select from the active loss components.
+            reco_method = cfg.reconstruction_method
+            if reco_method is None:
+                if cfg.has_loss_component("attention_next"):
+                    reco_method = "chained"
+                elif cfg.has_loss_component("attention_back"):
+                    reco_method = "back_chained"
+                else:
+                    reco_method = "topk"
+
+            if reco_method == "chained":
                 neighbor_matrix_masked.fill_diagonal_(float("-inf"))
                 neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
                 bin_seeds = Reconstruction.chained_seed_reconstruction(
@@ -545,8 +555,7 @@ def run_model(
                     score_threshold=0.2,
                     max_chain_length=5,
                 )
-            elif cfg.has_loss_component("attention_back"):
-                # Use attention-back based reconstruction (row-normalized scores)
+            elif reco_method == "back_chained":
                 neighbor_matrix_masked.fill_diagonal_(float("-inf"))
                 neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
                 bin_seeds = Reconstruction.back_chained_seed_reconstruction(
@@ -555,8 +564,17 @@ def run_model(
                     score_threshold=0.2,
                     max_chain_length=5,
                 )
-            else:
-                # Fall back to attention-based reconstruction (thresholded k-NN)
+            elif reco_method == "weighted_chained":
+                neighbor_matrix_masked.fill_diagonal_(float("-inf"))
+                neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
+                bin_seeds = Reconstruction.weighted_chained_seed_reconstruction(
+                    neighbor_matrix_masked,
+                    valid_parameters,
+                    score_threshold=0.2,
+                    max_chain_length=5,
+                    pairs_per_hit=2,
+                )
+            else:  # topk
                 neighbor_matrix_masked = torch.sigmoid(neighbor_matrix_masked)
                 bin_seeds = Reconstruction.topk_seed_reconstruction(
                     neighbor_matrix_masked,
@@ -677,9 +695,8 @@ def main():
 
         # Load previous tensorboard logs
         if os.path.exists(log_dir):
-            # Calculate total events processed in previous epochs for correct purge_step
-            purge_step = start_epoch * train_size
-            writer = SummaryWriter(log_dir=log_dir, purge_step=purge_step)
+            # Append to existing log dir so TensorBoard combines all runs
+            writer = SummaryWriter(log_dir=log_dir)
         else:
             ts_print(f"Warning: TensorBoard log directory {log_dir} not found. Creating new logs.")
             writer = SummaryWriter(log_dir)

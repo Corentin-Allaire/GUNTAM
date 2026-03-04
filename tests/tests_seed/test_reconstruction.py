@@ -2,7 +2,10 @@ import pytest
 import torch
 import numpy as np
 
-from GUNTAM.Seed.Reconstruction import topk_seed_reconstruction, chained_seed_reconstruction, back_chained_seed_reconstruction
+from GUNTAM.Seed.Reconstruction import (topk_seed_reconstruction,
+                                        chained_seed_reconstruction,
+                                        back_chained_seed_reconstruction,
+                                        weighted_chained_seed_reconstruction)
 
 
 class TestTopKSeedReconstruction:
@@ -351,6 +354,187 @@ class TestBackChainedSeedReconstruction:
         # Should only return the chain with length >= 3
         assert len(seeds) == 1
         assert len(seeds[0][0]) >= 3
+
+
+class TestWeightedChainedSeedReconstruction:
+    """Tests for the weighted_chained_seed_reconstruction function."""
+
+    def _make_params(self, n: int, d: int = 6) -> torch.Tensor:
+        torch.manual_seed(0)
+        return torch.randn(n, d)
+
+    def test_pairs_below_threshold_excluded(self):
+        """Pairs whose attention score is below score_threshold are ignored."""
+        n = 5
+        att = torch.zeros(n, n)
+        # All scores below threshold – no pair at all
+        att[0, 1] = 0.5
+        att[1, 2] = 0.6
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        assert seeds == []
+
+    def test_pairs_exactly_at_threshold_included(self):
+        """Pairs whose score equals score_threshold are kept."""
+        n = 5
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.8   # exactly at threshold
+        att[1, 2] = 0.8
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        # Should produce a chain containing at least hits 0, 1, 2
+        assert len(seeds) >= 1
+        all_indices = set(seeds[0][0].tolist())
+        assert {0, 1, 2}.issubset(all_indices)
+
+    def test_minimum_chain_length_3(self):
+        """Chains shorter than 3 hits are discarded."""
+        n = 4
+        att = torch.zeros(n, n)
+        # Only one pair above threshold → chain of length 2 → discarded
+        att[0, 1] = 0.9
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        assert seeds == []
+
+    def test_chain_of_exactly_3_hits_kept(self):
+        """A chain of exactly 3 hits is kept."""
+        n = 5
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        # No further extension available
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        assert len(seeds) == 1
+        assert len(seeds[0][0]) == 3
+        assert set(seeds[0][0].tolist()) == {0, 1, 2}
+
+    def test_max_chain_length_respected(self):
+        """Chains never exceed max_chain_length hits."""
+        n = 8
+        att = torch.zeros(n, n)
+        for i in range(n - 1):
+            att[i, i + 1] = 0.9
+        params = self._make_params(n)
+
+        max_len = 4
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=max_len, pairs_per_hit=2
+        )
+        assert len(seeds) >= 1
+        for idxs, _ in seeds:
+            assert len(idxs) <= max_len
+
+    def test_basic_forward_chain(self):
+        """A simple linear chain 0->1->2->3 is reconstructed correctly."""
+        n = 6
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.95
+        att[1, 2] = 0.90
+        att[2, 3] = 0.85
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=10, pairs_per_hit=2
+        )
+        assert len(seeds) >= 1
+        chain_idxs = seeds[0][0].tolist()
+        assert set(chain_idxs) == {0, 1, 2, 3}
+
+    def test_average_parameters_correct(self):
+        """avg_parameters matches the mean of reconstructed_parameters over chain hits."""
+        n = 5
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        assert len(seeds) >= 1
+        idxs, avg = seeds[0]
+        expected_avg = params[torch.tensor(idxs.tolist())].mean(dim=0).numpy()
+        np.testing.assert_allclose(avg, expected_avg, rtol=1e-5)
+
+    def test_no_hit_reuse_across_seeds(self):
+        """Once hits are claimed by a chain with length>=3, they are removed from the pool."""
+        n = 6
+        att = torch.zeros(n, n)
+        # One strong chain: 0->1->2
+        att[0, 1] = 0.95
+        att[1, 2] = 0.90
+        # A second path that shares hits 1 and 2 should not produce another seed
+        att[1, 3] = 0.85
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        # Collect every index used across all seeds
+        all_used: list[int] = []
+        for idxs, _ in seeds:
+            all_used.extend(idxs.tolist())
+        # No index should appear in more than one seed
+        assert len(all_used) == len(set(all_used)), "Hits reused across chains"
+
+    def test_pairs_per_hit_limits_candidates(self):
+        """With pairs_per_hit=1 only the single strongest neighbor is considered per hit."""
+        n = 6
+        att = torch.zeros(n, n)
+        # Hit 0 has two strong neighbors; with pairs_per_hit=1 only the stronger is kept
+        att[0, 1] = 0.95   # stronger
+        att[0, 2] = 0.90   # weaker – should be ignored with pairs_per_hit=1
+        att[2, 5] = 0.93
+        att[1, 3] = 0.88
+        att[1, 4] = 0.85
+        params = self._make_params(n)
+
+        seeds_1 = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=1
+        )
+        seeds_2 = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        # With pairs_per_hit=1 the pair (0,2) is never considered
+        indices_1 = set(seeds_1[0][0].tolist()) if seeds_1 else set()
+        assert 2 not in indices_1
+        # With pairs_per_hit=2 the pair (0,2) may appear
+        all_indices_2 = {idx for idxs, _ in seeds_2 for idx in idxs.tolist()}
+        assert 2 in all_indices_2
+
+    def test_two_independent_chains(self):
+        """Two disjoint chains are both reconstructed."""
+        n = 8
+        att = torch.zeros(n, n)
+        # Chain A: 0->1->2
+        att[0, 1] = 0.95
+        att[1, 2] = 0.90
+        # Chain B: 4->5->6
+        att[4, 5] = 0.95
+        att[5, 6] = 0.90
+        params = self._make_params(n)
+
+        seeds = weighted_chained_seed_reconstruction(
+            att, params, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
+        )
+        assert len(seeds) == 2
+        chain_sets = [set(idxs.tolist()) for idxs, _ in seeds]
+        assert {0, 1, 2} in chain_sets
+        assert {4, 5, 6} in chain_sets
 
 
 if __name__ == "__main__":
