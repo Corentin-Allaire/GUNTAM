@@ -72,6 +72,10 @@ class SeedConfig:
         self.loss_components = ["attention_next"]  # List of active loss components
         self.loss_weights = []  # Default weights matching loss_components
 
+        # Reconstruction method for inference (None = auto-select from loss config)
+        # Choices: None (auto), "chained", "back_chained", "weighted_chained", "topk"
+        self.reconstruction_method = None
+
         # Boolean configurations
         self.no_test = False
         self.resume_training = False
@@ -275,6 +279,16 @@ class SeedConfig:
             help="Enable detailed timing measurements during training/testing",
         )
         parser.add_argument(
+            "--reconstruction",
+            type=str,
+            default=self.reconstruction_method,
+            choices=["chained", "back_chained", "weighted_chained", "topk"],
+            help=(
+                "Seed reconstruction method to use during inference. "
+                "If omitted, the method is auto-selected from the active loss components."
+            ),
+        )
+        parser.add_argument(
             "--device",
             type=str,
             default="cuda:0" if torch.cuda.is_available() else "cpu",
@@ -379,6 +393,7 @@ class SeedConfig:
         self.weight_decay = args.weight_decay
         self.batch_size = args.batch_size
         self.timing_enabled = args.timing_enabled
+        self.reconstruction_method = args.reconstruction
         self.device_acc = torch.device(args.device)
 
         # Parse loss configuration lists
@@ -504,6 +519,7 @@ class SeedConfig:
         print("Device: ", self.device_acc)
         print("Cuda available: ", torch.cuda.is_available())
         print("Timing enabled: ", self.timing_enabled)
+        print("Reconstruction method: ", self.reconstruction_method if self.reconstruction_method else "auto (from loss config)")
 
         print("\nFile Settings:")
         print("Model path: ", self.model_path)
