@@ -131,8 +131,16 @@ def _build_good_pairs_tensors(
                 i_valid, j_valid = np.where(valid_mask)
 
                 # Create pairs array: (hit_idx1, hit_idx2, label) using bin-relative indices
+                # Label is 100 for primary-vertex (PV) particle pairs, 1 otherwise
                 if len(i_valid) > 0:
-                    pairs = np.stack([i_valid, j_valid, np.ones(len(i_valid), dtype=np.int64)], axis=1)
+                    pv_col = "particle_id_pv"
+                    if pv_col in data_batch.columns:
+                        pv_flags = data_batch.loc[bin_hit_indices_array, pv_col].values == 1
+                        is_pv_pair = pv_flags[i_valid]
+                        labels = np.where(is_pv_pair, 100, 1).astype(np.int64)
+                    else:
+                        labels = np.ones(len(i_valid), dtype=np.int64)
+                    pairs = np.stack([i_valid, j_valid, labels], axis=1)
                 else:
                     pairs = np.empty((0, 3), dtype=np.int64)
             else:
@@ -574,7 +582,7 @@ def prepare_tensor(
     # Use feature lists from config
     hit_features = cfg.hit_features
     particle_features = cfg.particle_features
-    needed_columns = list(set(["event_id", "particle_id", "phi"] + hit_features))
+    needed_columns = list(set(["event_id", "particle_id", "particle_id_pv", "phi"] + hit_features))
     # Metadata variable to be used to describe the dataset and keep track of file paths
     # and event ranges for each tensor file
     total_events = 0
@@ -701,6 +709,8 @@ def prepare_tensor(
 
             # Create the good pairs tensor for this batch
             good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max)
+
+            data_batch = data_batch.drop(columns=["particle_id_pv"], errors="ignore")
 
             # Convert to tensors
             hits_tensor, particles_tensor, hit_to_particle_tensor = _to_tensor(

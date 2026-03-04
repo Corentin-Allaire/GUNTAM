@@ -40,7 +40,10 @@ def attention_loss(
     # Targets: map {-1, +1} -> {0, 1}
     targets = (target.float() + 1.0) * 0.5
 
-    return F.binary_cross_entropy_with_logits(logits, targets, reduction="sum")
+    # Use target magnitude as per-pair weight (PV pairs have target=100 -> higher weight)
+    pair_weights = target.abs().float()
+
+    return F.binary_cross_entropy_with_logits(logits, targets, weight=pair_weights, reduction="sum")
 
 
 def full_attention_loss(
@@ -73,16 +76,21 @@ def full_attention_loss(
     """
 
     device = attention_map_bin.device
-    pos_mask = target == 1
+    pos_mask = target > 0
     if not torch.any(pos_mask):
         return torch.tensor(0.0, device=device)
+
+    # Save per-pair weights (1 for normal, 100 for PV) before shadowing target
+    pair_weights_pos = target[pos_mask].abs().float()
 
     pos_hits = torch.unique(torch.cat([pairs1[pos_mask], pairs2[pos_mask]]))
     num_valid_hits = int(torch.max(pos_hits).item()) + 1
 
-    # Build a target matrix
-    target = torch.zeros_like(attention_map_bin, device=device)
-    target[pairs1[pos_mask], pairs2[pos_mask]] = 1.0
+    # Build a target matrix and a pair-weight matrix
+    target_matrix = torch.zeros_like(attention_map_bin, device=device)
+    target_matrix[pairs1[pos_mask], pairs2[pos_mask]] = 1.0
+    pair_weight_matrix = torch.ones_like(attention_map_bin)
+    pair_weight_matrix[pairs1[pos_mask], pairs2[pos_mask]] = pair_weights_pos
 
     full_mask = torch.ones_like(attention_map_bin, dtype=torch.bool)
     full_mask[num_valid_hits:, :] = False
@@ -94,13 +102,13 @@ def full_attention_loss(
     full_mask[:, inactive_cols] = False
 
     logits = attention_map_bin[full_mask]
-    targets = target[full_mask]
+    targets = target_matrix[full_mask]
 
     pos_weight = 1 / max(pairs1[pos_mask].numel(), 1)
     neg_weight = 1 / max(full_mask.sum().item() - pairs1[pos_mask].numel(), 1)
 
-    # Class weights
-    weights = torch.where(targets > 0, pos_weight, neg_weight)
+    # Class weights scaled by per-pair weight (PV pairs contribute more)
+    weights = torch.where(targets > 0, pos_weight * pair_weight_matrix[full_mask], neg_weight)
 
     return F.binary_cross_entropy_with_logits(logits, targets, weight=weights, reduction="sum")
 
@@ -131,9 +139,12 @@ def top_attention_loss(
         Scalar attention loss tensor
     """
     device = attention_map_bin.device
-    pos_mask = target == 1
+    pos_mask = target > 0
     if not torch.any(pos_mask):
         return torch.tensor(0.0, device=device)
+
+    # Save per-pair weights (1 for normal, 100 for PV) before indexing
+    pair_weights_pos = target[pos_mask].abs().float()
 
     # Hits involved in positives and valid window size
     pos_hits = torch.unique(torch.cat([pairs1[pos_mask], pairs2[pos_mask]]))
@@ -170,10 +181,12 @@ def top_attention_loss(
         ],
         dim=0,
     )
-    # Class-balanced weights
+    # Class-balanced weights scaled by per-pair weight (PV pairs contribute more)
     pos_weight = 1.0 / max(num_pos, 1)
     neg_weight = 1.0 / max(top_neg_scores.numel(), 1)
-    weights = torch.where(targets > 0, pos_weight, neg_weight)
+    pos_weights = pos_weight * pair_weights_pos
+    neg_weights = torch.full((top_neg_scores.numel(),), neg_weight, device=device)
+    weights = torch.cat([pos_weights, neg_weights], dim=0)
     return F.binary_cross_entropy_with_logits(logits, targets, weight=weights, reduction="sum")
 
 
@@ -202,7 +215,7 @@ def attention_next_loss(
 
     """
     device = attention_map_bin.device
-    pos_mask = target == 1
+    pos_mask = target > 0
     if not torch.any(pos_mask):
         return torch.tensor(0.0, device=device)
 
@@ -212,6 +225,7 @@ def attention_next_loss(
     # Positive pairs within valid hit range
     sources = pairs1[pos_mask]
     targets = pairs2[pos_mask]
+    pair_weights = target[pos_mask].float()  # 1.0 for normal, 100.0 for PV
 
     # Unique sources among valid hits
     unique_sources = torch.unique(sources)
@@ -251,7 +265,17 @@ def attention_next_loss(
 
     # Restrict logits to valid hits (slice the attention map, not the function)
     attention_logits = attention_map_bin[:num_valid_hits, :num_valid_hits]
-    loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="sum")
+
+    # Gather per-source weight: max pair weight among all pairs originating from each source
+    if unique_sources.numel() > 0 and sources.numel() > 0:
+        source_eq = unique_sources.view(-1, 1) == sources.view(1, -1)  # [S, M]
+        weights_row = pair_weights.view(1, -1).expand(unique_sources.numel(), -1)  # [S, M]
+        source_weights = torch.max(torch.where(source_eq, weights_row, torch.zeros_like(weights_row)), dim=1).values  # [S]
+    else:
+        source_weights = torch.ones(unique_sources.numel(), device=device)
+
+    per_sample_loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="none")
+    loss = (per_sample_loss * source_weights).sum()
 
     return loss
 
@@ -281,7 +305,7 @@ def attention_backward_loss(
 
     """
     device = attention_map_bin.device
-    pos_mask = target == 1
+    pos_mask = target > 0
     if not torch.any(pos_mask):
         return torch.tensor(0.0, device=device)
 
@@ -291,6 +315,7 @@ def attention_backward_loss(
     # Positive pairs within valid hit range
     sources = pairs1[pos_mask]
     targets = pairs2[pos_mask]
+    pair_weights = target[pos_mask].abs().float()  # 1.0 for normal, 100.0 for PV
 
     # Unique sources among valid hits
     unique_sources = torch.unique(sources)
@@ -330,7 +355,17 @@ def attention_backward_loss(
 
     # Restrict logits to valid hits (slice the attention map, not the function)
     attention_logits = attention_map_bin[:num_valid_hits, :num_valid_hits]
-    loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="sum")
+
+    # Gather per-source weight: max pair weight among all pairs originating from each source
+    if unique_sources.numel() > 0 and sources.numel() > 0:
+        source_eq = unique_sources.view(-1, 1) == sources.view(1, -1)  # [S, M]
+        weights_row = pair_weights.view(1, -1).expand(unique_sources.numel(), -1)  # [S, M]
+        source_weights = torch.max(torch.where(source_eq, weights_row, torch.zeros_like(weights_row)), dim=1).values  # [S]
+    else:
+        source_weights = torch.ones(unique_sources.numel(), device=device)
+
+    per_sample_loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="none")
+    loss = (per_sample_loss * source_weights).sum()
 
     return loss
 
