@@ -23,21 +23,21 @@ class TestSeedTransformerInitialization:
         # dim_embedding drives inferred nfreq = max(1,(dim_embedding -3)//6)
         dim_embedding = 99  # (99-3)//6 = 16
         model = SeedTransformer(dim_embedding=dim_embedding, nb_heads=3)
-        expected_nfreq = max(1, (dim_embedding - 4) // 6)
+        expected_nfreq = max(1, (dim_embedding - 3) // 8)
         # fourier_encoding.num_frequencies is now a list internally
-        assert model.fourier_encoding.num_frequencies == [expected_nfreq, expected_nfreq, expected_nfreq]
-        # output_dim of fourier_encoding = sum(num_frequencies) * 2 + 4
-        assert model.fourier_encoding.output_dim == sum(model.fourier_encoding.num_frequencies) * 2 + 4
+        assert model.fourier_encoding.num_frequencies == [expected_nfreq] * 4
+        # output_dim of fourier_encoding = sum(num_frequencies) * 2 + 3 (high_level_dim=3)
+        assert model.fourier_encoding.output_dim == sum(model.fourier_encoding.num_frequencies) * 2 + 3
 
     def test_variable_frequencies_per_dimension(self):
         # Test with different frequencies for each dimension
-        num_frequencies_list = [4, 6, 8]
+        num_frequencies_list = [4, 6, 8, 5]
         model = SeedTransformer(num_frequencies=num_frequencies_list, dim_embedding=64, nb_heads=2)
         
         assert model.fourier_num_frequencies == num_frequencies_list
         assert model.fourier_encoding.num_frequencies == num_frequencies_list
-        # output_dim = sum([4, 6, 8]) * 2 + 4 = 18 * 2 + 4 = 40
-        expected_output_dim = sum(num_frequencies_list) * 2 + 4
+        # output_dim = sum([4, 6, 8, 5]) * 2 + 3 = 23 * 2 + 3 = 49
+        expected_output_dim = sum(num_frequencies_list) * 2 + 3
         assert model.fourier_encoding.output_dim == expected_output_dim
         
         # Test forward pass works with 6 features: x, y, z, r, phi, eta

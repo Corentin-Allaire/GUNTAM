@@ -23,8 +23,7 @@ class FourierPositionalEncoding(nn.Module):
         input_dim: Dimension of the coordinate vector in ``x_sampled``
             (for example 3 for x, y, z).
         num_frequencies: Number of frequency components per coordinate.
-            Can be an int (same for all dimensions) or a list of ints
-            (one per dimension, length must match ``input_dim``).
+            Must be a list of ints (one per dimension, length must match ``input_dim``).
         dim_max: Per-dimension maximum values used to normalize
             ``x_sampled`` (length must be ``input_dim``).
         device_acc: Device for computation ("cpu" or "cuda").
@@ -45,41 +44,40 @@ class FourierPositionalEncoding(nn.Module):
         self,
         input_dim: int = 3,
         high_level_dim: int = 3,
-        num_frequencies: int | list[int] = 6,
+        num_frequencies: list[int] = [6, 6, 6],
         dim_max: list = [200.0, 200.0, 1000.0],
+        shift: list[float] = [0.0, 0.0, 0.0],
         device_acc: torch.device = torch.device("cpu"),
     ) -> None:
         super().__init__()
         if input_dim <= 0:
             raise ValueError("Input dimension must be greater than 0")
 
-        # Normalize num_frequencies to list
-        if isinstance(num_frequencies, int):
-            if num_frequencies <= 0:
-                raise ValueError("Number of frequencies must be greater than 0")
-            num_frequencies_list = [num_frequencies] * input_dim
-        else:
-            num_frequencies_list = list(num_frequencies)
-            if len(num_frequencies_list) != input_dim:
-                raise ValueError(f"num_frequencies list length ({len(num_frequencies_list)}) must match input_dim ({input_dim})")
-            if any(n <= 0 for n in num_frequencies_list):
-                raise ValueError("All num_frequencies values must be greater than 0")
+        # Validate num_frequencies list
+        if len(num_frequencies) != input_dim:
+            raise ValueError(f"num_frequencies list length ({len(num_frequencies)}) must match input_dim ({input_dim})")
+        if any(n <= 0 for n in num_frequencies):
+            raise ValueError("All num_frequencies values must be greater than 0")
 
         if len(dim_max) != input_dim:
             raise ValueError("dim_max length must match input_dim")
         if any(d <= 0 for d in dim_max):
             raise ValueError("All dim_max values must be greater than 0")
 
+        if len(shift) != input_dim:
+            raise ValueError("shift length must match input_dim")
+
         self.input_dim = input_dim
-        self.num_frequencies = num_frequencies_list
-        self.output_dim = sum(num_frequencies_list) * 2 + high_level_dim  # Fourier features + high_level
+        self.num_frequencies = num_frequencies
+        self.output_dim = sum(num_frequencies) * 2 + high_level_dim  # Fourier features + high_level
         self.dim_max = torch.tensor(dim_max, device=device_acc)
+        self.shift = torch.tensor(shift, device=device_acc)
         self.device_acc = device_acc
 
         # Create frequency lists for each dimension with powers of 2: [2^0, 2^1, 2^2, ..., 2^(num_frequencies-1)]
         # Store as a list of tensors since each dimension can have different frequencies
         self.freq_tensors = []
-        for num_freq in num_frequencies_list:
+        for num_freq in num_frequencies:
             frequencies = 2.0 ** torch.arange(num_freq, device=device_acc).float()
             self.freq_tensors.append(frequencies)
 
@@ -98,7 +96,7 @@ class FourierPositionalEncoding(nn.Module):
         if x_sampled.size(-1) != self.input_dim:
             raise ValueError(f"x_sampled last dim {x_sampled.size(-1)} does not match " f"input_dim={self.input_dim}")
 
-        coord = x_sampled / self.dim_max  # Normalize coordinates
+        coord = x_sampled + self.shift / self.dim_max  # Normalize coordinates
 
         # Process each dimension separately since they can have different number of frequencies
         fourier_features_list = []

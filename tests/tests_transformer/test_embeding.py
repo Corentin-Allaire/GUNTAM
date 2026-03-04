@@ -9,24 +9,24 @@ class TestFourierPositionalEncodingInitialization:
 
     def test_valid_initialization_default(self):
         """Test proper initialization with default high_level_dim."""
-        input_dim, num_frequencies, high_level_dim = 3, 6, 3
+        input_dim, num_frequencies, high_level_dim = 3, [6, 6, 6], 3
         fpe = FourierPositionalEncoding(
             input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=high_level_dim
         )
 
         assert fpe.input_dim == input_dim
-        assert fpe.num_frequencies == [num_frequencies] * input_dim  # Now stored as list
-        expected_output_dim = num_frequencies * input_dim * 2 + high_level_dim
+        assert fpe.num_frequencies == num_frequencies
+        expected_output_dim = sum(num_frequencies) * 2 + high_level_dim
         assert fpe.output_dim == expected_output_dim
         assert hasattr(fpe, "freq_tensors")  # Changed from freq_matrix
         assert len(fpe.freq_tensors) == input_dim
-        for freq_tensor in fpe.freq_tensors:
-            assert freq_tensor.shape == (num_frequencies,)
-            assert torch.allclose(freq_tensor, 2.0 ** torch.arange(num_frequencies).float())
+        for i, freq_tensor in enumerate(fpe.freq_tensors):
+            assert freq_tensor.shape == (num_frequencies[i],)
+            assert torch.allclose(freq_tensor, 2.0 ** torch.arange(num_frequencies[i]).float())
 
     def test_high_level_dim_variations(self):
         """Changing high_level_dim should update output_dim accordingly."""
-        input_dim, num_frequencies = 3, 4
+        input_dim, num_frequencies = 3, [4, 4, 4]
         for h in [1, 5, 7]:
             fpe = FourierPositionalEncoding(
                 input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=h
@@ -55,7 +55,7 @@ class TestFourierPositionalEncodingInitialization:
         with pytest.raises(ValueError):
             FourierPositionalEncoding(input_dim=0)
         with pytest.raises(ValueError):
-            FourierPositionalEncoding(num_frequencies=0)
+            FourierPositionalEncoding(input_dim=3, num_frequencies=[0, 6, 4])  # Non-positive value
         with pytest.raises(ValueError):
             FourierPositionalEncoding(num_frequencies=[6, 0, 4])  # Non-positive in list
         with pytest.raises(ValueError):
@@ -72,7 +72,7 @@ class TestFourierPositionalEncodingForward:
     def test_forward_shapes_and_ranges(self):
         """Test output shape and value ranges with a single high_level_dim."""
         batch_size, seq_len = 2, 5
-        input_dim, num_frequencies, high_level_dim = 3, 4, 3
+        input_dim, num_frequencies, high_level_dim = 3, [4, 4, 4], 3
         fpe = FourierPositionalEncoding(
             input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=high_level_dim
         )
@@ -97,7 +97,7 @@ class TestFourierPositionalEncodingForward:
     def test_forward_high_level_dim_variations(self):
         """Changing high_level_dim in forward input should yield correct concatenated size."""
         batch_size, seq_len = 1, 3
-        input_dim, num_frequencies = 3, 2
+        input_dim, num_frequencies = 3, [2, 2, 2]
         for h in [1, 4, 6]:
             fpe = FourierPositionalEncoding(
                 input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=h
@@ -112,7 +112,7 @@ class TestFourierPositionalEncodingForward:
     def test_forward_reproducibility(self):
         """Test deterministic output given same inputs and high_level_dim."""
         torch.manual_seed(42)
-        fpe = FourierPositionalEncoding(input_dim=3, num_frequencies=5, high_level_dim=4)
+        fpe = FourierPositionalEncoding(input_dim=3, num_frequencies=[5, 5, 5], high_level_dim=4)
         x_sampled = torch.randn(1, 4, 3)
         x_high_level = torch.randn(1, 4, 4)
         out1 = fpe(x_sampled, x_high_level)
@@ -123,7 +123,7 @@ class TestFourierPositionalEncodingForward:
 
     def test_gradient_flow(self):
         """Test gradient propagation with custom high_level_dim."""
-        fpe = FourierPositionalEncoding(input_dim=3, num_frequencies=4, high_level_dim=2)
+        fpe = FourierPositionalEncoding(input_dim=3, num_frequencies=[4, 4, 4], high_level_dim=2)
         x_sampled = torch.randn(2, 3, 3, requires_grad=True)
         x_high_level = torch.randn(2, 3, 2, requires_grad=True)
         out = fpe(x_sampled, x_high_level)
@@ -136,7 +136,7 @@ class TestFourierPositionalEncodingForward:
 
     def test_forward_seq_len_edge_cases(self):
         """Test seq_len edge case with high_level_dim variation."""
-        fpe = FourierPositionalEncoding(input_dim=3, num_frequencies=2, high_level_dim=5)
+        fpe = FourierPositionalEncoding(input_dim=3, num_frequencies=[2, 2, 2], high_level_dim=5)
         x_sampled = torch.randn(2, 1, 3)
         x_high_level = torch.randn(2, 1, 5)
         out = fpe(x_sampled, x_high_level)

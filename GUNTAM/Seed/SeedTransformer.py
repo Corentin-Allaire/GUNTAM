@@ -33,8 +33,8 @@ class SeedTransformer(nn.Module):
         - dim_embedding (int, optional): Dimension of the embedding (hit feature dimension after projection).
             Defaults to 96.
         - dropout (float, optional): Dropout rate used in Transformer and attention layers. Defaults to 0.1.
-        - num_frequencies (int | list[int] | None, optional): Number of Fourier frequencies for positional encoding.
-            Can be int (same for all dimensions) or list of 3 ints (one per dimension x,y,z).
+        - num_frequencies (list[int] | None, optional): Number of Fourier frequencies for positional encoding.
+            Must be a list of 4 ints (one per dimension x,y,z,r).
             If None, it is chosen such that the encoded dimension is close to `dim_embedding`. Defaults to None.
         - device_acc (str, optional): Device to run the model on (e.g. "cpu" or "cuda"). Defaults to "cpu".
     """
@@ -45,7 +45,7 @@ class SeedTransformer(nn.Module):
         nb_heads: int = 2,
         dim_embedding: int = 96,
         dropout: float = 0.1,
-        num_frequencies: int | list[int] | None = None,
+        num_frequencies: list[int] | None = None,
         device_acc: torch.device = torch.device("cpu"),
     ) -> None:
         super(SeedTransformer, self).__init__()
@@ -56,11 +56,11 @@ class SeedTransformer(nn.Module):
         self.nb_heads = nb_heads
         self.dropout = dropout
         # Calculate number of frequencies to get close to dim_embedding if not provided
-        # Output will be: sum(nfreq) * 2 + 4 (Fourier features + cos(phi) + sin(phi) + eta)
-        self.fourier_num_frequencies: int | list[int]
+        # Output will be: sum(nfreq) * 2 + 3 (Fourier features + cos(phi) + sin(phi) + eta)
+        self.fourier_num_frequencies: list[int]
         if num_frequencies is None:
-            # Default: same frequency for all 3 dimensions
-            self.fourier_num_frequencies = max(1, (dim_embedding - 4) // 6)
+            # Default: same frequency for all 4 dimensions
+            self.fourier_num_frequencies = [max(1, (dim_embedding - 3) // 8)] * 4
         else:
             self.fourier_num_frequencies = num_frequencies
 
@@ -74,10 +74,16 @@ class SeedTransformer(nn.Module):
         """
 
         self.fourier_encoding = FourierPositionalEncoding(
-            input_dim=3,
+            input_dim=4,
             num_frequencies=self.fourier_num_frequencies,
-            high_level_dim=4,
-            dim_max=[200.0, 200.0, 1000.0],
+            high_level_dim=3,
+            dim_max=[
+                400.0,
+                400.0,
+                2000.0,
+                500,
+            ],
+            shift=[200, 200, 1000.0, 0.0],
             device_acc=self.device_acc,
         )
 
@@ -90,7 +96,7 @@ class SeedTransformer(nn.Module):
         self.transformer = TransformerEncoder(
             n_layers=self.nb_layers_t,
             input_dim=self.dim_embedding,
-            model_dim=4 * self.dim_embedding,
+            model_dim=2 * self.dim_embedding,
             num_heads=self.nb_heads,  # Number of attention heads can be adjusted
             dropout=self.dropout,  # Dropout rate can be adjusted
             device=self.device_acc,
@@ -115,9 +121,9 @@ class SeedTransformer(nn.Module):
             - encoded (Tensor): Encoded memory.
         """
 
-        coord = hits[..., :3]
+        coord = hits[..., :4]
         high_level = torch.cat(
-            [hits[..., 3:4], torch.cos(hits[..., 4:5]), torch.sin(hits[..., 4:5]), hits[..., 5:6]],
+            [torch.cos(hits[..., 4:5]), torch.sin(hits[..., 4:5]), hits[..., 5:6]],
             dim=-1,
         )
         # Use Fourier positional encoding
@@ -250,6 +256,8 @@ class SeedTransformer(nn.Module):
         nb_heads = int(model_cfg.get("nb_heads", self.nb_heads))
         dropout = float(model_cfg.get("dropout", self.dropout))
         num_frequencies = model_cfg.get("num_frequencies", self.fourier_num_frequencies)
+        if num_frequencies is None:
+            num_frequencies = max(1, (dim_embedding - 3) // 8)
 
         # If nothing differs, keep current modules
         if (
