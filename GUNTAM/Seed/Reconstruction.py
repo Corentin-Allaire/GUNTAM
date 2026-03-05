@@ -267,25 +267,33 @@ def weighted_chained_seed_reconstruction(
     if len(hit_i_np) == 0:
         return seeds
 
+    forward: dict[int, list[int]] = {i: [] for i in range(num_hits)}
+    backward: dict[int, list[int]] = {i: [] for i in range(num_hits)}
+    for idx in range(len(hit_i_np)):
+        forward[hit_i_np[idx]].append(idx)
+        backward[hit_j_np[idx]].append(idx)
+    forward_map = {i: np.array(v, dtype=np.intp) for i, v in forward.items()}
+    backward_map = {i: np.array(v, dtype=np.intp) for i, v in backward.items()}
+
     for i in range(len(hit_i_np)):
         hit_i = hit_i_np[i]
         hit_j = hit_j_np[i]
         score = scores_np[i]
         to_remove = []
 
-        if score < 0:
+        if score <= 0:
             continue
 
         to_remove.append(hit_j)
         seed = [hit_i, hit_j]
         while len(seed) < max_chain_length:
             # Identify the highest forward and back attention scores for hit_i and hit_j
-            backward_mask = hit_j_np == hit_i
-            forward_mask = hit_i_np == hit_j
-            max_forward_id = np.argmax(scores_np[forward_mask]) if forward_mask.any() else None
-            max_backward_id = np.argmax(scores_np[backward_mask]) if backward_mask.any() else None
-            max_forward_score = scores_np[forward_mask][max_forward_id] if forward_mask.any() else 0
-            max_backward_score = scores_np[backward_mask][max_backward_id] if backward_mask.any() else 0
+            backward_mask = backward_map[hit_i]
+            forward_mask = forward_map[hit_j]
+            max_forward_id = np.argmax(scores_np[forward_mask]) if len(forward_mask) > 0 else None
+            max_backward_id = np.argmax(scores_np[backward_mask]) if len(backward_mask) > 0 else None
+            max_forward_score = scores_np[forward_mask][max_forward_id] if len(forward_mask) > 0 else 0
+            max_backward_score = scores_np[backward_mask][max_backward_id] if len(backward_mask) > 0 else 0
             if max_forward_score > max_backward_score:
                 hit_j = hit_j_np[forward_mask][max_forward_id]
                 seed.append(hit_j)
@@ -299,7 +307,7 @@ def weighted_chained_seed_reconstruction(
 
         if len(seed) >= 3:
             for hit in to_remove:
-                scores_np[hit_j_np == hit] = 0
+                scores_np[backward_map[hit]] = 0
             seed_indices = torch.tensor(seed, device=device)
             seed_params = reconstructed_parameters[seed_indices].mean(dim=0)
             seeds.append((seed_indices.cpu().numpy(), seed_params.cpu().numpy()))
