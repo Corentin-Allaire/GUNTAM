@@ -6,6 +6,8 @@ import os
 from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
 from typing import Any
 
+from GUNTAM.Seed.TransformerConfig import TransformerConfig
+
 
 class SeedConfig:
     """
@@ -17,6 +19,7 @@ class SeedConfig:
         Initialise the configuration
         Members:
             - preprocessing_config: PreprocessingConfig: Preprocessing configuration (contains binning, I/O, selection params)
+            - transformer_config: TransformerConfig: Transformer architecture configuration
             - epoch_nb: int: Number of epochs
             - num_warmup_steps: int: Number of warmup steps for the scheduler
             - val_fraction: float: Fraction of the data to use for validation
@@ -29,45 +32,30 @@ class SeedConfig:
             - resume_training: bool: Resume training from an existing model checkpoint
             - device_acc: torch.device: The device to use (cpu/gpu)
 
-            - nb_layers_t: int: Number of transformer layers
-            - dim_embedding: int: Embedding dimension
-            - nb_heads: int: Number of attention heads
-            - dropout: float: Dropout rate
-            - fourier_num_frequencies: list[int] | None: Number of Fourier frequency bands for embeddings.
-                Must be a list of ints (one per dimension x,y,z,r).
-
             - loss_components: list[str]: Active loss components (e.g., 'cosine', 'MSE', 'attention')
             - loss_weights: list[float]: Corresponding weights for each loss component
-            - preprocessing_config.num_workers: int: Number of parallel worker processes for batch preprocessing (1 = sequential)
         """
 
         # Preprocessing configuration (handles binning, I/O, selection parameters)
         self.preprocessing_config = PreprocessingConfig()
+        # Model architecture configuration (transformer layers, embedding dimension, attention heads, dropout, Fourier encoding)
+        self.transformer_config = TransformerConfig()
 
         # Training loop variables
         self.epoch_nb = 10
         self.num_warmup_steps = 5
-        self.val_fraction = 0.2
-        self.test_fraction = 0.02
+        self.val_fraction = 0.1
+        self.test_fraction = 0.1
         self.learning_rate = 5e-5
         self.weight_decay = 0.01
-        self.batch_size = 1
+        self.batch_size = 5
         self.device_acc = torch.device("cpu")
 
-        # File paths - duplicated in both configs for convenience
-        # These are synced with preprocessing_config in parse_args
+        # File paths - synced with preprocessing_config in parse_args
         self.input_tensor_path = "odd_output"  # Path to read/write preprocessed tensor .pt files
         self.dataset_name = "seeding_data"  # Base name for dataset files
         self.recompute_tensor = False  # Whether to recompute tensors even if they already exist
         self.model_path = "transformer.pt"
-
-        # Model architecture parameters
-        self.nb_layers_t = 4
-        self.dim_embedding = 128
-        self.nb_heads = 4
-        self.dropout = 0.1
-        # Fourier embedding specific (optional): number of frequency bands; if None, derived from dim_embedding
-        self.fourier_num_frequencies = None
 
         # Loss configuration using lists
         self.loss_components = ["attention_next"]  # List of active loss components
@@ -109,19 +97,7 @@ class SeedConfig:
             help="Number of warmup steps for the learning rate scheduler",
         )
 
-        # File paths (overlapping with preprocessing)
-        parser.add_argument(
-            "--input_tensor_path",
-            type=str,
-            default=self.input_tensor_path,
-            help="Directory to read/write preprocessed tensor .pt files",
-        )
-        parser.add_argument(
-            "--dataset_name",
-            type=str,
-            default=self.dataset_name,
-            help="Base name for dataset files (will be combined with barcode)",
-        )
+        # Training control flags and paths
         parser.add_argument(
             "--recompute_tensor",
             action="store_true",
@@ -144,124 +120,11 @@ class SeedConfig:
             help="Resume training from an existing model checkpoint",
         )
 
-        # Preprocessing arguments (delegate to preprocessing_config)
-        parser.add_argument(
-            "--max_hit_input",
-            type=int,
-            default=self.preprocessing_config.max_hit_input,
-            help="Maximum number of hit input",
-        )
-        parser.add_argument(
-            "--vertex_cuts",
-            nargs=2,
-            type=float,
-            default=self.preprocessing_config.vertex_cuts,
-            help="Vertex cuts [d0_max, z0_max]",
-        )
-        parser.add_argument(
-            "--bin_width",
-            type=float,
-            default=self.preprocessing_config.bin_width,
-            help="Width of the bin in phi",
-        )
-        parser.add_argument(
-            "--eta_range",
-            nargs=2,
-            type=float,
-            default=self.preprocessing_config.eta_range,
-            help="Fixed eta range [min, max] for binning (hits/particles outside are filtered)",
-        )
-        parser.add_argument(
-            "--binning_strategy",
-            type=str,
-            default=self.preprocessing_config.binning_strategy,
-            choices=["no_bin", "global", "neighbor", "margin"],
-        )
-        parser.add_argument(
-            "--binning_margin",
-            type=float,
-            default=self.preprocessing_config.binning_margin,
-            help="Margin for margin binning strategy (fraction of bin_width, used when binning_strategy='margin')",
-        )
-        parser.add_argument(
-            "--max_events",
-            type=int,
-            default=self.preprocessing_config.max_events,
-            help="Maximum number of events to process (-1 for all events)",
-        )
-        parser.add_argument(
-            "--events_per_file",
-            type=int,
-            default=self.preprocessing_config.events_per_file,
-            help="Number of events per file (used for loading and processing)",
-        )
-        parser.add_argument(
-            "--input_path",
-            type=str,
-            default=self.preprocessing_config.input_path,
-            help="Path to the input data",
-        )
-        parser.add_argument(
-            "--input_format",
-            type=str,
-            default=self.preprocessing_config.input_format,
-            choices=["csv", "h5"],
-            help="Input data format: 'csv' (default) or 'h5'",
-        )
-        parser.add_argument(
-            "--tensor_format",
-            type=str,
-            default=self.preprocessing_config.tensor_format,
-            choices=["pt", "h5"],
-            help="Output tensor format: 'pt' (PyTorch, default) or 'h5' (compressed HDF5)",
-        )
-        parser.add_argument(
-            "--orphan_hit_fraction",
-            type=float,
-            default=self.preprocessing_config.orphan_hit_fraction,
-            help="Fraction of orphan hits (hits without particles) to keep per bin (0.0 to 1.0)",
-        )
-        parser.add_argument(
-            "--num_workers",
-            type=int,
-            default=self.preprocessing_config.num_workers,
-            help="Number of parallel worker processes for batch preprocessing (1 = sequential)",
-        )
-        # Model architecture arguments
-        parser.add_argument(
-            "--nb_layers_t",
-            type=int,
-            default=self.nb_layers_t,
-            help="Number of transformer layers",
-        )
-        parser.add_argument(
-            "--dim_embedding",
-            type=int,
-            default=self.dim_embedding,
-            help="Embedding dimension",
-        )
-        parser.add_argument(
-            "--nb_heads",
-            type=int,
-            default=self.nb_heads,
-            help="Number of attention heads",
-        )
-        parser.add_argument(
-            "--dropout",
-            type=float,
-            default=self.dropout,
-            help="Dropout rate",
-        )
-        parser.add_argument(
-            "--fourier_num_frequencies",
-            nargs="*",
-            type=int,
-            default=self.fourier_num_frequencies,
-            help=(
-                "Number of Fourier frequency bands (int or list of 3 ints for x,y,z); "
-                "if omitted, it's derived from dim_embedding"
-            ),
-        )
+        # Preprocessing arguments (delegated to preprocessing_config)
+        self.preprocessing_config.add_args(parser)
+
+        # Model architecture arguments (delegated to transformer_config)
+        self.transformer_config.add_args(parser)
         parser.add_argument(
             "--learning_rate",
             type=float,
@@ -286,7 +149,7 @@ class SeedConfig:
             help="Enable detailed timing measurements during training/testing",
         )
         parser.add_argument(
-            "--reconstruction",
+            "--reconstruction_method",
             type=str,
             default=self.reconstruction_method,
             choices=["chained", "back_chained", "weighted_chained", "topk"],
@@ -353,43 +216,24 @@ class SeedConfig:
         self.val_fraction = args.val_fraction
         self.test_fraction = args.test_fraction
         self.num_warmup_steps = args.num_warmup_steps
-        self.input_tensor_path = args.input_tensor_path
-        self.dataset_name = args.dataset_name
         self.recompute_tensor = args.recompute_tensor
         self.no_test = args.no_test
         self.resume_training = args.resume_training
         self.model_path = args.model_path
 
-        # Parse preprocessing parameters and assign to preprocessing_config
-        self.preprocessing_config.max_hit_input = args.max_hit_input
-        self.preprocessing_config.vertex_cuts = args.vertex_cuts
-        self.preprocessing_config.bin_width = args.bin_width
-        self.preprocessing_config.eta_range = args.eta_range
-        self.preprocessing_config.binning_strategy = args.binning_strategy
-        self.preprocessing_config.binning_margin = args.binning_margin
-        self.preprocessing_config.max_events = args.max_events
-        self.preprocessing_config.events_per_file = args.events_per_file
-        self.preprocessing_config.input_path = args.input_path
-        self.preprocessing_config.input_format = args.input_format
-        self.preprocessing_config.tensor_format = args.tensor_format
-        self.preprocessing_config.orphan_hit_fraction = args.orphan_hit_fraction
-        self.preprocessing_config.num_workers = args.num_workers
+        # Apply preprocessing parameters (also sets input_tensor_path, dataset_name)
+        self.preprocessing_config.apply_args(args)
+        # Sync overlapping path fields to SeedConfig level
+        self.input_tensor_path = self.preprocessing_config.input_tensor_path
+        self.dataset_name = self.preprocessing_config.dataset_name
 
-        # Sync overlapping values (so both configs have same values)
-        self.preprocessing_config.input_tensor_path = args.input_tensor_path
-        self.preprocessing_config.dataset_name = args.dataset_name
-
-        # Parse model architecture parameters
-        self.nb_layers_t = args.nb_layers_t
-        self.dim_embedding = args.dim_embedding
-        self.nb_heads = args.nb_heads
-        self.dropout = args.dropout
-        self.fourier_num_frequencies = args.fourier_num_frequencies
+        # Apply model architecture parameters
+        self.transformer_config.apply_args(args)
         self.learning_rate = args.learning_rate
         self.weight_decay = args.weight_decay
         self.batch_size = args.batch_size
         self.timing_enabled = args.timing_enabled
-        self.reconstruction_method = args.reconstruction
+        self.reconstruction_method = args.reconstruction_method
         self.device_acc = torch.device(args.device)
 
         # Parse loss configuration lists
@@ -439,6 +283,9 @@ class SeedConfig:
             # Convert PreprocessingConfig to dict
             elif isinstance(value, PreprocessingConfig):
                 config_dict[key] = value.to_dict()
+            # Convert TransformerConfig to dict
+            elif isinstance(value, TransformerConfig):
+                config_dict[key] = value.to_dict()
             else:
                 config_dict[key] = value
         return config_dict
@@ -456,6 +303,13 @@ class SeedConfig:
                     self.preprocessing_config.from_dict(value)
                 else:
                     self.preprocessing_config = value
+            elif key == "transformer_config":
+                # Handle nested transformer config
+                if isinstance(value, dict):
+                    self.transformer_config = TransformerConfig()
+                    self.transformer_config.from_dict(value)
+                else:
+                    self.transformer_config = value
             else:
                 setattr(self, key, value)
 
@@ -487,6 +341,72 @@ class SeedConfig:
 
         self.from_dict(config_dict)
         print(f"Configuration loaded from {filepath}")
+
+    def save_sh(self, filepath: str):
+        """Save configuration to a bash shell script with COMMON_ARGS format."""
+
+        def _fmt(value) -> str:
+            if isinstance(value, list):
+                return " ".join(str(v) for v in value)
+            return str(value)
+
+        def _line(flag: str, value) -> str:
+            if isinstance(value, bool):
+                return f"    --{flag}" if value else f"    # --{flag}"
+            return f"    --{flag} {_fmt(value)}"
+
+        d = self.to_dict()
+
+        # Flatten nested sub-configs so every key is at the same level
+        flat: dict[str, Any] = {}
+        for key, value in d.items():
+            if key in ("preprocessing_config", "transformer_config"):
+                flat.update(value)
+            else:
+                flat[key] = value
+
+        # Keys that are not CLI arguments (derived or top-level duplicates of sub-config fields)
+        skip = {"loss_config", "input_tensor_path", "dataset_name"}
+
+        # CLI flag name differs from the dict key
+        rename = {"device_acc": "device", "reconstruction_method": "reconstruction_method"}
+
+        # Compute fourier_num_frequencies fallback when None
+        if flat.get("fourier_num_frequencies") is None:
+            flat["fourier_num_frequencies"] = [
+                max(1, (flat["dim_embedding"] - len(flat["high_level_features"])) // (2 * len(flat["embedding_feature"])))
+            ] * len(flat["embedding_feature"])
+
+        # Use default loss weights when none were specified
+        if not flat.get("loss_weights"):
+            flat["loss_weights"] = [1.0] * len(flat["loss_components"])
+
+        # Section header is injected when the first key of that group is encountered
+        section_start = {
+            next(iter(self.preprocessing_config.to_dict())): "# --- Preprocessing ---",
+            next(iter(self.transformer_config.to_dict())): "# --- Transformer architecture ---",
+            "epoch_nb": "# --- Training ---",
+        }
+
+        lines: list[str] = ["#!/bin/bash", "", "COMMON_ARGS=("]
+        for key, value in flat.items():
+            if key in skip:
+                continue
+            if key in section_start:
+                lines.append(f"    {section_start[key]}")
+            if value is None:
+                lines.append(f"    # --{rename.get(key, key)}")
+            else:
+                lines.append(_line(rename.get(key, key), value))
+        lines += [")", "", '# Usage: python -m GUNTAM.Seed.Train "${COMMON_ARGS[@]}"', ""]
+
+        os.makedirs(
+            os.path.dirname(filepath) if os.path.dirname(filepath) else ".",
+            exist_ok=True,
+        )
+        with open(filepath, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"Shell configuration saved to {filepath}")
 
     def print_config(self):
         """
@@ -529,11 +449,7 @@ class SeedConfig:
         print("\n" + "=" * 60)
         print("Model Architecture:")
         print("=" * 60)
-        print("Transformer layers: ", self.nb_layers_t)
-        print("Embedding dimension: ", self.dim_embedding)
-        print("Attention heads: ", self.nb_heads)
-        print("Dropout rate: ", self.dropout)
-        print("Fourier num_frequencies: ", self.fourier_num_frequencies)
+        self.transformer_config.print_config()
 
         # Print loss configuration
         print("\n" + "=" * 60)
@@ -549,3 +465,10 @@ class SeedConfig:
         print("  --save_config <filename>     : Save current config to JSON file")
         print("  --load_config <filename>     : Load config from JSON file")
         print("=" * 60)
+
+
+if __name__ == "__main__":
+    config = SeedConfig()
+    config.parse_args()
+    config.print_config()
+    config.save_sh("training_config.sh")

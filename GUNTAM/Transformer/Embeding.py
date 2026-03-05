@@ -50,22 +50,6 @@ class FourierPositionalEncoding(nn.Module):
         device_acc: torch.device = torch.device("cpu"),
     ) -> None:
         super().__init__()
-        if input_dim <= 0:
-            raise ValueError("Input dimension must be greater than 0")
-
-        # Validate num_frequencies list
-        if len(num_frequencies) != input_dim:
-            raise ValueError(f"num_frequencies list length ({len(num_frequencies)}) must match input_dim ({input_dim})")
-        if any(n <= 0 for n in num_frequencies):
-            raise ValueError("All num_frequencies values must be greater than 0")
-
-        if len(dim_max) != input_dim:
-            raise ValueError("dim_max length must match input_dim")
-        if any(d <= 0 for d in dim_max):
-            raise ValueError("All dim_max values must be greater than 0")
-
-        if len(shift) != input_dim:
-            raise ValueError("shift length must match input_dim")
 
         self.input_dim = input_dim
         self.num_frequencies = num_frequencies
@@ -80,6 +64,20 @@ class FourierPositionalEncoding(nn.Module):
         for num_freq in num_frequencies:
             frequencies = 2.0 ** torch.arange(num_freq, device=device_acc).float()
             self.freq_tensors.append(frequencies)
+
+        if input_dim <= 0:
+            raise ValueError("Input dimension must be greater than 0")
+        # Validate num_frequencies list
+        if len(num_frequencies) != input_dim:
+            raise ValueError(f"num_frequencies list length ({len(num_frequencies)}) must match input_dim ({input_dim})")
+        if any(n <= 0 for n in num_frequencies):
+            raise ValueError("All num_frequencies values must be greater than 0")
+        if len(dim_max) != input_dim:
+            raise ValueError("dim_max length must match input_dim")
+        if any(d <= 0 for d in dim_max):
+            raise ValueError("All dim_max values must be greater than 0")
+        if len(shift) != input_dim:
+            raise ValueError("shift length must match input_dim")
 
     def forward(self, x_sampled: Tensor, x_high_level: Tensor) -> Tensor:
         """Apply Fourier positional encoding.

@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from GUNTAM.Seed.TransformerConfig import TransformerConfig
 from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
 from GUNTAM.Transformer.Transformer import load_state_dict_flex
@@ -23,47 +24,23 @@ class SeedTransformer(nn.Module):
         - fourier_encoding (FourierPositionalEncoding): Fourier-based positional encoder for hit coordinates.
         - embedding_projection (nn.Linear): Linear layer projecting encoded features to `dim_embedding`.
         - matching_attention (MultiHeadAttention): Attention module producing matching scores and weights.
-        - dim_embedding (int): Dimension of the internal embedding space.
-        - device_acc (str): Device on which the model’s parameters are allocated.
-        - nb_layers_t (int): Number of Transformer encoder layers.
+        - cfg (TransformerConfig): Full architecture configuration.
+        - device_acc (torch.device): Device on which the model's parameters are allocated.
 
     Args:
-        - nb_layers_t (int, optional): Number of Transformer encoder layers. Defaults to 3.
-        - nb_heads (int, optional): Number of attention heads in the Transformer encoder. Defaults to 2.
-        - dim_embedding (int, optional): Dimension of the embedding (hit feature dimension after projection).
-            Defaults to 96.
-        - dropout (float, optional): Dropout rate used in Transformer and attention layers. Defaults to 0.1.
-        - num_frequencies (list[int] | None, optional): Number of Fourier frequencies for positional encoding.
-            Must be a list of 4 ints (one per dimension x,y,z,r).
-            If None, it is chosen such that the encoded dimension is close to `dim_embedding`. Defaults to None.
-        - device_acc (str, optional): Device to run the model on (e.g. "cpu" or "cuda"). Defaults to "cpu".
+        - transformer_config (TransformerConfig): Architecture configuration object.
+        - device_acc (torch.device, optional): Device to run the model on. Defaults to cpu.
     """
 
     def __init__(
         self,
-        nb_layers_t: int = 3,
-        nb_heads: int = 2,
-        dim_embedding: int = 96,
-        dropout: float = 0.1,
-        num_frequencies: list[int] | None = None,
+        transformer_config: TransformerConfig = TransformerConfig(),
         device_acc: torch.device = torch.device("cpu"),
     ) -> None:
         super(SeedTransformer, self).__init__()
 
-        self.dim_embedding = dim_embedding
+        self.cfg = transformer_config
         self.device_acc = device_acc
-        self.nb_layers_t = nb_layers_t
-        self.nb_heads = nb_heads
-        self.dropout = dropout
-        # Calculate number of frequencies to get close to dim_embedding if not provided
-        # Output will be: sum(nfreq) * 2 + 3 (Fourier features + cos(phi) + sin(phi) + eta)
-        self.fourier_num_frequencies: list[int]
-        if num_frequencies is None:
-            # Default: same frequency for all 4 dimensions
-            self.fourier_num_frequencies = [max(1, (dim_embedding - 3) // 8)] * 4
-        else:
-            self.fourier_num_frequencies = num_frequencies
-
         self._setup_modules()
 
     def _setup_modules(
@@ -73,40 +50,39 @@ class SeedTransformer(nn.Module):
         Initialize or rebuild all submodules with the provided hyperparameters.
         """
 
+        coord_dim = len(self.cfg.embedding_feature) + len(set(self.cfg.embedding_feature) & set(self.cfg.cosine_processing))
+        high_level_dim = len(self.cfg.high_level_features) + len(
+            set(self.cfg.high_level_features) & set(self.cfg.cosine_processing)
+        )
         self.fourier_encoding = FourierPositionalEncoding(
-            input_dim=4,
-            num_frequencies=self.fourier_num_frequencies,
-            high_level_dim=3,
-            dim_max=[
-                400.0,
-                400.0,
-                2000.0,
-                500,
-            ],
-            shift=[200, 200, 1000.0, 0.0],
+            input_dim=coord_dim,
+            num_frequencies=self.cfg.fourier_num_frequencies,
+            high_level_dim=high_level_dim,
+            dim_max=self.cfg.dim_max,
+            shift=self.cfg.shift,
             device_acc=self.device_acc,
         )
 
         # Set input dimension for projection
         # fourier_encoding.output_dim already accounts for variable frequencies
         embedding_input_dim = self.fourier_encoding.output_dim
-        self.embedding_projection = nn.Linear(embedding_input_dim, self.dim_embedding, device=self.device_acc)
+        self.embedding_projection = nn.Linear(embedding_input_dim, self.cfg.dim_embedding, device=self.device_acc)
 
         # Transformer model
         self.transformer = TransformerEncoder(
-            n_layers=self.nb_layers_t,
-            input_dim=self.dim_embedding,
-            model_dim=2 * self.dim_embedding,
-            num_heads=self.nb_heads,  # Number of attention heads can be adjusted
-            dropout=self.dropout,  # Dropout rate can be adjusted
+            n_layers=self.cfg.nb_layers_t,
+            input_dim=self.cfg.dim_embedding,
+            model_dim=self.cfg.feed_forward_ratio * self.cfg.dim_embedding,
+            num_heads=self.cfg.nb_heads,  # Number of attention heads can be adjusted
+            dropout=self.cfg.dropout,  # Dropout rate can be adjusted
             device=self.device_acc,
         )
 
         self.matching_attention = MultiHeadAttention(
-            input_dim=self.dim_embedding,
-            model_dim=self.dim_embedding,
+            input_dim=self.cfg.dim_embedding,
+            model_dim=self.cfg.dim_embedding,
             num_heads=1,
-            dropout=self.dropout,
+            dropout=self.cfg.dropout,
             device=self.device_acc,
             use_pytorch=False,
         )
@@ -121,11 +97,37 @@ class SeedTransformer(nn.Module):
             - encoded (Tensor): Encoded memory.
         """
 
-        coord = hits[..., :4]
-        high_level = torch.cat(
-            [torch.cos(hits[..., 4:5]), torch.sin(hits[..., 4:5]), hits[..., 5:6]],
-            dim=-1,
-        )
+        if any(i in self.cfg.embedding_feature for i in self.cfg.cosine_processing):
+            embedding_cosine = [i for i in self.cfg.embedding_feature if i in self.cfg.cosine_processing]
+            embedding_no_cosine = [i for i in self.cfg.embedding_feature if i not in self.cfg.cosine_processing]
+            coord = torch.cat(
+                [
+                    torch.cos(hits[..., embedding_cosine]),
+                    torch.sin(hits[..., embedding_cosine]),
+                    hits[..., embedding_no_cosine],
+                ],
+                dim=-1,
+            )
+        else:
+            coord = hits[..., self.cfg.embedding_feature]  # Select features for embedding (e.g., x,y,z,r)
+
+        if self.cfg.high_level_features:
+            if any(i in self.cfg.high_level_features for i in self.cfg.cosine_processing):
+                high_level_cosine = [i for i in self.cfg.high_level_features if i in self.cfg.cosine_processing]
+                high_level_no_cosine = [i for i in self.cfg.high_level_features if i not in self.cfg.cosine_processing]
+                high_level = torch.cat(
+                    [
+                        torch.cos(hits[..., high_level_cosine]),
+                        torch.sin(hits[..., high_level_cosine]),
+                        hits[..., high_level_no_cosine],
+                    ],
+                    dim=-1,
+                )
+            else:
+                high_level = hits[..., self.cfg.high_level_features]  # Select high-level features (e.g., phi, eta)
+        else:
+            high_level = None
+
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
         # Apply generic projection if needed
@@ -166,7 +168,7 @@ class SeedTransformer(nn.Module):
         total_params = sum(p.numel() for p in self.parameters())
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         print("SeedTransformer Model Info:")
-        print(f"  - Number of Transformer layers: {self.nb_layers_t}")
+        print(f"  - Number of Transformer layers: {self.cfg.nb_layers_t}")
         print(f"  - Total parameters: {total_params}")
         print(f"  - Trainable parameters: {trainable_params}")
 
@@ -188,14 +190,8 @@ class SeedTransformer(nn.Module):
                 "model_state_dict": self.state_dict(),
                 "optimizer_state_dict": (optimizer.state_dict() if optimizer is not None else None),
                 "scheduler_state_dict": (scheduler.state_dict() if scheduler is not None else None),
-                # Save model architecture parameters from config
-                "model_config": {
-                    "nb_layers_t": self.nb_layers_t,
-                    "dim_embedding": self.dim_embedding,
-                    "nb_heads": self.nb_heads,
-                    "dropout": self.dropout,
-                    "num_frequencies": self.fourier_num_frequencies,
-                },
+                # Save full transformer architecture config
+                "transformer_config": self.cfg.to_dict(),
             },
             path,
         )
@@ -222,7 +218,7 @@ class SeedTransformer(nn.Module):
                 print("Checkpoint missing 'model_state_dict'; starting from scratch.")
             else:
                 # Rebuild architecture to match the checkpoint if freq/embedding/layers differ
-                self._rebuild_from_checkpoint_config(checkpoint.get("model_config"), device)
+                self._rebuild_from_checkpoint_config(checkpoint.get("transformer_config"), device)
                 load_state_dict_flex(self, state_dict, desc="resume")
                 if "optimizer_state_dict" in checkpoint and optimizer is not None:
                     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -250,34 +246,15 @@ class SeedTransformer(nn.Module):
         if not model_cfg:
             return
 
-        # Use checkpoint values, fall back to current ones
-        nb_layers_t = int(model_cfg.get("nb_layers_t", self.nb_layers_t))
-        dim_embedding = int(model_cfg.get("dim_embedding", self.dim_embedding))
-        nb_heads = int(model_cfg.get("nb_heads", self.nb_heads))
-        dropout = float(model_cfg.get("dropout", self.dropout))
-        num_frequencies = model_cfg.get("num_frequencies", self.fourier_num_frequencies)
-        if num_frequencies is None:
-            num_frequencies = max(1, (dim_embedding - 3) // 8)
+        new_cfg = TransformerConfig()
+        new_cfg.from_dict(model_cfg)
 
-        # If nothing differs, keep current modules
-        if (
-            nb_layers_t == self.nb_layers_t
-            and dim_embedding == self.dim_embedding
-            and nb_heads == self.nb_heads
-            and dropout == self.dropout
-            and num_frequencies == self.fourier_num_frequencies
-        ):
+        if new_cfg.to_dict() == self.cfg.to_dict():
             return
 
         print("Rebuilding SeedTransformer modules to match checkpoint configuration...")
-
-        self.nb_layers_t = nb_layers_t
-        self.nb_heads = nb_heads
-        self.dim_embedding = dim_embedding
-        self.dropout = dropout
-        self.fourier_num_frequencies = num_frequencies
+        self.cfg = new_cfg
         self.device_acc = device
-
         self._setup_modules()
 
         self.to(device)

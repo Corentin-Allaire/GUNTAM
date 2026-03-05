@@ -14,13 +14,12 @@ from GUNTAM.IO.PrepareTensor import (
     prepare_tensor,
 )
 from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
-from GUNTAM.Seed.Config import SeedConfig
 
 
 class TestParticleSelection:
     def test_basic_selection(self):
         # Create test data
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.eta_range = [-2.0, 2.0]
         cfg.vertex_cuts = [1.0, 100.0]
         
@@ -65,7 +64,7 @@ class TestParticleSelection:
         assert len(data_result) == 4
 
     def test_vertex_cuts(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.eta_range = [-3.0, 3.0]
         cfg.vertex_cuts = [0.5, 50.0]  # Strict d0 and z0 cuts
         
@@ -193,7 +192,7 @@ class TestToTensor:
 
 class TestAddPadding:
     def test_adds_padding_correctly(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.max_hit_input = 5
         
         data_batch = pd.DataFrame({
@@ -221,7 +220,7 @@ class TestAddPadding:
         assert all(padding_hits["particle_id"] == -1)
 
     def test_removes_excess_hits(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.max_hit_input = 2  # Small limit
         
         # Create more hits than max_hit_input in bin 0
@@ -253,7 +252,7 @@ class TestAddPadding:
 
 class TestCreatePaddingMask:
     def test_basic_mask(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.max_hit_input = 5
         
         data_batch = pd.DataFrame({
@@ -311,7 +310,7 @@ class TestOrphanHitRemoval:
 
 class TestBinData:
     def test_no_bin_strategy(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.binning_strategy = "no_bin"
         cfg.bin_width = 10.0  # Large value
         
@@ -326,7 +325,7 @@ class TestBinData:
         assert len(bins) == len(data_batch)
 
     def test_global_bin_strategy(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.binning_strategy = "global"
         cfg.bin_width = 1.0  # 1 radian bins
         
@@ -344,7 +343,7 @@ class TestBinData:
 
 class TestComputeBarcode:
     def test_barcode_generation(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.binning_strategy = "neighbor"
         cfg.bin_width = 0.05
         cfg.max_hit_input = 1200
@@ -359,7 +358,7 @@ class TestComputeBarcode:
         assert "OF" not in barcode  # No orphan fraction since it's 0
 
     def test_barcode_with_orphan_fraction(self):
-        cfg = SeedConfig()
+        cfg = PreprocessingConfig()
         cfg.binning_strategy = "global"
         cfg.bin_width = 0.1
         cfg.max_hit_input = 800

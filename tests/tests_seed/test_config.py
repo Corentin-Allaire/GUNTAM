@@ -6,7 +6,7 @@ from GUNTAM.Seed.Config import SeedConfig
 
 def test_defaults_initialization():
     cfg = SeedConfig()
-    
+
     # Preprocessing config exists and has correct defaults
     assert cfg.preprocessing_config is not None
     assert cfg.preprocessing_config.max_hit_input == 1200
@@ -25,11 +25,11 @@ def test_defaults_initialization():
     # Training defaults
     assert cfg.epoch_nb == 10
     assert cfg.num_warmup_steps == 5
-    assert cfg.val_fraction == 0.2
-    assert cfg.test_fraction == 0.02
+    assert cfg.val_fraction == 0.1
+    assert cfg.test_fraction == 0.1
     assert cfg.learning_rate == pytest.approx(5e-5)
     assert cfg.weight_decay == pytest.approx(0.01)
-    assert cfg.batch_size == 1
+    assert cfg.batch_size == 5
 
     # Paths (overlapping with preprocessing_config)
     assert cfg.input_tensor_path == "odd_output"
@@ -39,12 +39,12 @@ def test_defaults_initialization():
     assert cfg.no_test is False
     assert cfg.resume_training is False
 
-    # Model architecture
-    assert cfg.nb_layers_t == 4
-    assert cfg.dim_embedding == 128
-    assert cfg.nb_heads == 4
-    assert cfg.dropout == pytest.approx(0.1)
-    assert cfg.fourier_num_frequencies is None
+    # Model architecture (delegated to transformer_config)
+    assert cfg.transformer_config.nb_layers_t == 4
+    assert cfg.transformer_config.dim_embedding == 128
+    assert cfg.transformer_config.nb_heads == 2
+    assert cfg.transformer_config.dropout == pytest.approx(0.1)
+    assert cfg.transformer_config.fourier_num_frequencies == [15, 15, 15, 15]
 
     # Loss configuration
     assert cfg.loss_components == ["attention_next"]
@@ -184,4 +184,3 @@ def test_print_config(capsys):
     assert "File Settings:" in output
     assert "Model Architecture:" in output
     assert "Loss Configuration:" in output
-    

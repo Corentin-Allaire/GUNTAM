@@ -409,22 +409,11 @@ def train_model(
         # Save backup checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
             backup_path = cfg.model_path.replace(".pt", f"_backup_epoch_{epoch + 1}.pt")
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": (optimiser.state_dict() if optimiser else None),
-                    "scheduler_state_dict": (scheduler.state_dict() if scheduler else None),
-                    # Save model architecture parameters from config
-                    "model_config": {
-                        "nb_layers_t": cfg.nb_layers_t,
-                        "dim_embedding": cfg.dim_embedding,
-                        "nb_heads": cfg.nb_heads,
-                        "dropout": cfg.dropout,
-                        "num_frequencies": cfg.fourier_num_frequencies,
-                    },
-                },
-                backup_path,
+            model.save(
+                epoch=epoch,
+                path=backup_path,
+                optimizer=optimiser,
+                scheduler=scheduler,
             )
             print(f"Saved backup checkpoint to {backup_path}")
         if optimiser and scheduler:
@@ -633,11 +622,7 @@ def main():
 
     # Create the model using configuration parameters
     model = SeedTransformer(
-        nb_layers_t=cfg.nb_layers_t,
-        dim_embedding=cfg.dim_embedding,
-        nb_heads=cfg.nb_heads,
-        dropout=cfg.dropout,
-        num_frequencies=cfg.fourier_num_frequencies,
+        transformer_config=cfg.transformer_config,
         device_acc=cfg.device_acc,
     )
     model.to(cfg.device_acc)

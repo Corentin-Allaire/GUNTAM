@@ -66,15 +66,11 @@ class PreprocessingConfig:
         # Parallelism
         self.num_workers = 1  # Number of parallel worker processes for batch processing
 
-    def parse_args(self):
+    def add_args(self, parser: argparse.ArgumentParser) -> None:
         """
-        Parse the command line arguments to fill the configuration
+        Add preprocessing arguments to an existing ArgumentParser.
+        Allows sharing argument definitions with a parent parser (e.g. SeedConfig).
         """
-        parser = argparse.ArgumentParser(
-            description="Configure preprocessing and tensor preparation from the command line",
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        )
-
         # Input/Output paths
         parser.add_argument(
             "--input_path",
@@ -196,28 +192,11 @@ class PreprocessingConfig:
             help="List of particle features to extract from data",
         )
 
-        # Configuration file arguments
-        parser.add_argument(
-            "--save_config",
-            type=str,
-            help="Save current configuration to a JSON file",
-        )
-        parser.add_argument(
-            "--load_config",
-            type=str,
-            help="Load configuration from a JSON file",
-        )
-
-        args = parser.parse_args()
-
-        # Handle config file loading first (before setting other args)
-        if args.load_config:
-            self.load_config(args.load_config)
-            print(f"Configuration loaded from {args.load_config}")
-            print("All the other arguments will be overridden by the loaded configuration.")
-            return
-
-        # Update configuration with parsed arguments
+    def apply_args(self, args: argparse.Namespace) -> None:
+        """
+        Apply the values from a parsed Namespace to the configuration.
+        Can be called after a shared parent parser has been parsed.
+        """
         self.input_path = args.input_path
         self.input_format = args.input_format
         self.input_tensor_path = args.input_tensor_path if args.input_tensor_path else args.input_path
@@ -244,6 +223,40 @@ class PreprocessingConfig:
         # Validate orphan_hit_fraction range
         if self.orphan_hit_fraction < 0.0 or self.orphan_hit_fraction > 1.0:
             raise ValueError(f"orphan_hit_fraction must be between 0.0 and 1.0, got {self.orphan_hit_fraction}")
+
+    def parse_args(self):
+        """
+        Parse the command line arguments to fill the configuration
+        """
+        parser = argparse.ArgumentParser(
+            description="Configure preprocessing and tensor preparation from the command line",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+
+        self.add_args(parser)
+
+        # Configuration file arguments
+        parser.add_argument(
+            "--save_config",
+            type=str,
+            help="Save current configuration to a JSON file",
+        )
+        parser.add_argument(
+            "--load_config",
+            type=str,
+            help="Load configuration from a JSON file",
+        )
+
+        args = parser.parse_args()
+
+        # Handle config file loading first (before setting other args)
+        if args.load_config:
+            self.load_config(args.load_config)
+            print(f"Configuration loaded from {args.load_config}")
+            print("All the other arguments will be overridden by the loaded configuration.")
+            return
+
+        self.apply_args(args)
 
         # Handle config file saving (after all configuration is set)
         if args.save_config:
