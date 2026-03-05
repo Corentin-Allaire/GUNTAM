@@ -1,6 +1,7 @@
 from typing import List, Tuple, Dict
 import glob
 import math
+import multiprocessing
 import os
 
 import pandas as pd
@@ -508,6 +509,93 @@ def _save_tensor_data(
         raise ValueError(f"Unsupported tensor format: {tensor_format}. Use 'pt' or 'h5'")
 
 
+def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
+    """
+    Process a single batch of events and save the resulting tensors to disk.
+
+    Args:
+        args: Tuple of (data_batch, particles_batch, cfg, hit_features, particle_features,
+                        file_id, barcode, start_event, end_event)
+
+    Returns:
+        Tuple of (file_path, (start_event, end_event), num_events_processed, nb_bins_max)
+    """
+    data_batch, particles_batch, cfg, hit_features, particle_features, file_id, barcode, start_event, end_event = args
+
+    print(f"  Processing events {start_event} to {end_event - 1}")
+
+    # Optionally perform orphan hit removal
+    data_batch = _orphan_hit_removal(data_batch, cfg.orphan_hit_fraction)
+
+    # Perform binning and tensor preparation
+    bins, nb_bins_max = _bin_data(data_batch, cfg)
+
+    # Add padding hits and corresponding bins to ensure consistent input size
+    data_batch, bins = _add_padding(data_batch, bins, cfg)
+
+    # Create the padding mask tensor for this batch
+    data_batch, padding_mask = _create_padding_mask(data_batch, bins, nb_bins_max, cfg)
+
+    # Create the hit_to_particle mapping for this batch (after all reordering)
+    hit_to_particle = data_batch["particle_id"].copy()
+
+    # Apply specific particle selection as defined in the config
+    data_batch, particles_batch, bins, hit_to_particle = _particle_selection(
+        data_batch, particles_batch, bins, hit_to_particle, cfg
+    )
+
+    # Create the good pairs tensor for this batch
+    good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max)
+
+    data_batch = data_batch.drop(columns=["particle_id_pv"], errors="ignore")
+
+    # Convert to tensors
+    hits_tensor, particles_tensor, hit_to_particle_tensor = _to_tensor(
+        data_batch,
+        particles_batch,
+        bins,
+        hit_to_particle,
+        hit_features,
+        particle_features,
+        nb_bins_max,
+        cfg.max_hit_input,
+    )
+
+    full_path = f"{cfg.input_tensor_path}/{cfg.dataset_name}_{barcode}"
+    path = f"/{cfg.dataset_name}_{barcode}"
+
+    # Create the output directory if it doesn't exist
+    os.makedirs(full_path, exist_ok=True)
+
+    # Get the unique event IDs for this chunk
+    batch_events = sorted(data_batch["event_id"].unique())
+
+    # Create a single dictionary with all data
+    file_data = {
+        "hits_tensor": hits_tensor,
+        "particles_tensor": particles_tensor,
+        "good_pairs": good_pairs,
+        "hit_to_particle_tensor": hit_to_particle_tensor,
+        "padding_mask": padding_mask,
+        "start_event": start_event,
+        "end_event": end_event,
+        "nb_bins": nb_bins_max,
+        "batch_events": batch_events,
+    }
+
+    # Save tensor file in the specified format
+    file_base = f"{full_path}/tensor_data_{file_id}_{barcode}"
+    _save_tensor_data(file_data, file_base, cfg.tensor_format)
+
+    # Determine file extension based on tensor format
+    file_ext = ".pt" if cfg.tensor_format == "pt" else ".h5"
+
+    print(f"  Saved tensor data for events {start_event} to {end_event - 1} ({cfg.tensor_format} format)")
+
+    file_path = f"{path}/tensor_data_{file_id}_{barcode}{file_ext}"
+    return file_path, (start_event, end_event), end_event - start_event, nb_bins_max
+
+
 def compute_barcode(cfg: PreprocessingConfig) -> str:
     """
     Compute a barcode string based on the configuration parameters for easy identification of dataset variants.
@@ -676,10 +764,11 @@ def prepare_tensor(
                 f"is not divisible by events_per_file ({events_per_file})"
             )
 
-        # Loop over data in batches of events_per_file
+        # Build arguments for each batch so they can be processed in parallel
+        batch_args = []
+        local_file_id = file_id
         for start_event in range(0, num_events, events_per_file):
             end_event = min(start_event + events_per_file, num_events)
-            print(f"  Processing events {start_event} to {end_event - 1}")
 
             # Select data for this batch of events
             data_batch = data[(data["event_id"] >= start_event) & (data["event_id"] < end_event)].reset_index(drop=True)
@@ -687,77 +776,38 @@ def prepare_tensor(
                 drop=True
             )
 
-            # Optionally perform orphan hit removal
-            data_batch = _orphan_hit_removal(data_batch, cfg.orphan_hit_fraction)
-
-            # Perform binning and tensor preparation using the function in BinTensor.py
-            bins, nb_bins_max = _bin_data(data_batch, cfg)
-
-            # Add padding hits and corresponding bins to ensure consistent input size
-            data_batch, bins = _add_padding(data_batch, bins, cfg)
-
-            # Create the padding mask tensor for this batch
-            data_batch, padding_mask = _create_padding_mask(data_batch, bins, nb_bins_max, cfg)
-
-            # Create the hit_to_particle mapping for this batch (after all reordering)
-            hit_to_particle = data_batch["particle_id"].copy()
-
-            # Apply specific particle selection as defined in the config
-            data_batch, particles_batch, bins, hit_to_particle = _particle_selection(
-                data_batch, particles_batch, bins, hit_to_particle, cfg
+            batch_args.append(
+                (
+                    data_batch,
+                    particles_batch,
+                    cfg,
+                    hit_features,
+                    particle_features,
+                    local_file_id,
+                    barcode,
+                    start_event,
+                    end_event,
+                )
             )
+            local_file_id += 1
 
-            # Create the good pairs tensor for this batch
-            good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max)
+        # Process batches – in parallel when num_workers > 1, sequentially otherwise
+        num_workers = min(cfg.num_workers, len(batch_args))
+        if num_workers > 1:
+            print(f"  Spawning {num_workers} worker processes for {len(batch_args)} batch(es)")
+            with multiprocessing.Pool(processes=num_workers) as pool:
+                results = pool.map(_process_single_batch, batch_args)
+        else:
+            results = [_process_single_batch(args) for args in batch_args]
 
-            data_batch = data_batch.drop(columns=["particle_id_pv"], errors="ignore")
+        # Collect results (results are already ordered by start_event)
+        for file_path, event_range, n_events, nb_bins in results:
+            file_paths.append(file_path)
+            file_event_ranges.append(event_range)
+            total_events += n_events
+            nb_bins_max = max(nb_bins_max, nb_bins)
 
-            # Convert to tensors
-            hits_tensor, particles_tensor, hit_to_particle_tensor = _to_tensor(
-                data_batch,
-                particles_batch,
-                bins,
-                hit_to_particle,
-                hit_features,
-                particle_features,
-                nb_bins_max,
-                cfg.max_hit_input,
-            )
-
-            full_path = f"{cfg.input_tensor_path}/{cfg.dataset_name}_{barcode}"
-            path = f"/{cfg.dataset_name}_{barcode}"
-
-            # Create the output directory if it doesn't exist
-            os.makedirs(full_path, exist_ok=True)
-
-            # Get the unique event IDs for this chunk
-            batch_events = sorted(data_batch["event_id"].unique())
-
-            # Create a single dictionary with all data
-            file_data = {
-                "hits_tensor": hits_tensor,
-                "particles_tensor": particles_tensor,
-                "good_pairs": good_pairs,
-                "hit_to_particle_tensor": hit_to_particle_tensor,
-                "padding_mask": padding_mask,
-                "start_event": start_event,
-                "end_event": end_event,
-                "nb_bins": nb_bins_max,
-                "batch_events": batch_events,
-            }
-
-            # Save tensor file in the specified format
-            file_base = f"{full_path}/tensor_data_{file_id}_{barcode}"
-            _save_tensor_data(file_data, file_base, cfg.tensor_format)
-
-            # Determine file extension based on tensor format
-            file_ext = ".pt" if cfg.tensor_format == "pt" else ".h5"
-
-            print(f"  Saved tensor data for events {start_event} to {end_event - 1} ({cfg.tensor_format} format)")
-            total_events += end_event - start_event
-            file_paths.append(f"{path}/tensor_data_{file_id}_{barcode}{file_ext}")
-            file_event_ranges.append((start_event, end_event))
-            file_id = file_id + 1
+        file_id = local_file_id
 
     # Create the metadata file and save it to the current directory
     metadata = {

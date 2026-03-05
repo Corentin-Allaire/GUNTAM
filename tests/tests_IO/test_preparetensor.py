@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import torch
 
@@ -10,7 +11,9 @@ from GUNTAM.IO.PrepareTensor import (
     _orphan_hit_removal,
     _bin_data,
     compute_barcode,
+    prepare_tensor,
 )
+from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
 from GUNTAM.Seed.Config import SeedConfig
 
 
@@ -368,3 +371,107 @@ class TestComputeBarcode:
         assert "BW0.1" in barcode
         assert "MH800" in barcode
         assert "OF30" in barcode  # 30% orphan fraction
+
+
+class TestPrepareTensorWorkerConsistency:
+    """Test that 1 worker and multiple workers produce identical tensor files."""
+
+    def _make_synthetic_h5(self, path: str, num_events: int = 4, hits_per_event: int = 12) -> None:
+        """Write a minimal deterministic HDF5 dataset for use by prepare_tensor."""
+        rng = np.random.RandomState(seed=0)
+        n_particles = 3
+
+        hits_rows = []
+        particle_rows = []
+        for eid in range(num_events):
+            for pid in range(n_particles):
+                for _ in range(hits_per_event // n_particles):
+                    hits_rows.append({
+                        "event_id": eid,
+                        "particle_id": pid,
+                        "particle_id_pv": int(pid == 0),
+                        "phi": rng.uniform(-np.pi, np.pi),
+                        "x": rng.randn(),
+                        "y": rng.randn(),
+                        "z": rng.randn(),
+                    })
+                particle_rows.append({
+                    "event_id": eid,
+                    "particle_id": pid,
+                    "eta": rng.uniform(-2.0, 2.0),
+                    "phi": rng.uniform(-np.pi, np.pi),
+                    "pT": rng.uniform(0.5, 10.0),
+                    "d0": rng.uniform(0.0, 0.5),
+                    "z0": rng.uniform(0.0, 50.0),
+                })
+
+        hits_df = pd.DataFrame(hits_rows)
+        particles_df = pd.DataFrame(particle_rows)
+
+        with pd.HDFStore(path, mode="w") as store:
+            store.put("hits", hits_df, format="table")
+            store.put("particles", particles_df, format="table")
+
+    def _make_cfg(self, input_path: str, output_path: str) -> PreprocessingConfig:
+        cfg = PreprocessingConfig()
+        cfg.input_path = input_path
+        cfg.input_format = "h5"
+        cfg.input_tensor_path = output_path
+        cfg.dataset_name = "test_data"
+        cfg.events_per_file = 2  # 2 batches for 4 events
+        cfg.max_events = -1
+        cfg.orphan_hit_fraction = 0.0
+        cfg.binning_strategy = "no_bin"
+        cfg.bin_width = 10.0
+        cfg.max_hit_input = 20
+        cfg.eta_range = [-3.0, 3.0]
+        cfg.vertex_cuts = [10.0, 200.0]
+        cfg.hit_features = ["x", "y", "z"]
+        cfg.particle_features = ["eta", "phi", "pT"]
+        cfg.tensor_format = "pt"
+        return cfg
+
+    def test_single_vs_two_workers_same_result(self, tmp_path):
+        """prepare_tensor with num_workers=1 and num_workers=2 must produce identical tensors."""
+        # Create shared synthetic input data
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        self._make_synthetic_h5(str(data_dir / "processed_data_0.h5"), num_events=4)
+
+        # Run with 1 worker
+        out1 = tmp_path / "out1"
+        out1.mkdir()
+        cfg1 = self._make_cfg(str(data_dir), str(out1))
+        cfg1.num_workers = 1
+        meta1 = prepare_tensor(cfg1)
+
+        # Run with 2 workers
+        out2 = tmp_path / "out2"
+        out2.mkdir()
+        cfg2 = self._make_cfg(str(data_dir), str(out2))
+        cfg2.num_workers = 2
+        meta2 = prepare_tensor(cfg2)
+
+        # Metadata must match
+        assert meta1["total_events"] == meta2["total_events"]
+        assert meta1["nb_bins"] == meta2["nb_bins"]
+        assert len(meta1["file_paths"]) == len(meta2["file_paths"])
+
+        # Every tensor file must be numerically identical
+        barcode = compute_barcode(cfg1)
+        num_files = len(meta1["file_paths"])
+        assert num_files > 0, "No tensor files were produced"
+
+        tensor_keys = ["hits_tensor", "particles_tensor", "good_pairs", "hit_to_particle_tensor", "padding_mask"]
+
+        for file_idx in range(num_files):
+            path1 = out1 / f"test_data_{barcode}" / f"tensor_data_{file_idx}_{barcode}.pt"
+            path2 = out2 / f"test_data_{barcode}" / f"tensor_data_{file_idx}_{barcode}.pt"
+
+            data1 = torch.load(str(path1), weights_only=False)
+            data2 = torch.load(str(path2), weights_only=False)
+
+            for key in tensor_keys:
+                assert torch.equal(data1[key], data2[key]), (
+                    f"Tensor mismatch in '{key}' for file index {file_idx}"
+                )

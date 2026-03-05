@@ -38,6 +38,7 @@ class SeedConfig:
 
             - loss_components: list[str]: Active loss components (e.g., 'cosine', 'MSE', 'attention')
             - loss_weights: list[float]: Corresponding weights for each loss component
+            - preprocessing_config.num_workers: int: Number of parallel worker processes for batch preprocessing (1 = sequential)
         """
 
         # Preprocessing configuration (handles binning, I/O, selection parameters)
@@ -220,6 +221,12 @@ class SeedConfig:
             default=self.preprocessing_config.orphan_hit_fraction,
             help="Fraction of orphan hits (hits without particles) to keep per bin (0.0 to 1.0)",
         )
+        parser.add_argument(
+            "--num_workers",
+            type=int,
+            default=self.preprocessing_config.num_workers,
+            help="Number of parallel worker processes for batch preprocessing (1 = sequential)",
+        )
         # Model architecture arguments
         parser.add_argument(
             "--nb_layers_t",
@@ -366,6 +373,7 @@ class SeedConfig:
         self.preprocessing_config.input_format = args.input_format
         self.preprocessing_config.tensor_format = args.tensor_format
         self.preprocessing_config.orphan_hit_fraction = args.orphan_hit_fraction
+        self.preprocessing_config.num_workers = args.num_workers
 
         # Sync overlapping values (so both configs have same values)
         self.preprocessing_config.input_tensor_path = args.input_tensor_path

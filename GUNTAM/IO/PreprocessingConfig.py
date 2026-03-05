@@ -63,6 +63,9 @@ class PreprocessingConfig:
         self.hit_features = ["x", "y", "z"]  # List of hit features to extract
         self.particle_features = ["eta", "phi", "pT"]  # List of particle features to extract
 
+        # Parallelism
+        self.num_workers = 1  # Number of parallel worker processes for batch processing
+
     def parse_args(self):
         """
         Parse the command line arguments to fill the configuration
@@ -171,6 +174,14 @@ class PreprocessingConfig:
             help="Cuts on d0 and z0 for primary vertex selection [d0_max, z0_max]",
         )
 
+        # Parallelism
+        parser.add_argument(
+            "--num_workers",
+            type=int,
+            default=self.num_workers,
+            help="Number of parallel worker processes for batch processing (1 = sequential)",
+        )
+
         # Feature lists
         parser.add_argument(
             "--hit_features",
@@ -228,6 +239,7 @@ class PreprocessingConfig:
 
         self.hit_features = args.hit_features
         self.particle_features = args.particle_features
+        self.num_workers = args.num_workers
 
         # Validate orphan_hit_fraction range
         if self.orphan_hit_fraction < 0.0 or self.orphan_hit_fraction > 1.0:
@@ -306,6 +318,9 @@ class PreprocessingConfig:
         print("\nFeatures:")
         print("  Hit features: ", self.hit_features)
         print("  Particle features: ", self.particle_features)
+
+        print("\nParallelism:")
+        print("  Num workers: ", self.num_workers)
 
         print("\nConfiguration file operations available:")
         print("  --save_config <filename>     : Save current config to JSON file")
