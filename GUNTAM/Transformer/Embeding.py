@@ -93,7 +93,7 @@ class FourierPositionalEncoding(nn.Module):
         if x_sampled.size(-1) != self.input_dim:
             raise ValueError(f"x_sampled last dim {x_sampled.size(-1)} does not match " f"input_dim={self.input_dim}")
 
-        coord = x_sampled + self.shift / self.dim_max  #type: ignore
+        coord = x_sampled + self.shift / self.dim_max  # type: ignore
 
         # Process each dimension separately since they can have different number of frequencies
         fourier_features_list = []
