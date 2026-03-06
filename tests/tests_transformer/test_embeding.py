@@ -18,9 +18,9 @@ class TestFourierPositionalEncodingInitialization:
         assert fpe.num_frequencies == num_frequencies
         expected_output_dim = sum(num_frequencies) * 2 + high_level_dim
         assert fpe.output_dim == expected_output_dim
-        assert hasattr(fpe, "freq_tensors")  # Changed from freq_matrix
-        assert len(fpe.freq_tensors) == input_dim
-        for i, freq_tensor in enumerate(fpe.freq_tensors):
+        assert all(hasattr(fpe, f"freq_{i}") for i in range(input_dim))
+        for i in range(input_dim):
+            freq_tensor = getattr(fpe, f"freq_{i}")
             assert freq_tensor.shape == (num_frequencies[i],)
             assert torch.allclose(freq_tensor, 2.0 ** torch.arange(num_frequencies[i]).float())
 
@@ -45,10 +45,11 @@ class TestFourierPositionalEncodingInitialization:
         assert fpe.num_frequencies == num_frequencies_list
         expected_output_dim = sum(num_frequencies_list) * 2 + high_level_dim
         assert fpe.output_dim == expected_output_dim
-        assert len(fpe.freq_tensors) == input_dim
+        assert all(hasattr(fpe, f"freq_{i}") for i in range(input_dim))
         for i, num_freq in enumerate(num_frequencies_list):
-            assert fpe.freq_tensors[i].shape == (num_freq,)
-            assert torch.allclose(fpe.freq_tensors[i], 2.0 ** torch.arange(num_freq).float())
+            freq_tensor = getattr(fpe, f"freq_{i}")
+            assert freq_tensor.shape == (num_freq,)
+            assert torch.allclose(freq_tensor, 2.0 ** torch.arange(num_freq).float())
 
     def test_initialization_errors(self):
         """Test that invalid constructor arguments raise errors."""

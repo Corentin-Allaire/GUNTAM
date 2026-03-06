@@ -54,16 +54,15 @@ class FourierPositionalEncoding(nn.Module):
         self.input_dim = input_dim
         self.num_frequencies = num_frequencies
         self.output_dim = sum(num_frequencies) * 2 + high_level_dim  # Fourier features + high_level
-        self.dim_max = torch.tensor(dim_max, device=device_acc)
-        self.shift = torch.tensor(shift, device=device_acc)
+        self.register_buffer("dim_max", torch.tensor(dim_max, device=device_acc), persistent=False)
+        self.register_buffer("shift", torch.tensor(shift, device=device_acc), persistent=False)
         self.device_acc = device_acc
 
         # Create frequency lists for each dimension with powers of 2: [2^0, 2^1, 2^2, ..., 2^(num_frequencies-1)]
         # Store as a list of tensors since each dimension can have different frequencies
-        self.freq_tensors = []
-        for num_freq in num_frequencies:
+        for i, num_freq in enumerate(num_frequencies):
             frequencies = 2.0 ** torch.arange(num_freq, device=device_acc).float()
-            self.freq_tensors.append(frequencies)
+            self.register_buffer(f"freq_{i}", frequencies, persistent=False)
 
         if input_dim <= 0:
             raise ValueError("Input dimension must be greater than 0")
@@ -94,7 +93,7 @@ class FourierPositionalEncoding(nn.Module):
         if x_sampled.size(-1) != self.input_dim:
             raise ValueError(f"x_sampled last dim {x_sampled.size(-1)} does not match " f"input_dim={self.input_dim}")
 
-        coord = x_sampled + self.shift / self.dim_max  # Normalize coordinates
+        coord = x_sampled + self.shift / self.dim_max  #type: ignore
 
         # Process each dimension separately since they can have different number of frequencies
         fourier_features_list = []
@@ -104,7 +103,7 @@ class FourierPositionalEncoding(nn.Module):
             coord_dim = coord[:, :, dim_idx]
 
             # Get frequency tensor for this dimension
-            freq_tensor = self.freq_tensors[dim_idx]  # (num_freq_dim,)
+            freq_tensor = getattr(self, f"freq_{dim_idx}")  # (num_freq_dim,)
 
             # Broadcast and compute projection: (batch, seq_len, num_freq_dim)
             proj = 2 * math.pi * coord_dim.unsqueeze(-1) * freq_tensor.unsqueeze(0).unsqueeze(0)

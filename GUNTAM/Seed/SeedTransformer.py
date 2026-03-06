@@ -220,6 +220,7 @@ class SeedTransformer(nn.Module):
                 # Rebuild architecture to match the checkpoint if freq/embedding/layers differ
                 self._rebuild_from_checkpoint_config(checkpoint.get("transformer_config"), device)
                 load_state_dict_flex(self, state_dict, desc="resume")
+                self.to(device)
                 if "optimizer_state_dict" in checkpoint and optimizer is not None:
                     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
                 if "scheduler_state_dict" in checkpoint and scheduler is not None:
@@ -256,5 +257,3 @@ class SeedTransformer(nn.Module):
         self.cfg = new_cfg
         self.device_acc = device
         self._setup_modules()
-
-        self.to(device)
