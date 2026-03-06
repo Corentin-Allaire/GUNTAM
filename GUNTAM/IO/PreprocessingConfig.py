@@ -63,6 +63,9 @@ class PreprocessingConfig:
         self.hit_features = ["x", "y", "z"]  # List of hit features to extract
         self.particle_features = ["eta", "phi", "pT"]  # List of particle features to extract
 
+        # Event weights
+        self.pv_pair_weight = 10  # Weight for primary-vertex (PV) particle pairs in training
+
         # Parallelism
         self.num_workers = 1  # Number of parallel worker processes for batch processing
 
@@ -192,6 +195,14 @@ class PreprocessingConfig:
             help="List of particle features to extract from data",
         )
 
+        # Event weights
+        parser.add_argument(
+            "--pv_pair_weight",
+            type=int,
+            default=self.pv_pair_weight,
+            help="Weight for primary-vertex (PV) particle pairs in training",
+        )
+
     def apply_args(self, args: argparse.Namespace) -> None:
         """
         Apply the values from a parsed Namespace to the configuration.
@@ -219,6 +230,7 @@ class PreprocessingConfig:
         self.hit_features = args.hit_features
         self.particle_features = args.particle_features
         self.num_workers = args.num_workers
+        self.pv_pair_weight = args.pv_pair_weight
 
         # Validate orphan_hit_fraction range
         if self.orphan_hit_fraction < 0.0 or self.orphan_hit_fraction > 1.0:
@@ -334,6 +346,9 @@ class PreprocessingConfig:
 
         print("\nParallelism:")
         print("  Num workers: ", self.num_workers)
+
+        print("\nEvent Weights:")
+        print("  PV pair weight: ", self.pv_pair_weight)
 
         print("\nConfiguration file operations available:")
         print("  --save_config <filename>     : Save current config to JSON file")

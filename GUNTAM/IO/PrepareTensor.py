@@ -79,6 +79,7 @@ def _build_good_pairs_tensors(
     bins: pd.DataFrame,
     hit_to_particle: pd.Series,
     num_bins: int,
+    pv_weight: int = 10,
 ) -> torch.Tensor:
     """
     Build a tensor of all hit pairs and their labels (same particle or not) for a batch of events,
@@ -132,13 +133,13 @@ def _build_good_pairs_tensors(
                 i_valid, j_valid = np.where(valid_mask)
 
                 # Create pairs array: (hit_idx1, hit_idx2, label) using bin-relative indices
-                # Label is 100 for primary-vertex (PV) particle pairs, 1 otherwise
+                # Label is pv_weight for primary-vertex (PV) particle pairs, 1 otherwise
                 if len(i_valid) > 0:
                     pv_col = "particle_id_pv"
                     if pv_col in data_batch.columns:
                         pv_flags = data_batch.loc[bin_hit_indices_array, pv_col].values == 1
                         is_pv_pair = pv_flags[i_valid]
-                        labels = np.where(is_pv_pair, 100, 1).astype(np.int64)
+                        labels = np.where(is_pv_pair, pv_weight, 1).astype(np.int64)
                     else:
                         labels = np.ones(len(i_valid), dtype=np.int64)
                     pairs = np.stack([i_valid, j_valid, labels], axis=1)
@@ -545,7 +546,7 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
     )
 
     # Create the good pairs tensor for this batch
-    good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max)
+    good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max, pv_weight=cfg.pv_pair_weight)
 
     data_batch = data_batch.drop(columns=["particle_id_pv"], errors="ignore")
 

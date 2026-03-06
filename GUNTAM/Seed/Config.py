@@ -366,7 +366,7 @@ class SeedConfig:
                 flat[key] = value
 
         # Keys that are not CLI arguments (derived or top-level duplicates of sub-config fields)
-        skip = {"loss_config", "input_tensor_path", "dataset_name"}
+        skip = {"loss_config"}
 
         # CLI flag name differs from the dict key
         rename = {"device_acc": "device", "reconstruction_method": "reconstruction_method"}

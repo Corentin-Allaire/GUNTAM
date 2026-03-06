@@ -40,6 +40,9 @@ class TestPreprocessingConfig:
         assert config.hit_features == ["x", "y", "z"]
         assert config.particle_features == ["eta", "phi", "pT"]
 
+        # Event weights
+        assert config.pv_pair_weight == 10
+
     def test_eta_range_list_structure(self):
         """Test that eta_range is a list with two elements."""
         config = PreprocessingConfig()
@@ -86,6 +89,7 @@ class TestPreprocessingConfig:
         assert config_dict["tensor_format"] == "pt"
         assert config_dict["binning_strategy"] == "neighbor"
         assert config_dict["eta_range"] == [-3.0, 3.0]
+        assert config_dict["pv_pair_weight"] == 10
 
     def test_from_dict(self):
         """Test loading config from dictionary."""
@@ -180,6 +184,7 @@ class TestPreprocessingConfig:
         config.vertex_cuts = [15, 250]
         config.hit_features = ["x", "y", "z", "r"]
         config.particle_features = ["eta", "phi", "pT", "d0"]
+        config.pv_pair_weight = 5
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config_file = os.path.join(tmpdir, "full_test.json")
@@ -206,6 +211,7 @@ class TestPreprocessingConfig:
             assert loaded_config.vertex_cuts == [15, 250]
             assert loaded_config.hit_features == ["x", "y", "z", "r"]
             assert loaded_config.particle_features == ["eta", "phi", "pT", "d0"]
+            assert loaded_config.pv_pair_weight == 5
 
     def test_parse_args_basic(self, monkeypatch):
         """Test basic argument parsing with various parameters."""
@@ -252,6 +258,7 @@ class TestPreprocessingConfig:
         assert "Binning:" in output
         assert "Selection:" in output
         assert "Features:" in output
+        assert "Event Weights:" in output
 
 
 if __name__ == "__main__":
