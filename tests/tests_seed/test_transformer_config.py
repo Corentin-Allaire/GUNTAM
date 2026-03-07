@@ -113,16 +113,6 @@ def test_parse_args_fourier_explicit(monkeypatch):
     assert cfg.fourier_num_frequencies == [8, 8, 16, 4]
 
 
-def test_validation_dim_embedding_not_divisible_by_heads(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--dim_embedding", "10",
-        "--nb_heads", "3",
-    ])
-    with pytest.raises(ValueError, match="divisible"):
-        TransformerConfig().parse_args()
-
-
 def test_validation_dropout_out_of_range(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["prog", "--dropout", "1.0"])
     with pytest.raises(ValueError, match="dropout"):

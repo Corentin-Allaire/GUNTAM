@@ -65,7 +65,7 @@ class DataLoader:
             with h5py.File(file_path, "r") as f:
                 # Load all datasets
                 for key in f.keys():
-                    data = f[key][:]
+                    data = f[key][()]
                     # Convert numpy arrays to torch tensors and move to device
                     if isinstance(data, np.ndarray):
                         file_data[key] = torch.from_numpy(data).to(self.device)

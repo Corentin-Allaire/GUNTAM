@@ -491,16 +491,18 @@ def _save_tensor_data(
             for key, value in file_data.items():
                 if isinstance(value, torch.Tensor):
                     # Convert tensor to numpy array for HDF5 storage
+                    numpy_value = value.numpy()
                     f.create_dataset(
                         key,
-                        data=value.numpy(),
+                        data=numpy_value,
+                        dtype=numpy_value.dtype,
                         compression="gzip",
                         compression_opts=9,
                     )
                 elif isinstance(value, list):
                     # Save lists as attributes or datasets depending on content
                     if key == "batch_events":
-                        f.create_dataset(key, data=np.array(value), compression="gzip")
+                        f.create_dataset(key, data=np.array(value), dtype=np.int64, compression="gzip")
                     else:
                         f.attrs[key] = value
                 else:
