@@ -211,3 +211,57 @@ def test_print_config(capsys):
     assert "Transformer Architecture Configuration" in out
     assert "Number of layers" in out
     assert "Embedding features" in out
+
+
+def test_dim_max_shift_match_coord_dim_with_cosine_in_embedding(monkeypatch):
+    """When cosine_processing overlaps embedding_feature, coord_dim > n_embed.
+    dim_max and shift must have coord_dim length, not n_embed length."""
+    # embedding_feature = [0, 1, 2], cosine_processing = [0]
+    # intersection = {0} → coord_dim = 3 + 1 = 4, n_embed = 3
+    monkeypatch.setattr(sys, "argv", [
+        "prog",
+        "--embedding_feature", "0", "1", "2",
+        "--high_level_features",
+        "--cosine_processing", "0",
+        "--dim_max", "400.0", "400.0", "2000.0", "400.0",  # length 4 == coord_dim
+        "--shift", "200.0", "200.0", "1000.0", "200.0",    # length 4 == coord_dim
+        "--fourier_num_frequencies", "4", "4", "4", "4",
+    ])
+    cfg = TransformerConfig()
+    cfg.parse_args()
+    assert len(cfg.dim_max) == 4
+    assert len(cfg.shift) == 4
+
+
+def test_validation_dim_max_must_match_coord_dim_not_n_embed(monkeypatch):
+    """Providing dim_max with n_embed length instead of coord_dim length should fail
+    when cosine_processing overlaps embedding_feature."""
+    # embedding_feature = [0, 1, 2], cosine_processing = [0]
+    # coord_dim = 4, n_embed = 3 → dim_max length 3 should raise
+    monkeypatch.setattr(sys, "argv", [
+        "prog",
+        "--embedding_feature", "0", "1", "2",
+        "--high_level_features",
+        "--cosine_processing", "0",
+        "--dim_max", "400.0", "400.0", "2000.0",   # length 3 == n_embed, but coord_dim == 4
+        "--shift", "200.0", "200.0", "1000.0", "200.0",
+    ])
+    with pytest.raises(ValueError, match="dim_max"):
+        TransformerConfig().parse_args()
+
+
+def test_validation_shift_must_match_coord_dim_not_n_embed(monkeypatch):
+    """Providing shift with n_embed length instead of coord_dim length should fail
+    when cosine_processing overlaps embedding_feature."""
+    # embedding_feature = [0, 1, 2], cosine_processing = [0]
+    # coord_dim = 4, n_embed = 3 → shift length 3 should raise
+    monkeypatch.setattr(sys, "argv", [
+        "prog",
+        "--embedding_feature", "0", "1", "2",
+        "--high_level_features",
+        "--cosine_processing", "0",
+        "--dim_max", "400.0", "400.0", "2000.0", "400.0",
+        "--shift", "200.0", "200.0", "1000.0",             # length 3 == n_embed, but coord_dim == 4
+    ])
+    with pytest.raises(ValueError, match="shift"):
+        TransformerConfig().parse_args()

@@ -26,10 +26,11 @@ class TransformerConfig:
                 directly (e.g. [4,5] for phi, eta).
             - cosine_processing: list[int]: Indices of features to which cosine/sine decomposition
                 is applied (e.g. [4] for phi).
-            - dim_max: list[float]: Maximum expected value for each embedded dimension, used to
-                normalise inputs before Fourier encoding [x_max, y_max, z_max, r_max].
-            - shift: list[float]: Shift applied to each embedded dimension before normalisation
-                [x_shift, y_shift, z_shift, r_shift].
+            - dim_max: list[float]: Maximum expected value per encoded coordinate dimension
+                (after cosine expansion, length == coord_dim), used to normalise inputs before
+                Fourier encoding [x_max, y_max, z_max, r_max].
+            - shift: list[float]: Shift applied to each encoded coordinate dimension before
+                normalisation (length == coord_dim) [x_shift, y_shift, z_shift, r_shift].
         """
 
         # Transformer architecture
@@ -104,16 +105,16 @@ class TransformerConfig:
             nargs="+",
             type=float,
             default=self.dim_max,
-            help="Maximum expected value per embedded feature dimension for Fourier normalisation. "
-            "Length must match --embedding_feature.",
+            help="Maximum expected value per encoded coordinate dimension for Fourier normalisation. "
+            "Length must match coord_dim (embedding_feature + cosine-expanded dims).",
         )
         parser.add_argument(
             "--shift",
             nargs="+",
             type=float,
             default=self.shift,
-            help="Shift applied to each embedded feature dimension before Fourier normalisation. "
-            "Length must match --embedding_feature.",
+            help="Shift applied to each encoded coordinate dimension before Fourier normalisation. "
+            "Length must match coord_dim (embedding_feature + cosine-expanded dims).",
         )
 
         # Feature selection
@@ -171,7 +172,6 @@ class TransformerConfig:
             raise ValueError(f"dropout must be in [0.0, 1.0), got {self.dropout}")
         if not self.embedding_feature:
             raise ValueError("embedding_feature must not be empty")
-        n_embed = len(self.embedding_feature)
         if self.fourier_num_frequencies is not None:
             if len(self.fourier_num_frequencies) != coord_dim:
                 raise ValueError(
@@ -180,10 +180,10 @@ class TransformerConfig:
                 )
             if any(f < 1 for f in self.fourier_num_frequencies):
                 raise ValueError(f"All fourier_num_frequencies values must be >= 1, got {self.fourier_num_frequencies}")
-        if len(self.dim_max) != n_embed:
-            raise ValueError(f"dim_max length ({len(self.dim_max)}) must match embedding_feature length ({n_embed})")
-        if len(self.shift) != n_embed:
-            raise ValueError(f"shift length ({len(self.shift)}) must match embedding_feature length ({n_embed})")
+        if len(self.dim_max) != coord_dim:
+            raise ValueError(f"dim_max length ({len(self.dim_max)}) must match coord_dim ({coord_dim})")
+        if len(self.shift) != coord_dim:
+            raise ValueError(f"shift length ({len(self.shift)}) must match coord_dim ({coord_dim})")
         valid_indices = set(self.embedding_feature) | set(self.high_level_features)
         invalid = [i for i in self.cosine_processing if i not in valid_indices]
         if invalid:
