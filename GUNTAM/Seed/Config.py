@@ -317,31 +317,6 @@ class SeedConfig:
         if hasattr(self, "loss_components") and hasattr(self, "loss_weights"):
             self.loss_config = dict(zip(self.loss_components, self.loss_weights))
 
-    def save_config(self, filepath: str):
-        """Save configuration to a JSON file"""
-        config_dict = self.to_dict()
-
-        # Create directory if it doesn't exist
-        os.makedirs(
-            os.path.dirname(filepath) if os.path.dirname(filepath) else ".",
-            exist_ok=True,
-        )
-
-        with open(filepath, "w") as f:
-            json.dump(config_dict, f, indent=2)
-        print(f"Configuration saved to {filepath}")
-
-    def load_config(self, filepath: str):
-        """Load configuration from a JSON file"""
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Configuration file not found: {filepath}")
-
-        with open(filepath, "r") as f:
-            config_dict = json.load(f)
-
-        self.from_dict(config_dict)
-        print(f"Configuration loaded from {filepath}")
-
     def save_sh(self, filepath: str):
         """Save configuration to a bash shell script with COMMON_ARGS format."""
 
@@ -407,6 +382,33 @@ class SeedConfig:
         with open(filepath, "w") as f:
             f.write("\n".join(lines) + "\n")
         print(f"Shell configuration saved to {filepath}")
+
+    def save_config(self, filepath: str):
+        """Save configuration to a JSON file"""
+        config_dict = self.to_dict()
+
+        # Create directory if it doesn't exist
+        os.makedirs(
+            os.path.dirname(filepath) if os.path.dirname(filepath) else ".",
+            exist_ok=True,
+        )
+
+        with open(filepath, "w") as f:
+            json.dump(config_dict, f, indent=2)
+        print(f"Configuration saved to {filepath}")
+
+        self.save_sh("training_config.sh")
+
+    def load_config(self, filepath: str):
+        """Load configuration from a JSON file"""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Configuration file not found: {filepath}")
+
+        with open(filepath, "r") as f:
+            config_dict = json.load(f)
+
+        self.from_dict(config_dict)
+        print(f"Configuration loaded from {filepath}")
 
     def print_config(self):
         """

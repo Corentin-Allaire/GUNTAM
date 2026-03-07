@@ -667,28 +667,6 @@ def main():
 
     train_size = dataset.get_batch_size(0, len(dataset) - 1)
 
-    # Resume training from existing model/checkpoint if specified
-    if cfg.resume_training:
-        ts_print(f"Resuming training from {cfg.model_path}...")
-        # Check if a checkpoint file exists
-        start_epoch = model.load(
-            path=cfg.model_path,
-            device=cfg.device_acc,
-            optimizer=opt,
-            scheduler=scheduler,
-        )
-
-        # Load previous tensorboard logs
-        if os.path.exists(log_dir):
-            # Append to existing log dir so TensorBoard combines all runs
-            writer = SummaryWriter(log_dir=log_dir)
-        else:
-            ts_print(f"Warning: TensorBoard log directory {log_dir} not found. Creating new logs.")
-            writer = SummaryWriter(log_dir)
-    else:
-        # If not resuming, create new TensorBoard writer
-        writer = SummaryWriter(log_dir)
-
     # Split the dataset at the file level to ensure proper train/test separation
     num_files = dataset.get_file_number()
     test_fraction = cfg.test_fraction
@@ -700,13 +678,34 @@ def main():
     train_file_indices = list(range(train_files))
     test_file_indices = list(range(train_files, num_files))
 
-    # Print model summary
-    model.print_model_info()
-
     # Keep training file order deterministic (no shuffling)
     if cfg.epoch_nb > 0:
-        # Calculate the total number of training events across all training files
 
+        # Resume training from existing model/checkpoint if specified
+        if cfg.resume_training:
+            ts_print(f"Resuming training from {cfg.model_path}...")
+            # Check if a checkpoint file exists
+            start_epoch = model.load(
+                path=cfg.model_path,
+                device=cfg.device_acc,
+                optimizer=opt,
+                scheduler=scheduler,
+            )
+            # Load previous tensorboard logs
+            if os.path.exists(log_dir):
+                # Append to existing log dir so TensorBoard combines all runs
+                writer = SummaryWriter(log_dir=log_dir)
+            else:
+                ts_print(f"Warning: TensorBoard log directory {log_dir} not found. Creating new logs.")
+                writer = SummaryWriter(log_dir)
+        else:
+            # If not resuming, create new TensorBoard writer
+            writer = SummaryWriter(log_dir)
+
+        # Print model summary
+        model.print_model_info()
+
+        # Calculate the total number of training events across all training files
         ts_print(f"Training on {train_size} events across {len(train_file_indices)} files")
         # Very important: compile the model
         model = torch.compile(model)

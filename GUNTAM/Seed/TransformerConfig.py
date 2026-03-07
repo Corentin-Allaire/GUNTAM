@@ -167,8 +167,6 @@ class TransformerConfig:
             raise ValueError(f"nb_heads must be >= 1, got {self.nb_heads}")
         if self.dim_embedding < 1:
             raise ValueError(f"dim_embedding must be >= 1, got {self.dim_embedding}")
-        if self.dim_embedding % self.nb_heads != 0:
-            raise ValueError(f"dim_embedding ({self.dim_embedding}) must be divisible by nb_heads ({self.nb_heads})")
         if not (0.0 <= self.dropout < 1.0):
             raise ValueError(f"dropout must be in [0.0, 1.0), got {self.dropout}")
         if not self.embedding_feature:

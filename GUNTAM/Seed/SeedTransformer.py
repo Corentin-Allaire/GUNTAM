@@ -248,7 +248,8 @@ class SeedTransformer(nn.Module):
             return
 
         new_cfg = TransformerConfig()
-        new_cfg.from_dict(model_cfg)
+        new_cfg.from_dict(self.cfg.to_dict())  # start from current (CLI) config
+        new_cfg.from_dict(model_cfg)  # overlay only fields present in checkpoint
 
         if new_cfg.to_dict() == self.cfg.to_dict():
             return
