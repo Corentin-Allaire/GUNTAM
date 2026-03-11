@@ -267,7 +267,7 @@ class TransformerConfig:
         print("  Embedding dimension:  ", self.dim_embedding)
         print("  Feed-forward ratio:   ", self.feed_forward_ratio)
         print("  Dropout rate:         ", self.dropout)
-        print("\nFourier Positional Encoding: {self.fourier_num_frequencies}")
+        print(f"\nFourier Positional Encoding: {self.fourier_num_frequencies}")
         print(f"  dim_max [x,y,z,r]:     {self.dim_max}")
         print(f"  shift   [x,y,z,r]:     {self.shift}")
         print("\nFeature Selection:")

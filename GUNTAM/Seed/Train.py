@@ -559,7 +559,7 @@ def run_model(
                 bin_seeds = Reconstruction.weighted_chained_seed_reconstruction(
                     neighbor_matrix_masked,
                     valid_parameters,
-                    score_threshold=0.2,
+                    score_threshold=0.0,
                     max_chain_length=5,
                     pairs_per_hit=2,
                 )
@@ -632,8 +632,8 @@ def main():
     scheduler = Utils.create_cosine_schedule_with_min_lr(
         opt,
         num_warmup_steps=cfg.num_warmup_steps,
-        num_training_steps=100,
-        min_lr_ratio=0.01,  # 1% of initial learning rate
+        num_training_steps=cfg.num_training_steps,
+        min_lr_ratio=cfg.min_lr_ratio,
     )
 
     start_epoch = 0
@@ -740,9 +740,13 @@ def main():
         del train_file_indices
         torch.cuda.empty_cache()
 
-    writer.close()
+        writer.close()
+
     # Load model configuration from checkpoint or use config defaults
-    model_val = SeedTransformer()
+    model_val = SeedTransformer(
+        transformer_config=cfg.transformer_config,
+        device_acc=cfg.device_acc,
+    )
 
     if cfg.no_test:
         ts_print("Skipping evaluation")
