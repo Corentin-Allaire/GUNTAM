@@ -430,28 +430,28 @@ def reconstruction_loss(
     loss_z_part = loss_function(
         reconstructed_particle[:, :, 0][valid_hits_mask],
         particles_data[:, :, 1][valid_hits_mask],
-        reduction="mean",
+        reduction="sum",
     )
     loss_eta_part = loss_function(
         reconstructed_particle[:, :, 1][valid_hits_mask],
         particles_data[:, :, 3][valid_hits_mask],
-        reduction="mean",
+        reduction="sum",
     )
     loss_sin_phi_part = loss_function(
         reconstructed_particle[:, :, 2][valid_hits_mask],
         torch.sin(particles_data[:, :, 2][valid_hits_mask]),
-        reduction="mean",
+        reduction="sum",
     )
     loss_cos_phi_part = loss_function(
         reconstructed_particle[:, :, 3][valid_hits_mask],
         torch.cos(particles_data[:, :, 2][valid_hits_mask]),
-        reduction="mean",
+        reduction="sum",
     )
     loss_phi_part = loss_sin_phi_part + loss_cos_phi_part
     loss_pt_part = loss_function(
         reconstructed_particle[:, :, 4][valid_hits_mask],
         particles_data[:, :, 4][valid_hits_mask],
-        reduction="mean",
+        reduction="sum",
     )
 
     # Build a dictionary to hold the losses
@@ -520,9 +520,9 @@ def hit_classification_loss(
             torch.full_like(target_labels, w_pos),
             torch.full_like(target_labels, w_neg),
         )
-        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, weight=sample_weights, reduction="mean")
+        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, weight=sample_weights, reduction="sum")
     else:
         # Fallback to unweighted if a class is absent to avoid instability
-        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, reduction="mean")
+        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, reduction="sum")
 
     return hit_bce_loss
