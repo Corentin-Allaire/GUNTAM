@@ -609,10 +609,9 @@ def compute_barcode(cfg: PreprocessingConfig) -> str:
         A string barcode that encodes key configuration parameters such as binning strategy,
         bin width, max hits, and orphan hit fraction.
     """
+    barcode = f"BS{cfg.binning_strategy}_BW{cfg.bin_width}_MH{cfg.max_hit_input}_PW{int(cfg.pv_pair_weight)}"
     if cfg.orphan_hit_fraction > 0:
-        barcode = f"BS{cfg.binning_strategy}_BW{cfg.bin_width}_MH{cfg.max_hit_input}_" f"OF{int(cfg.orphan_hit_fraction * 100)}"
-    else:
-        barcode = f"BS{cfg.binning_strategy}_BW{cfg.bin_width}_MH{cfg.max_hit_input}"
+        barcode += f"_OF{int(cfg.orphan_hit_fraction * 100)}"
     return barcode
 
 
