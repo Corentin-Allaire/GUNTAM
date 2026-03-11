@@ -25,6 +25,8 @@ def test_defaults_initialization():
     # Training defaults
     assert cfg.epoch_nb == 10
     assert cfg.num_warmup_steps == 5
+    assert cfg.num_training_steps == 100
+    assert cfg.min_lr_ratio == pytest.approx(0.01)
     assert cfg.val_fraction == 0.1
     assert cfg.test_fraction == 0.1
     assert cfg.learning_rate == pytest.approx(5e-5)
