@@ -497,7 +497,7 @@ class PerformanceMonitor:
                 htp_flat = np.asarray(hit_to_particle).reshape(-1)
                 # Valid (non-padded) hits: at least one non-zero feature
                 valid_mask = np.any(hits != 0, axis=-1)
-                scores = reco_bin[valid_mask, 5]
+                scores = reco_bin[valid_mask, 4]
                 is_particle = htp_flat[valid_mask] >= 0
                 self.hit_scores["particle"].extend(scores[is_particle].tolist())
                 self.hit_scores["orphan"].extend(scores[~is_particle].tolist())

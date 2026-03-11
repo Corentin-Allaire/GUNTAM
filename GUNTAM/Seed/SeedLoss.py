@@ -425,8 +425,6 @@ def reconstruction_loss(
             "pt": torch.tensor(0.0, device=device),
         }
     # Safe clamp for pT inversion to avoid inf / NaN
-    pred_pt = reconstructed_particle[:, :, 4][valid_hits_mask]
-    pred_pt_clamped = torch.clamp(pred_pt, min=1e-6)
 
     # Compute component losses
     loss_z_part = loss_function(
@@ -451,8 +449,8 @@ def reconstruction_loss(
     )
     loss_phi_part = loss_sin_phi_part + loss_cos_phi_part
     loss_pt_part = loss_function(
-        (1.0 / pred_pt_clamped),
-        (1.0 / particles_data[:, :, 4][valid_hits_mask]),
+        reconstructed_particle[:, :, 4][valid_hits_mask],
+        particles_data[:, :, 4][valid_hits_mask],
         reduction="mean",
     )
 
