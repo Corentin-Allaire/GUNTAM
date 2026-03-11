@@ -847,15 +847,7 @@ def create_efficiency_vs_truth_param_plots(
                 capsize=0,
                 linewidth=1,
             )
-            valid = counts_all > 0
-            if np.any(valid):
-                min_eff = np.min(np.concatenate([eff[valid], eff_pure[valid]]))
-            else:
-                min_eff = 1.0
-            if min_eff < 0.3:
-                ax.set_ylim(0.0, 1.0)
-            else:
-                ax.set_ylim(0.3, 1.1)
+            ax.set_ylim(0.0, 1.01)
             ax.set_xlabel(xlabel)
             ax.set_ylabel("Efficiency")
             ax.set_title(title)
