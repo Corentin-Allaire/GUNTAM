@@ -44,6 +44,8 @@ class SeedConfig:
         # Training loop variables
         self.epoch_nb = 10
         self.num_warmup_steps = 5
+        self.num_training_steps = 100
+        self.min_lr_ratio = 0.01
         self.val_fraction = 0.1
         self.test_fraction = 0.1
         self.learning_rate = 5e-5
@@ -95,6 +97,18 @@ class SeedConfig:
             type=int,
             default=self.num_warmup_steps,
             help="Number of warmup steps for the learning rate scheduler",
+        )
+        parser.add_argument(
+            "--num_training_steps",
+            type=int,
+            default=self.num_training_steps,
+            help="Total number of training steps for the cosine LR scheduler",
+        )
+        parser.add_argument(
+            "--min_lr_ratio",
+            type=float,
+            default=self.min_lr_ratio,
+            help="Minimum learning rate as a fraction of the initial learning rate (cosine scheduler)",
         )
 
         # Training control flags and paths
@@ -216,6 +230,8 @@ class SeedConfig:
         self.val_fraction = args.val_fraction
         self.test_fraction = args.test_fraction
         self.num_warmup_steps = args.num_warmup_steps
+        self.num_training_steps = args.num_training_steps
+        self.min_lr_ratio = args.min_lr_ratio
         self.recompute_tensor = args.recompute_tensor
         self.no_test = args.no_test
         self.resume_training = args.resume_training
@@ -434,6 +450,8 @@ class SeedConfig:
         print("Weight decay: ", self.weight_decay)
         print("Batch size: ", self.batch_size)
         print("Warmup steps: ", self.num_warmup_steps)
+        print("Num training steps: ", self.num_training_steps)
+        print("Min LR ratio: ", self.min_lr_ratio)
         print("Device: ", self.device_acc)
         print("Cuda available: ", torch.cuda.is_available())
         print("Timing enabled: ", self.timing_enabled)
