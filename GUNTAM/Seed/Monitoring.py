@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -69,6 +69,9 @@ class PerformanceMonitor:
             "phi": [],
             "pt": [],
         }
+
+        # Per-hit scores (index 4 of reco_params) split by particle membership
+        self.hit_scores: dict[str, list[float]] = {"particle": [], "orphan": []}
 
         self.eligible_particles: list[dict[str, Any]] = []
 
@@ -468,7 +471,15 @@ class PerformanceMonitor:
             for p, dr in zip(plist, min_dR):
                 p["deltaR_min"] = float(dr)
 
-    def bin_seeding_performance(self, event_idx: int, event_hits, event_particles, event_hit_to_particle, event_seeds):
+    def bin_seeding_performance(
+        self,
+        event_idx: int,
+        event_hits,
+        event_particles,
+        event_hit_to_particle,
+        event_seeds,
+        event_reco_params: Optional[List[Optional[np.ndarray]]] = None,
+    ):
 
         event_particle_best_seeds: Dict[int, Dict[str, Any]] = {}
         event_particle_bins: Dict[int, Dict[str, Any]] = {}
@@ -479,6 +490,17 @@ class PerformanceMonitor:
             hit_to_particle = event_hit_to_particle[bin_idx]
             seeds = event_seeds[bin_idx]
             self.total_seeds += len(seeds)
+
+            # Collect per-hit scores (reco_params[:, 5]) split by particle membership
+            if event_reco_params is not None and event_reco_params[bin_idx] is not None:
+                reco_bin = np.asarray(event_reco_params[bin_idx])
+                htp_flat = np.asarray(hit_to_particle).reshape(-1)
+                # Valid (non-padded) hits: at least one non-zero feature
+                valid_mask = np.any(hits != 0, axis=-1)
+                scores = reco_bin[valid_mask, 5]
+                is_particle = htp_flat[valid_mask] >= 0
+                self.hit_scores["particle"].extend(scores[is_particle].tolist())
+                self.hit_scores["orphan"].extend(scores[~is_particle].tolist())
 
             # --- Build bin_particles dict ---
             bin_particles = self._build_bin_particles(particles, hit_to_particle)
@@ -577,6 +599,7 @@ class PerformanceMonitor:
                 "std_pure_efficiency": np.std([b["pure_seeding_efficiency"] for b in self.bin_summaries]),
             },
             "bin_complexity_analysis": self._analyze_bin_complexity(self.bin_summaries),
+            "hit_scores": self.hit_scores,
         }
 
         # Print

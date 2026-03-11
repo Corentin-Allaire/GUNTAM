@@ -413,7 +413,7 @@ def reconstruction_loss(
 
     # Filter out hits without associated particles (pT = 0.0 indicates orphan hits)
     # Only hits with true pT > 0 participate in any reconstruction component (z, eta, phi, pT)
-    has_particle_mask = particles_data[:, :, 3] > 0.0  # True particle present
+    has_particle_mask = particles_data[:, :, 4] > 0.0  # True particle present (index 4 = pT)
     valid_hits_mask = non_padded_mask & has_particle_mask
 
     if torch.sum(valid_hits_mask) == 0:
@@ -432,22 +432,22 @@ def reconstruction_loss(
     loss_z_part = loss_function(
         reconstructed_particle[:, :, 0][valid_hits_mask],
         particles_data[:, :, 1][valid_hits_mask],
-        reduction="sum",
+        reduction="mean",
     )
     loss_eta_part = loss_function(
         reconstructed_particle[:, :, 1][valid_hits_mask],
         particles_data[:, :, 3][valid_hits_mask],
-        reduction="sum",
+        reduction="mean",
     )
     loss_sin_phi_part = loss_function(
         reconstructed_particle[:, :, 2][valid_hits_mask],
         torch.sin(particles_data[:, :, 2][valid_hits_mask]),
-        reduction="sum",
+        reduction="mean",
     )
     loss_cos_phi_part = loss_function(
         reconstructed_particle[:, :, 3][valid_hits_mask],
         torch.cos(particles_data[:, :, 2][valid_hits_mask]),
-        reduction="sum",
+        reduction="mean",
     )
     loss_phi_part = loss_sin_phi_part + loss_cos_phi_part
     loss_pt_part = loss_function(
@@ -505,7 +505,7 @@ def hit_classification_loss(
 
     # Create target labels: 1.0 for hits with particles (seed hits), 0.0 for orphan hits
     # pT > 0 indicates valid particle association
-    has_particle_mask = valid_particles[:, 3] > 0.0
+    has_particle_mask = valid_particles[:, 4] > 0.0
     target_labels = has_particle_mask.float()
 
     # Class-balanced weights to mitigate imbalance between orphan (0) and seed (1) hits
@@ -522,9 +522,9 @@ def hit_classification_loss(
             torch.full_like(target_labels, w_pos),
             torch.full_like(target_labels, w_neg),
         )
-        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, weight=sample_weights, reduction="sum")
+        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, weight=sample_weights, reduction="mean")
     else:
         # Fallback to unweighted if a class is absent to avoid instability
-        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, reduction="sum")
+        hit_bce_loss = F.binary_cross_entropy(valid_probs, target_labels, reduction="mean")
 
     return hit_bce_loss

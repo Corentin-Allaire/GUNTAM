@@ -32,7 +32,7 @@ def compute_parameter_loss_norms(dataset: DataLoader) -> Dict[str, float]:
     # Use first training file (in original order, before shuffling) for consistent normalization
     batch_data = dataset.get_file(0)
 
-    tensor_particles = batch_data["hits_tensor"]
+    tensor_particles = batch_data["particles_tensor"]
 
     if len(tensor_particles) > 0:
         valid_particles_list.append(tensor_particles.cpu())
@@ -41,8 +41,9 @@ def compute_parameter_loss_norms(dataset: DataLoader) -> Dict[str, float]:
     if valid_particles_list:
         all_valid_particles = torch.cat(valid_particles_list, dim=0)
         flat = all_valid_particles.reshape(-1, all_valid_particles.shape[-1])
+        flat = flat[flat[:, 4] != 0]
         stds = torch.std(flat, dim=0)
-        std_pt = torch.std(1 / flat[:, 3], dim=0)
+        std_pt = torch.std(1 / flat[:, 4], dim=0)
         norm_factors = {
             "z0": float(stds[1]),
             "eta": float(stds[3]),
@@ -245,21 +246,15 @@ def train_model(
                         )  # encoded_space_points: [N, max_hit_input, dim_embedding]
 
                         # Compute reconstructed parameters if needed
-                        if cfg.has_loss_component("MSE") or cfg.has_loss_component("L1") or cfg.has_loss_component("hit_BCE"):
-                            ts_print(
-                                "Computing reconstructed parameters for event ",
-                                entry,
-                                " bins ",
-                                batch_bin_indices,
-                            )
-                            print("Currently not implemented.....")
-                            reconstructed_params_batch = None
-                            continue
+                        if cfg.transformer_config.regression and (
+                            cfg.has_loss_component("MSE") or cfg.has_loss_component("L1") or cfg.has_loss_component("hit_BCE")
+                        ):
 
+                            reconstructed_parameters = encoded_space_points  # [N, max_hit_input, num_regression_parameters]
                             if cfg.has_loss_component("MSE") or cfg.has_loss_component("L1"):
                                 loss_type = "MSE" if cfg.has_loss_component("MSE") else "L1"
                                 batch_reco_loss_dict = Losses.reconstruction_loss(
-                                    reconstructed_params_batch,
+                                    reconstructed_parameters,
                                     batched_particles,
                                     batched_masks,
                                     loss_type=loss_type,
@@ -281,7 +276,7 @@ def train_model(
 
                             if cfg.has_loss_component("hit_BCE"):
                                 batch_loss["hit_BCE"] = Losses.hit_classification_loss(
-                                    reconstructed_params_batch[:, :, 4],
+                                    reconstructed_parameters[:, :, 5],
                                     batched_particles,
                                     batched_masks,
                                 )
@@ -479,13 +474,17 @@ def run_model(
             Utils.sync_device(cfg.device_acc)
             r0 = time.perf_counter()
 
-        ts_print("Reconstructed parameters computation not implemented....")
-        # Initialize parameters with zeros having shape [bins, hits, 5]
-        parameters = torch.zeros(
-            (hits_tensor.shape[0], hits_tensor.shape[1], 5),
-            device=cfg.device_acc,
-            dtype=hits_tensor.dtype,
-        )
+        if cfg.transformer_config.regression:
+            raw = encoded_space_point
+            phi = torch.atan2(raw[..., 2], raw[..., 3])  # atan2(sin_phi, cos_phi)
+            parameters = torch.cat([raw[..., :2], phi.unsqueeze(-1), raw[..., 4:]], dim=-1)
+        else:
+            # Initialize parameters with zeros having shape [bins, hits, 5]
+            parameters = torch.zeros(
+                (hits_tensor.shape[0], hits_tensor.shape[1], 5),
+                device=cfg.device_acc,
+                dtype=hits_tensor.dtype,
+            )
 
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
@@ -830,6 +829,7 @@ def main():
                 event_particles=batch_data["particles_tensor"][event_idx].cpu().numpy(),
                 event_hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx].cpu().numpy(),
                 event_seeds=batch_seeds,
+                event_reco_params=batch_reconstructed_parameters,
             )
 
         start_event = end_event

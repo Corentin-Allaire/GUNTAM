@@ -87,6 +87,19 @@ class SeedTransformer(nn.Module):
             use_pytorch=False,
         )
 
+        if self.cfg.regression:
+
+            self.regression_MLP = nn.Sequential(
+                nn.Linear(self.cfg.dim_embedding, self.cfg.dim_embedding * 2, device=self.device_acc),
+                nn.ReLU(),
+                nn.Linear(self.cfg.dim_embedding * 2, self.cfg.dim_embedding * 2, device=self.device_acc),
+                nn.ReLU(),
+            )
+            self.track_parameter_layer = nn.Linear(
+                self.cfg.dim_embedding * 2, self.cfg.num_regression_parameters, device=self.device_acc
+            )
+            self.hits_score_layer = nn.Sequential(nn.Linear(self.cfg.dim_embedding * 2, 1, device=self.device_acc), nn.Sigmoid())
+
     def encodeSpacePoint(self, hits: Tensor, mask: Tensor) -> Tensor:
         """
         Encode the input hit sequence.
@@ -102,9 +115,9 @@ class SeedTransformer(nn.Module):
             embedding_no_cosine = [i for i in self.cfg.embedding_feature if i not in self.cfg.cosine_processing]
             coord = torch.cat(
                 [
+                    hits[..., embedding_no_cosine],
                     torch.cos(hits[..., embedding_cosine]),
                     torch.sin(hits[..., embedding_cosine]),
-                    hits[..., embedding_no_cosine],
                 ],
                 dim=-1,
             )
@@ -158,6 +171,13 @@ class SeedTransformer(nn.Module):
 
         # The number of heads is 1 for matching attention, so we can squeeze that dimension
         attn_weights = attn_weights.squeeze(1)
+
+        if self.cfg.regression:
+            embedding = self.regression_MLP(transformer_output)
+            regression_output = self.track_parameter_layer(embedding)
+            hits_score = self.hits_score_layer(embedding)
+            transformer_output = torch.cat([regression_output, hits_score], dim=-1)
+            return transformer_output, attn_weights
 
         return transformer_output, attn_weights
 

@@ -248,13 +248,12 @@ class TestReconstructionLoss:
 
 class TestHitClassificationLoss:
     def test_balanced_and_edge(self):
-        # Removed model instantiation as cfg/self parameter is no longer needed
         seed_scores = torch.tensor([[0.9, 0.1, 0.8, 0.2]])  # batch=1, hits=4
         particles = torch.tensor([[
-            [0.0, 0.0, 0.0, 5.0],   # particle (pT>0)
-            [0.0, 0.0, 0.0, 0.0],   # orphan
-            [0.0, 0.0, 0.0, 3.0],   # particle
-            [0.0, 0.0, 0.0, 0.0],   # orphan
+            [0.0, 0.0, 0.0, 0.0, 5.0],   # particle (pT>0)
+            [0.0, 0.0, 0.0, 0.0, 0.0],   # orphan
+            [0.0, 0.0, 0.0, 0.0, 3.0],   # particle
+            [0.0, 0.0, 0.0, 0.0, 0.0],   # orphan
         ]])
         padded_mask = torch.tensor([[False, False, False, False]])
         loss_val = hit_classification_loss(seed_scores, particles, padded_mask)
@@ -269,10 +268,10 @@ class TestHitClassificationLoss:
         particles_pos_only = torch.tensor(
             [
                 [
-                    [0.0, 0.0, 0.0, 5.0],
-                    [0.0, 0.0, 0.0, 6.0],
-                    [0.0, 0.0, 0.0, 7.0],
-                    [0.0, 0.0, 0.0, 8.0],
+                    [0.0, 0.0, 0.0, 0.0, 5.0],
+                    [0.0, 0.0, 0.0, 0.0, 6.0],
+                    [0.0, 0.0, 0.0, 0.0, 7.0],
+                    [0.0, 0.0, 0.0, 0.0, 8.0],
                 ]
             ]
         )

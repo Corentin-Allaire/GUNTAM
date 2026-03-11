@@ -356,7 +356,8 @@ def create_seeding_performance_plots(
     - Saves `seeding_performance_analysis.png`. May also call `create_bin_complexity_plots`.
     """
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    axes_flat = axes.flatten()
 
     params = [
         {"key": "z", "label": "Z", "unit": "[mm]"},
@@ -368,8 +369,7 @@ def create_seeding_performance_plots(
     error_map = {str(k).lower(): np.asarray(v) for k, v in error_arrays.items()}
 
     for i, meta in enumerate(params):
-        row, col = i // 2, i % 2
-        ax = axes[row, col]
+        ax = axes_flat[i]
         errors_array = np.asarray(error_map.get(meta["key"], []))
 
         if errors_array.size > 0:
@@ -412,6 +412,49 @@ def create_seeding_performance_plots(
                 fontsize=14,
             )
             ax.set_title(f"{meta['label']} Seed Resolution")
+
+    # 5th subplot: hit score distribution split by particle membership
+    ax_score = axes_flat[4]
+    hit_scores: Mapping[str, Sequence[float]] = results.get("hit_scores", {})
+    scores_particle = np.asarray(hit_scores.get("particle", []), dtype=float)
+    scores_orphan = np.asarray(hit_scores.get("orphan", []), dtype=float)
+    if scores_particle.size > 0 or scores_orphan.size > 0:
+        all_scores = np.concatenate([scores_particle, scores_orphan])
+        bins_score = min(50, max(10, len(all_scores) // 20))
+        score_range = (float(np.min(all_scores)), float(np.max(all_scores)))
+        if score_range[0] == score_range[1]:
+            score_range = (score_range[0] - 0.5, score_range[1] + 0.5)
+        if scores_particle.size > 0:
+            ax_score.hist(
+                scores_particle,
+                bins=bins_score,
+                range=score_range,
+                alpha=0.6,
+                color="steelblue",
+                label=f"Particle hits (n={len(scores_particle)})",
+                density=True,
+            )
+        if scores_orphan.size > 0:
+            ax_score.hist(
+                scores_orphan,
+                bins=bins_score,
+                range=score_range,
+                alpha=0.6,
+                color="tomato",
+                label=f"Orphan hits (n={len(scores_orphan)})",
+                density=True,
+            )
+        ax_score.set_xlabel("Hit Score (reco_params[:, 4])")
+        ax_score.set_ylabel("Density")
+        ax_score.set_title("Hit Score Distribution by Particle Membership")
+        ax_score.legend()
+        ax_score.grid(True, alpha=0.3)
+    else:
+        ax_score.text(0.5, 0.5, "No hit scores available", transform=ax_score.transAxes, ha="center", va="center", fontsize=12)
+        ax_score.set_title("Hit Score Distribution by Particle Membership")
+
+    # Hide unused 6th subplot
+    axes_flat[5].axis("off")
 
     plt.tight_layout()
     plot_filename = "seeding_performance_analysis.png"
