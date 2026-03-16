@@ -323,3 +323,94 @@ def weighted_chained_seed_reconstruction(
             seeds.append((seed_arr, seed_params.cpu().numpy()))
 
     return seeds
+
+
+def beam_search_seed_reconstruction(
+    attention_map: torch.Tensor,
+    reconstructed_parameters: torch.Tensor,
+    starting_mask: torch.Tensor,
+    score_threshold: float = 0.01,
+    max_chain_length: int = 5,
+    beam_width: int = 3,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Beam search seeding: for each hit allowed by `starting_mask`, maintain a beam of
+    the top `beam_width` partial chains and iteratively extend them forward (to hits
+    with a larger index) until no eligible neighbor remains or `max_chain_length` is
+    reached.
+
+    Scoring rule during search:
+      - While a chain has fewer than 3 hits: cumulative sum of edge attention scores.
+      - Once a chain has 3 or more hits: average edge attention score (cumulative sum
+        divided by number of edges), which rewards compactness.
+
+    The best-scoring chain from each beam is kept as a seed candidate.  Duplicate
+    seeds (same set of hit indices) are discarded.  Only chains of length >= 3 are
+    returned.
+
+    Args:
+        attention_map: 2D tensor [N, N] with attention weights
+        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
+        starting_mask: 1D boolean tensor [N] indicating which hits can be used as starting points
+        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
+        max_chain_length: Maximum length of the chain (default: 5)
+        beam_width: Number of top chains to keep at each step (default: 3)
+    Returns:
+        List of (hit_indices, avg_parameters) tuples; one seed per unique best chain.
+    """
+
+    def _beam_score(cumulative: float, n_hits: int) -> float:
+        """Return the score used to rank beam entries."""
+        score = max(3, n_hits)
+        return score + (cumulative / n_hits)  # average edge score once chain is long enough
+
+    num_hits = attention_map.size(0)
+    seeds: List[Tuple[np.ndarray, np.ndarray]] = []
+
+    # For each hit, keep the top pairs_per_hit neighbors above score_threshold
+    k = min(beam_width, num_hits - 1)
+    att = attention_map.clone()
+    att.fill_diagonal_(float("-inf"))  # exclude self-pairs
+
+    topk_vals, topk_idx = torch.topk(att, k, dim=1, largest=True, sorted=True)  # [N, k]
+    # Build dict: hit_i -> [[hit_j, score], ...], keeping only forward pairs above threshold
+    pairs_dict: dict[int, list] = {
+        i: [
+            [int(topk_idx[i, j].item()), float(topk_vals[i, j].item())]
+            for j in range(k)
+            if float(topk_vals[i, j].item()) >= score_threshold and int(topk_idx[i, j].item()) > i
+        ]
+        for i in range(num_hits)
+    }
+
+    starting_index = torch.nonzero(starting_mask, as_tuple=False).squeeze(1).tolist()
+
+    for start in starting_index:
+        beam = [([start], 0.0)]  # list of (chain, cumulative_score)
+        best_chain = None
+        best_score = float("-inf")
+        len_chain = 1
+        while len_chain < max_chain_length and beam:
+            new_beam = []
+            for chain, beam_score in beam:
+                last_hit = chain[-1]
+                for neighbor, score in pairs_dict[last_hit]:
+                    new_score = beam_score + score
+                    new_chain = chain + [neighbor]
+                    new_beam.append((new_chain, new_score))
+
+                    chain_score = _beam_score(new_score, len(new_chain))
+                    if chain_score > best_score and len(new_chain) >= 3:
+                        best_score = chain_score
+                        best_chain = new_chain
+
+            new_beam.sort(key=lambda x: _beam_score(x[1], len(x[0])), reverse=True)
+            beam = new_beam[:beam_width]
+            len_chain += 1
+
+        if best_chain is not None:
+            seed_indices = torch.as_tensor(best_chain, device=attention_map.device)
+            seed_params = reconstructed_parameters[seed_indices].mean(dim=0)
+            seeds.append((np.array(best_chain, dtype=np.int64), seed_params.cpu().numpy()))
+
+    return seeds

@@ -166,7 +166,7 @@ class SeedConfig:
             "--reconstruction_method",
             type=str,
             default=self.reconstruction_method,
-            choices=["chained", "back_chained", "weighted_chained", "topk"],
+            choices=["chained", "back_chained", "weighted_chained", "topk", "beam_search"],
             help=(
                 "Seed reconstruction method to use during inference. "
                 "If omitted, the method is auto-selected from the active loss components."
