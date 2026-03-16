@@ -4,6 +4,7 @@ import torch
 
 from GUNTAM.IO.PrepareTensor import (
     _particle_selection,
+    _hit_selection,
     _build_good_pairs_tensors,
     _to_tensor,
     _add_padding,
@@ -385,14 +386,18 @@ class TestPrepareTensorWorkerConsistency:
         for eid in range(num_events):
             for pid in range(n_particles):
                 for _ in range(hits_per_event // n_particles):
+                    x = rng.randn()
+                    y = rng.randn()
+                    r = np.sqrt(x**2 + y**2)
                     hits_rows.append({
                         "event_id": eid,
                         "particle_id": pid,
                         "particle_id_pv": int(pid == 0),
                         "phi": rng.uniform(-np.pi, np.pi),
-                        "x": rng.randn(),
-                        "y": rng.randn(),
+                        "x": x,
+                        "y": y,
                         "z": rng.randn(),
+                        "r": r
                     })
                 particle_rows.append({
                     "event_id": eid,
@@ -425,7 +430,7 @@ class TestPrepareTensorWorkerConsistency:
         cfg.max_hit_input = 20
         cfg.eta_range = [-3.0, 3.0]
         cfg.vertex_cuts = [10.0, 200.0]
-        cfg.hit_features = ["x", "y", "z"]
+        cfg.hit_features = ["x", "y", "z", "r"]
         cfg.particle_features = ["eta", "phi", "pT"]
         cfg.tensor_format = "pt"
         return cfg
@@ -474,3 +479,58 @@ class TestPrepareTensorWorkerConsistency:
                 assert torch.equal(data1[key], data2[key]), (
                     f"Tensor mismatch in '{key}' for file index {file_idx}"
                 )
+
+
+class TestHitSelection:
+    def _make_cfg(self, r_max: float, z_max: float):
+        cfg = PreprocessingConfig()
+        cfg.hit_range = [r_max, z_max]
+        return cfg
+
+    def _make_data(self, r, z, particle_id=None):
+        if particle_id is None:
+            particle_id = [0] * len(r)
+        return pd.DataFrame({"r": r, "z": z, "particle_id": particle_id})
+
+    def test_all_hits_inside_range(self):
+        cfg = self._make_cfg(r_max=100.0, z_max=200.0)
+        data = self._make_data(r=[10.0, 50.0, 99.0], z=[5.0, 100.0, -199.0])
+        result = _hit_selection(data, cfg)
+        assert len(result) == 3
+
+    def test_hits_outside_r_removed(self):
+        cfg = self._make_cfg(r_max=50.0, z_max=200.0)
+        data = self._make_data(r=[10.0, 60.0, 30.0], z=[0.0, 0.0, 0.0])
+        result = _hit_selection(data, cfg)
+        assert len(result) == 2
+        assert 60.0 not in result["r"].values
+
+    def test_hits_outside_z_removed(self):
+        cfg = self._make_cfg(r_max=100.0, z_max=50.0)
+        data = self._make_data(r=[10.0, 10.0, 10.0], z=[20.0, -60.0, 51.0])
+        result = _hit_selection(data, cfg)
+        assert len(result) == 1
+        assert result["z"].iloc[0] == 20.0
+
+    def test_padding_hits_always_kept(self):
+        cfg = self._make_cfg(r_max=10.0, z_max=10.0)
+        # Padding hits (particle_id == -2) are outside range but must be kept
+        data = self._make_data(
+            r=[200.0, 5.0, 300.0],
+            z=[500.0, 5.0, 600.0],
+            particle_id=[-2, 0, -2],
+        )
+        result = _hit_selection(data, cfg)
+        assert len(result) == 3  # both padding hits + the one valid hit
+
+    def test_index_reset(self):
+        cfg = self._make_cfg(r_max=50.0, z_max=100.0)
+        data = self._make_data(r=[10.0, 80.0, 20.0], z=[0.0, 0.0, 0.0])
+        result = _hit_selection(data, cfg)
+        assert list(result.index) == list(range(len(result)))
+
+    def test_empty_dataframe(self):
+        cfg = self._make_cfg(r_max=50.0, z_max=100.0)
+        data = pd.DataFrame({"r": [], "z": [], "particle_id": []})
+        result = _hit_selection(data, cfg)
+        assert len(result) == 0

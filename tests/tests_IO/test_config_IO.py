@@ -35,6 +35,7 @@ class TestPreprocessingConfig:
         # Selection parameters
         assert config.eta_range == [-3.0, 3.0]
         assert config.vertex_cuts == [10, 200]
+        assert config.hit_range == [500, 1000]
 
         # Feature lists
         assert config.hit_features == ["x", "y", "z"]
@@ -59,6 +60,14 @@ class TestPreprocessingConfig:
         assert len(config.vertex_cuts) == 2
         # Both should be positive
         assert all(v > 0 for v in config.vertex_cuts)
+
+    def test_hit_range_list_structure(self):
+        """Test that hit_range is a list with two positive elements."""
+        config = PreprocessingConfig()
+
+        assert isinstance(config.hit_range, list)
+        assert len(config.hit_range) == 2
+        assert all(v > 0 for v in config.hit_range)
 
     def test_feature_lists_are_lists(self):
         """Test that feature lists are properly initialized as lists."""
@@ -89,6 +98,7 @@ class TestPreprocessingConfig:
         assert config_dict["tensor_format"] == "pt"
         assert config_dict["binning_strategy"] == "neighbor"
         assert config_dict["eta_range"] == [-3.0, 3.0]
+        assert config_dict["hit_range"] == [500, 1000]
         assert config_dict["pv_pair_weight"] == 10
 
     def test_from_dict(self):
@@ -182,6 +192,7 @@ class TestPreprocessingConfig:
         config.max_hit_input = 1500
         config.eta_range = [-2.0, 2.0]
         config.vertex_cuts = [15, 250]
+        config.hit_range = [600, 1200]
         config.hit_features = ["x", "y", "z", "r"]
         config.particle_features = ["eta", "phi", "pT", "d0"]
         config.pv_pair_weight = 5
@@ -209,6 +220,7 @@ class TestPreprocessingConfig:
             assert loaded_config.max_hit_input == 1500
             assert loaded_config.eta_range == [-2.0, 2.0]
             assert loaded_config.vertex_cuts == [15, 250]
+            assert loaded_config.hit_range == [600, 1200]
             assert loaded_config.hit_features == ["x", "y", "z", "r"]
             assert loaded_config.particle_features == ["eta", "phi", "pT", "d0"]
             assert loaded_config.pv_pair_weight == 5
@@ -223,6 +235,7 @@ class TestPreprocessingConfig:
             "--max_events", "500",
             "--binning_strategy", "global",
             "--bin_width", "0.08",
+            "--hit_range", "700", "1500",
         ]
         monkeypatch.setattr(sys, "argv", argv)
         
@@ -235,6 +248,7 @@ class TestPreprocessingConfig:
         assert config.max_events == 500
         assert config.binning_strategy == "global"
         assert config.bin_width == 0.08
+        assert config.hit_range == [700.0, 1500.0]
 
     def test_print_config(self, capsys):
         """Test that print_config outputs all configuration sections."""
@@ -257,6 +271,7 @@ class TestPreprocessingConfig:
         assert "Orphan Hit Removal:" in output
         assert "Binning:" in output
         assert "Selection:" in output
+        assert "Hit range" in output
         assert "Features:" in output
         assert "Event Weights:" in output
 

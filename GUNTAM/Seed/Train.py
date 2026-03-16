@@ -360,8 +360,8 @@ def train_model(
 
                 if writer:
                     # Log gradients once per event for training
-                    if status == "Training":
-                        Utils.log_gradients(model, writer, epoch * nb_events + entry)
+                    # if status == "Training":
+                    #     Utils.log_gradients(model, writer, epoch * nb_events + entry)
 
                     # write per-event losses
                     for key, value in event_losses.items():

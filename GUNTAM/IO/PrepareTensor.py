@@ -74,6 +74,28 @@ def _particle_selection(
     return data_batch, particles_batch, bins, hit_to_particle
 
 
+def _hit_selection(data_batch: pd.DataFrame, cfg) -> pd.DataFrame:
+    """
+    Remove hits that fall outside the geometric acceptance defined by cfg.hit_range.
+
+    Args:
+        data_batch: DataFrame containing hit data.  Must have columns 'r' (transverse
+            radius) and 'z'.  Padding hits (particle_id == -2) are kept regardless.
+        cfg: Configuration object with a ``hit_range`` attribute
+            ``[R_max, Z_max]``.
+
+    Returns:
+        Filtered DataFrame with the index reset.
+    """
+    r_max, z_max = cfg.hit_range
+
+    # Keep padding hits (particle_id == -2) unconditionally
+    padding_mask = data_batch["particle_id"] == -2
+    geometric_mask = (data_batch["r"] <= r_max) & (data_batch["z"].abs() <= z_max)
+
+    return data_batch[padding_mask | geometric_mask].reset_index(drop=True)
+
+
 def _build_good_pairs_tensors(
     data_batch: pd.DataFrame,
     bins: pd.DataFrame,
@@ -529,6 +551,9 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
 
     # Optionally perform orphan hit removal
     data_batch = _orphan_hit_removal(data_batch, cfg.orphan_hit_fraction)
+
+    # Apply geometric hit range cuts [R_max, Z_max]
+    data_batch = _hit_selection(data_batch, cfg)
 
     # Perform binning and tensor preparation
     bins, nb_bins_max = _bin_data(data_batch, cfg)

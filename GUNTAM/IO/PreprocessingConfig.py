@@ -58,6 +58,7 @@ class PreprocessingConfig:
         # Selection parameters
         self.eta_range = [-3.0, 3.0]  # Eta range for particle selection [min, max]
         self.vertex_cuts = [10, 200]  # Cuts on d0 and z0 for primary vertex selection
+        self.hit_range = [500, 1000]  # Cuts on R and Z for hit selection [R_max, Z_max]
 
         # Feature lists
         self.hit_features = ["x", "y", "z"]  # List of hit features to extract
@@ -172,6 +173,13 @@ class PreprocessingConfig:
             default=self.vertex_cuts,
             help="Cuts on d0 and z0 for primary vertex selection [d0_max, z0_max]",
         )
+        parser.add_argument(
+            "--hit_range",
+            nargs=2,
+            type=float,
+            default=self.hit_range,
+            help="Cuts on R and Z for hit selection [R_max, Z_max]",
+        )
 
         # Parallelism
         parser.add_argument(
@@ -226,6 +234,7 @@ class PreprocessingConfig:
 
         self.eta_range = args.eta_range
         self.vertex_cuts = args.vertex_cuts
+        self.hit_range = args.hit_range
 
         self.hit_features = args.hit_features
         self.particle_features = args.particle_features
@@ -339,6 +348,7 @@ class PreprocessingConfig:
         print("\nSelection:")
         print("  Eta range: ", self.eta_range)
         print("  Vertex cuts (d0, z0): ", self.vertex_cuts)
+        print("  Hit range (R_max, Z_max): ", self.hit_range)
 
         print("\nFeatures:")
         print("  Hit features: ", self.hit_features)

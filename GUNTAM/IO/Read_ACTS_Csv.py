@@ -388,7 +388,7 @@ def read_acts_csv(args: argparse.Namespace) -> None:
         valid_particle_ids = particle_counts[particle_counts >= args.min_hits_per_particle].index
 
         # Process each dataset with optimized functions
-        data = _process_hits_data(data)
+        data = _process_hits_data(data, R_max=args.hit_range[0], Z_max=args.hit_range[1])
         particles = _process_particles_data(particles, valid_particle_ids)
 
         # Add event ID to all datasets
@@ -502,6 +502,13 @@ if __name__ == "__main__":
         default=["csv"],
         choices=["csv", "h5"],
         help="Output file format(s): 'csv' (default), 'h5', or both (e.g., --output-format csv h5)",
+    )
+    parser.add_argument(
+        "--hit_range",
+        nargs=2,
+        type=float,
+        default=[500, 1000],
+        help="Cuts on R and Z for hit selection [R_max, Z_max]",
     )
 
     args = parser.parse_args()
