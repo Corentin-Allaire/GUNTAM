@@ -107,7 +107,7 @@ class TestTopAttentionLoss:
 
         zero_res = top_attention_loss(attention_logits, pairs1, pairs2, torch.tensor([-1, -1, -1, -1]))
         assert zero_res.item() == 0.0
-    
+
 
 class TestAttentionNextLoss:
     def test_forward_and_backward(self):
@@ -142,12 +142,14 @@ class TestAttentionNextLoss:
         # where num_valid_hits = max(pos_hits)+1 = 5
         # Each row uniform => CE = ln(5) * pos_hits
         num_valid_hits = 5
-        expected_loss = 4 * torch.log(torch.tensor(float(num_valid_hits)))  # mean of identical entries
+        expected_loss = torch.log(torch.tensor(float(num_valid_hits)))  # mean of identical entries
+        expected_loss_0 = torch.log(torch.tensor(float(num_valid_hits - 1)))  # target 2 is excluded from loss
+        expected_loss = (expected_loss * 3 + expected_loss_0)
         assert torch.isclose(loss, expected_loss, atol=1e-6)
 
         zero_res = attention_next_loss(attention_logits, pairs1, pairs2, torch.tensor([-1, -1, -1, -1, -1]))
         assert zero_res.item() == 0.0
-    
+
 
 class TestReconstructionLoss:
     def test_valid_and_empty(self):

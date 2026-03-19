@@ -571,7 +571,7 @@ def run_model(
                     valid_parameters,
                     starting_mask=starting_mask,
                     score_threshold=0.0,
-                    max_chain_length=3,
+                    max_chain_length=5,
                     beam_width=5,
                 )
             else:  # topk

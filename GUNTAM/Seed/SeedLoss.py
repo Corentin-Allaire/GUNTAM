@@ -230,51 +230,42 @@ def attention_next_loss(
     # Unique sources among valid hits
     unique_sources = torch.unique(sources)
 
-    # For each source s: choose
-    #  - next forward target: min t where t > s
-    #  - else (no forward), last backward target: max t where t < s
-    selected_targets = torch.full_like(unique_sources, fill_value=num_valid_hits)
+    # Restrict logits to valid hits (slice the attention map, not the function)
+    attention_logits = attention_map_bin[:num_valid_hits, :num_valid_hits]
+    masked_logits = attention_logits[unique_sources].clone()  # [S, num_valid_hits]
 
-    # Vectorized selection per source: prefer min forward target (> s), else max backward (< s)
+    selected_targets = torch.full_like(unique_sources, fill_value=num_valid_hits)
+    source_weights = torch.ones(unique_sources.numel(), device=device)
+
     if unique_sources.numel() > 0 and sources.numel() > 0:
         # Build [S, M] match matrix (S=unique sources, M=pairs)
         source_eq = unique_sources.view(-1, 1) == sources.view(1, -1)  # [S, M]
-
-        # Pair-wise forward/backward masks (per pair, relative to its own source)
-        forward_pairs_mask = targets > sources  # [M]
-        backward_pairs_mask = targets <= sources  # [M]
-
-        # Broadcast to [S, M]
-        fwd_mask = source_eq & forward_pairs_mask.view(1, -1)
-        back_mask = source_eq & backward_pairs_mask.view(1, -1)
-
         targets_row = targets.view(1, -1)
 
-        # For forward: take min target; use sentinel = num_valid_hits when absent
-        fwd_candidates = torch.where(fwd_mask, targets_row, torch.full_like(targets_row, num_valid_hits))
-        fwd_min, _ = torch.min(fwd_candidates, dim=1)  # [S]
-        fwd_exists = fwd_mask.any(dim=1)  # [S]
+        # Prefer min forward target (t > s); fall back to max backward (t < s).
+        fwd_mask = source_eq & (targets > sources).view(1, -1)  # [S, M]
+        back_mask = source_eq & (targets <= sources).view(1, -1)  # [S, M]
 
-        # For backward: take max target; use sentinel = -1 when absent
-        back_candidates = torch.where(back_mask, targets_row, torch.full_like(targets_row, -1))
-        back_max, _ = torch.max(back_candidates, dim=1)  # [S]
+        fwd_min, _ = torch.min(torch.where(fwd_mask, targets_row, torch.full_like(targets_row, num_valid_hits)), dim=1)
+        back_max, _ = torch.max(torch.where(back_mask, targets_row, torch.full_like(targets_row, -1)), dim=1)
+        fwd_exists = fwd_mask.any(dim=1)
 
-        # Prefer forward if exists, else backward
         selected_targets = torch.where(fwd_exists, fwd_min, back_max)
-    # else: keep selected_targets as sentinel
 
-    # Restrict logits to valid hits (slice the attention map, not the function)
-    attention_logits = attention_map_bin[:num_valid_hits, :num_valid_hits]
+        # Suppress trajectory partners NOT chosen as selected_targets so they
+        # don't compete with true negatives in the cross-entropy softmax.
+        other_traj_mask = source_eq & (targets_row != selected_targets.view(-1, 1))  # [S, M]
+        s_indices, m_indices = torch.where(other_traj_mask)
+        if s_indices.numel() > 0:
+            other_traj_cols = torch.zeros(unique_sources.numel(), num_valid_hits, dtype=torch.bool, device=device)
+            other_traj_cols[s_indices, targets[m_indices]] = True
+            masked_logits[other_traj_cols] = float("-inf")
 
-    # Gather per-source weight: max pair weight among all pairs originating from each source
-    if unique_sources.numel() > 0 and sources.numel() > 0:
-        source_eq = unique_sources.view(-1, 1) == sources.view(1, -1)  # [S, M]
+        # ── Per-source weights ────────────────────────────────────────────────
         weights_row = pair_weights.view(1, -1).expand(unique_sources.numel(), -1)  # [S, M]
         source_weights = torch.max(torch.where(source_eq, weights_row, torch.zeros_like(weights_row)), dim=1).values  # [S]
-    else:
-        source_weights = torch.ones(unique_sources.numel(), device=device)
 
-    per_sample_loss = F.cross_entropy(attention_logits[unique_sources], selected_targets, reduction="none")
+    per_sample_loss = F.cross_entropy(masked_logits, selected_targets, reduction="none")
     loss = (per_sample_loss * source_weights).sum()
 
     return loss

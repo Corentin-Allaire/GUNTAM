@@ -121,7 +121,7 @@ class FourierPositionalEncoding(nn.Module):
         # Concatenate features from all dimensions: (batch, seq_len, sum(num_frequencies) * 2)
         fourier_features = torch.cat(fourier_features_list, dim=-1)
 
-        if x_high_level.size(-1) == 0:
+        if x_high_level is None or x_high_level.size(-1) == 0:
             # If no high-level features, return only Fourier features
             output = fourier_features
 
