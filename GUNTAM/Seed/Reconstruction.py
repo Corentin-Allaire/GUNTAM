@@ -361,8 +361,7 @@ def beam_search_seed_reconstruction(
 
     def _beam_score(cumulative: float, n_hits: int) -> float:
         """Return the score used to rank beam entries."""
-        score = max(3, n_hits)
-        return score + (cumulative / n_hits)  # average edge score once chain is long enough
+        return cumulative / n_hits
 
     num_hits = attention_map.size(0)
     seeds: List[Tuple[np.ndarray, np.ndarray]] = []
@@ -374,12 +373,16 @@ def beam_search_seed_reconstruction(
 
     topk_vals, topk_idx = torch.topk(att, k, dim=1, largest=True, sorted=True)  # [N, k]
     # Build dict: hit_i -> [[hit_j, score], ...], keeping only forward pairs above threshold
-    pairs_dict: dict[int, list] = {
-        i: [
-            [int(topk_idx[i, j].item()), float(topk_vals[i, j].item())]
-            for j in range(k)
-            if float(topk_vals[i, j].item()) >= score_threshold and int(topk_idx[i, j].item()) > i
-        ]
+    row_idx = torch.arange(num_hits, device=att.device).unsqueeze(1)  # [N, 1]
+    valid_mask = (topk_vals >= score_threshold) & (topk_idx > row_idx)  # [N, k] — vectorised filter
+
+    # Transfer to CPU/numpy once instead of calling .item() N*k times
+    valid_mask_np = valid_mask.cpu().numpy()
+    topk_idx_np = topk_idx.cpu().numpy()
+    topk_vals_np = topk_vals.cpu().numpy()
+
+    pairs_dict: dict[int, dict[int, float]] = {
+        i: dict(zip(topk_idx_np[i, valid_mask_np[i]].tolist(), topk_vals_np[i, valid_mask_np[i]].tolist()))
         for i in range(num_hits)
     }
 
@@ -394,7 +397,7 @@ def beam_search_seed_reconstruction(
             new_beam = []
             for chain, beam_score in beam:
                 last_hit = chain[-1]
-                for neighbor, score in pairs_dict[last_hit]:
+                for neighbor, score in pairs_dict[last_hit].items():
                     new_score = beam_score + score
                     new_chain = chain + [neighbor]
                     new_beam.append((new_chain, new_score))
