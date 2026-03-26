@@ -42,7 +42,7 @@ def _particle_selection(
         & (particles_batch["eta"] <= eta_range[1])
         & (particles_batch["pT"] > 0)
         & (particles_batch["d0"] < cfg.vertex_cuts[0])
-        & (particles_batch["z0"] < cfg.vertex_cuts[1])
+        & (particles_batch["z0"].abs() < cfg.vertex_cuts[1])
     )
     particles_batch = particles_batch[mask].reset_index(drop=True)
 

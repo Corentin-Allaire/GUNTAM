@@ -565,8 +565,21 @@ def run_model(
                 neighbor_matrix_masked.fill_diagonal_(float("-inf"))
                 neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
                 valid_hits = hits_tensor[bin_idx][bin_mask_cpu]  # [num_valid, num_features]
-                starting_mask = (valid_hits[:, 3] < 150) & (valid_hits[:, 2].abs() < 500)  # r<100, |z|<500
+                starting_mask = (valid_hits[:, 3] < 500) & (valid_hits[:, 2].abs() < 600)  # r<100, |z|<500
                 bin_seeds = Reconstruction.beam_search_seed_reconstruction(
+                    neighbor_matrix_masked,
+                    valid_parameters,
+                    starting_mask=starting_mask,
+                    score_threshold=0.0,
+                    max_chain_length=5,
+                    beam_width=5,
+                )
+            elif reco_method == "beam_search_full":
+                neighbor_matrix_masked.fill_diagonal_(float("-inf"))
+                neighbor_matrix_masked = torch.sigmoid(neighbor_matrix_masked)
+                valid_hits = hits_tensor[bin_idx][bin_mask_cpu]  # [num_valid, num_features]
+                starting_mask = (valid_hits[:, 3] < 150) & (valid_hits[:, 2].abs() < 500)  # r<100, |z|<500
+                bin_seeds = Reconstruction.beam_search_full_seed_reconstruction(
                     neighbor_matrix_masked,
                     valid_parameters,
                     starting_mask=starting_mask,
