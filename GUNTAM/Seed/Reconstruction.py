@@ -5,19 +5,19 @@ from typing import List, Tuple
 
 def topk_seed_reconstruction(
     attention_map: torch.Tensor,
-    reconstructed_parameters: torch.Tensor,
+    hit_score: torch.Tensor,
     threshold: float = 0.8,
     max_selection: int = 4,
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
     """
     K-nearest seeding with threshold: for each valid hit, create a seed consisting of the hit
     itself plus up to "max_selection" other hits with the highest attention values from that hit,
-    keeping only those neighbors whose attention score is >= threshold.
+    keeping only those neighbors whose hit score is >= threshold.
 
     Args:
         attention_map: 2D tensor [N, N] with attention weights
-        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
-        threshold: Minimum attention score required to keep a neighbor (default: 0.8)
+        hit_score: tensor [N, 1] with per-hit scores
+        threshold: Minimum hit score required to keep a neighbor (default: 0.8)
         max_selection: Maximum number of neighbors to select per hit (default: 4)
 
     Returns:
@@ -49,36 +49,34 @@ def topk_seed_reconstruction(
 
     if k > 0:
         # Get top-k attention scores and indices per row
-        topk_vals, topk_idx = torch.topk(att_allowed, k, dim=1, largest=True, sorted=True)  # [N, k]
+        _, topk_idx = torch.topk(att_allowed, k, dim=1, largest=True, sorted=True)  # [N, k]
         topk_global = allowed_indices[topk_idx]  # [N, k]
     else:
-        topk_vals = torch.empty((num_hits, 0), dtype=attention_map.dtype, device=device)
         topk_global = torch.empty((num_hits, 0), dtype=torch.long, device=device)
 
     # Build clusters per valid hit, applying attention threshold filter
     for i in range(num_hits):
-        neighbor_scores = topk_vals[i]  # [k]
         neighbor_indices = topk_global[i]  # [k]
 
-        # Keep only neighbors above threshold
-        keep_mask = neighbor_scores >= threshold
+        # Keep only neighbors whose hit score is above threshold
+        keep_mask = hit_score[neighbor_indices].squeeze(-1) >= threshold
         kept_neighbors = neighbor_indices[keep_mask]
 
         # Cluster = hit itself + kept neighbors (could be only the hit if none kept)
         cluster_idx = torch.cat([torch.tensor([i], device=device, dtype=torch.long), kept_neighbors], dim=0)
 
-        # Compute average reconstructed parameters for this cluster
-        seed_params = reconstructed_parameters[cluster_idx].mean(dim=0)
+        # No parameter reconstruction: seed params set to zero
+        seed_params = np.zeros(5, dtype=np.float32)
 
         # Append as numpy arrays
-        seeds.append((cluster_idx.cpu().numpy(), seed_params.cpu().numpy()))
+        seeds.append((cluster_idx.cpu().numpy(), seed_params))
 
     return seeds
 
 
 def chained_seed_reconstruction(
     attention_map: torch.Tensor,
-    reconstructed_parameters: torch.Tensor,
+    hit_score: torch.Tensor,
     score_threshold: float = 0.01,
     max_chain_length: int = 5,
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
@@ -88,7 +86,7 @@ def chained_seed_reconstruction(
 
     Args:
         attention_map: 2D tensor [N, N] with attention weights
-        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
+        hit_score: tensor [N, 1] with per-hit scores
         score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
         max_chain_length: Maximum length of the chain (default: 5)
 
@@ -104,25 +102,26 @@ def chained_seed_reconstruction(
 
     # Precompute things
     all_indices = torch.arange(num_hits, device=device)
+    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N] filter by hit score
     used_mask = torch.zeros(num_hits, dtype=torch.bool, device=device)
 
     for start_idx in range(num_hits):
-        if used_mask[start_idx]:
+        if used_mask[start_idx] or not valid_hits[start_idx]:
             continue
 
         chain = [start_idx]
         current_idx = start_idx
 
         for _ in range(max_chain_length - 1):
-            # Get scores only for unused hits after current index
+            # Get scores only for valid, unused hits after current index
             att_scores = attention_map[current_idx]
-            valid_mask = (all_indices > current_idx) & (~used_mask) & (att_scores >= score_threshold)
+            valid_mask = (all_indices > current_idx) & (~used_mask) & valid_hits
             if not torch.any(valid_mask):
                 break
 
-            # Get best next index directly
+            # Get best next index and associated attention_score directly
             next_idx = int(torch.argmax(att_scores * valid_mask.float()).item())
-            if att_scores[next_idx] < score_threshold:
+            if att_scores[next_idx].item() * valid_mask[next_idx].float() == 0:
                 break
 
             chain.append(next_idx)
@@ -132,15 +131,15 @@ def chained_seed_reconstruction(
 
         if len(chain) >= 3:
             chain_indices = torch.tensor(chain, device=device)
-            chain_params = reconstructed_parameters[chain_indices].mean(dim=0)
-            seeds.append((chain_indices.cpu().numpy(), chain_params.cpu().numpy()))
+            chain_params = np.zeros(5, dtype=np.float32)
+            seeds.append((chain_indices.cpu().numpy(), chain_params))
 
     return seeds
 
 
 def back_chained_seed_reconstruction(
     attention_map: torch.Tensor,
-    reconstructed_parameters: torch.Tensor,
+    hit_score: torch.Tensor,
     score_threshold: float = 0.01,
     max_chain_length: int = 5,
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
@@ -153,7 +152,7 @@ def back_chained_seed_reconstruction(
 
     Args:
         attention_map: 2D tensor [N, N] with attention weights
-        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
+        hit_score: tensor [N, 1] with per-hit scores
         score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
         max_chain_length: Maximum length of the chain (default: 5)
 
@@ -169,26 +168,27 @@ def back_chained_seed_reconstruction(
 
     # Precompute things
     all_indices = torch.arange(num_hits, device=device)
+    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N] filter by hit score
     used_mask = torch.zeros(num_hits, dtype=torch.bool, device=device)
 
     # Process hits from last to first
     for start_idx in range(num_hits - 1, -1, -1):
-        if used_mask[start_idx]:
+        if used_mask[start_idx] or not valid_hits[start_idx]:
             continue
 
         chain = [start_idx]
         current_idx = start_idx
 
         for _ in range(max_chain_length - 1):
-            # Get scores only for unused hits before current index
+            # Get scores only for valid, unused hits before current index
             att_scores = attention_map[current_idx]
-            valid_mask = (all_indices < current_idx) & (~used_mask) & (att_scores >= score_threshold)
+            valid_mask = (all_indices < current_idx) & (~used_mask) & valid_hits
             if not torch.any(valid_mask):
                 break
 
             # Get best previous index directly
             prev_idx = int(torch.argmax(att_scores * valid_mask.float()).item())
-            if att_scores[prev_idx] < score_threshold:
+            if att_scores[prev_idx].item() * valid_mask[prev_idx].float() == 0:
                 break
 
             chain.append(prev_idx)
@@ -198,15 +198,15 @@ def back_chained_seed_reconstruction(
 
         if len(chain) >= 3:
             chain_indices = torch.tensor(chain, device=device)
-            chain_params = reconstructed_parameters[chain_indices].mean(dim=0)
-            seeds.append((chain_indices.cpu().numpy(), chain_params.cpu().numpy()))
+            chain_params = np.zeros(1, dtype=np.float32)
+            seeds.append((chain_indices.cpu().numpy(), chain_params))
 
     return seeds
 
 
 def weighted_chained_seed_reconstruction(
     attention_map: torch.Tensor,
-    reconstructed_parameters: torch.Tensor,
+    hit_score: torch.Tensor,
     score_threshold: float = 0.01,
     max_chain_length: int = 5,
     pairs_per_hit: int = 2,
@@ -226,7 +226,7 @@ def weighted_chained_seed_reconstruction(
 
     Args:
         attention_map: 2D tensor [N, N] with attention weights
-        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
+        hit_score: tensor [N, 1] with per-hit scores
         score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
         max_chain_length: Maximum length of the chain (default: 5)
         pairs_per_hit: Number of top-attention neighbors to consider per hit when
@@ -240,20 +240,23 @@ def weighted_chained_seed_reconstruction(
     num_hits = attention_map.size(0)
     seeds: List[Tuple[np.ndarray, np.ndarray]] = []
 
-    # For each hit, keep the top pairs_per_hit neighbors above score_threshold
+    # Filter hits by score threshold
+    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N]
+
+    # For each hit, keep the top pairs_per_hit neighbors among valid hits
     k = min(pairs_per_hit, num_hits - 1)
     att = attention_map.clone()
     att.fill_diagonal_(float("-inf"))  # exclude self-pairs
 
     topk_vals, topk_idx = torch.topk(att, k, dim=1, largest=True, sorted=True)  # [N, k]
-    # Flatten into (hit_i, hit_j, score) rows, filtering by threshold
+    # Flatten into (hit_i, hit_j, score) rows, filtering by hit score
     hit_i_list = torch.arange(num_hits, device=device).unsqueeze(1).expand_as(topk_idx).reshape(-1).long()
     hit_j_list = topk_idx.reshape(-1).long()
     scores_list = topk_vals.reshape(-1)
 
-    above_thresh = scores_list >= score_threshold
+    both_valid = valid_hits[hit_i_list] & valid_hits[hit_j_list]
     forward_pairs = hit_i_list < hit_j_list
-    mask = above_thresh & forward_pairs
+    mask = both_valid & forward_pairs
     hit_i_np = hit_i_list[mask].cpu().numpy()
     hit_j_np = hit_j_list[mask].cpu().numpy()
     scores_np = scores_list[mask].cpu().numpy()
@@ -318,16 +321,15 @@ def weighted_chained_seed_reconstruction(
             if to_remove:
                 scores_np[np.concatenate([backward_map[hit] for hit in to_remove])] = 0
             seed_arr = np.array(seed, dtype=np.int64)
-            seed_indices = torch.as_tensor(seed_arr, device=device)
-            seed_params = reconstructed_parameters[seed_indices].mean(dim=0)
-            seeds.append((seed_arr, seed_params.cpu().numpy()))
+            seed_params = np.zeros(5, dtype=np.float32)
+            seeds.append((seed_arr, seed_params))
 
     return seeds
 
 
 def beam_search_seed_reconstruction(
     attention_map: torch.Tensor,
-    reconstructed_parameters: torch.Tensor,
+    hit_score: torch.Tensor,
     starting_mask: torch.Tensor,
     score_threshold: float = 0.01,
     max_chain_length: int = 5,
@@ -350,7 +352,7 @@ def beam_search_seed_reconstruction(
 
     Args:
         attention_map: 2D tensor [N, N] with attention weights
-        reconstructed_parameters: tensor [N, D] with per-hit parameters (includes score at index 4)
+        hit_score: tensor [N, 1] with per-hit scores
         starting_mask: 1D boolean tensor [N] indicating which hits can be used as starting points
         score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
         max_chain_length: Maximum length of the chain (default: 5)
@@ -366,15 +368,18 @@ def beam_search_seed_reconstruction(
     num_hits = attention_map.size(0)
     seeds: List[Tuple[np.ndarray, np.ndarray]] = []
 
-    # For each hit, keep the top pairs_per_hit neighbors above score_threshold
+    # Filter hits by score threshold
+    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N]
+
+    # For each hit, keep the top beam_width forward neighbors among valid hits
     k = min(beam_width, num_hits - 1)
     att = attention_map.clone()
     att.fill_diagonal_(float("-inf"))  # exclude self-pairs
 
     topk_vals, topk_idx = torch.topk(att, k, dim=1, largest=True, sorted=True)  # [N, k]
-    # Build dict: hit_i -> [[hit_j, score], ...], keeping only forward pairs above threshold
+    # Build dict: hit_i -> [[hit_j, score], ...], keeping only forward pairs among valid hits
     row_idx = torch.arange(num_hits, device=att.device).unsqueeze(1)  # [N, 1]
-    valid_mask = (topk_vals >= score_threshold) & (topk_idx > row_idx)  # [N, k] — vectorised filter
+    valid_mask = valid_hits[topk_idx] & (topk_idx > row_idx)  # [N, k] — filter by hit score
 
     # Transfer to CPU/numpy once instead of calling .item() N*k times
     valid_mask_np = valid_mask.cpu().numpy()
@@ -386,7 +391,8 @@ def beam_search_seed_reconstruction(
         for i in range(num_hits)
     }
 
-    starting_index = torch.nonzero(starting_mask, as_tuple=False).squeeze(1).tolist()
+    score_mask = starting_mask & valid_hits
+    starting_index = torch.nonzero(score_mask, as_tuple=False).squeeze(1).tolist()
 
     for start in starting_index:
         beam = [([start], 0.0)]  # list of (chain, cumulative_score)
@@ -412,8 +418,7 @@ def beam_search_seed_reconstruction(
             len_chain += 1
 
         if best_chain is not None:
-            seed_indices = torch.as_tensor(best_chain, device=attention_map.device)
-            seed_params = reconstructed_parameters[seed_indices].mean(dim=0)
-            seeds.append((np.array(best_chain, dtype=np.int64), seed_params.cpu().numpy()))
+            seed_params = np.zeros(5, dtype=np.float32)
+            seeds.append((np.array(best_chain, dtype=np.int64), seed_params))
 
     return seeds

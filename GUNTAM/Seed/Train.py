@@ -18,51 +18,6 @@ from GUNTAM.Seed.Monitoring import PerformanceMonitor
 from GUNTAM.IO.PrepareTensor import compute_barcode, prepare_tensor
 
 
-def compute_parameter_loss_norms(dataset: DataLoader) -> Dict[str, float]:
-    """
-    Compute normalization factors for parameter loss based on the truth distribution.
-    Args:
-        dataset (DataLoader): The dataset object containing training data.
-    Returns:
-        dict: Normalization factors for parameters z0, eta, phi, and pt.
-    """
-    ts_print("Computing normalization factors from truth distribution...")
-    valid_particles_list = []
-
-    # Use first training file (in original order, before shuffling) for consistent normalization
-    batch_data = dataset.get_file(0)
-
-    tensor_particles = batch_data["particles_tensor"]
-
-    if len(tensor_particles) > 0:
-        valid_particles_list.append(tensor_particles.cpu())
-
-    # Compute normalization factors
-    if valid_particles_list:
-        all_valid_particles = torch.cat(valid_particles_list, dim=0)
-        flat = all_valid_particles.reshape(-1, all_valid_particles.shape[-1])
-        flat = flat[flat[:, 4] != 0]
-        stds = torch.std(flat, dim=0)
-        norm_factors = {
-            "z0": float(stds[1]),
-            "eta": float(stds[3]),
-            "phi": float(stds[2]),
-            "pt": float(stds[4]),
-        }
-        ts_print(
-            "Normalization factors: "
-            f"z0: {norm_factors['z0']:.3f}, "
-            f"eta: {norm_factors['eta']:.3f}, "
-            f"phi: {norm_factors['phi']:.3f}, "
-            f"pt: {norm_factors['pt']:.3f}"
-        )
-    else:
-        ts_print("Warning: No valid particles found for normalization computation!")
-        norm_factors = {"z0": 1.0, "eta": 1.0, "phi": 1.0, "pt": 1.0}
-
-    return norm_factors
-
-
 def initialize_loss_dictionary(active_components: list, device: torch.device) -> Dict[str, torch.Tensor]:
     """
     Initialize a loss dictionary with zero values for active loss components.
@@ -94,16 +49,6 @@ def initialize_loss_dictionary(active_components: list, device: torch.device) ->
         add_loss_key("attention_next")
     if "attention_back" in active_components:
         add_loss_key("attention_back")
-
-    # Reconstruction losses and sub-components
-    if "MSE" in active_components or "L1" in active_components:
-        add_loss_key("reco")
-        add_loss_key("reco_z0")
-        add_loss_key("reco_eta")
-        add_loss_key("reco_phi")
-        add_loss_key("reco_pt")
-        if "MSE" in active_components and "L1" in active_components:
-            raise ValueError("Cannot have both MSE and L1 reconstruction losses active simultaneously.")
 
     # Classification losses
     if "hit_BCE" in active_components:
@@ -143,11 +88,6 @@ def train_model(
         The trained transformer model.
     """
     epoch_nb = cfg.epoch_nb
-
-    # Extract normalization factors only if reconstruction loss is used.
-    norm_factors = {"z0": 1.0, "eta": 1.0, "phi": 1.0, "pt": 1.0}
-    if cfg.has_loss_component("MSE") or cfg.has_loss_component("L1"):
-        norm_factors = compute_parameter_loss_norms(dataset)
 
     # Loop over the number of epoch starting from start_epoch
     ts_print("Starting the training of the transformer model for seed reconstruction")
@@ -245,37 +185,12 @@ def train_model(
                         )  # encoded_space_points: [N, max_hit_input, dim_embedding]
 
                         # Compute reconstructed parameters if needed
-                        if cfg.transformer_config.regression and (
-                            cfg.has_loss_component("MSE") or cfg.has_loss_component("L1") or cfg.has_loss_component("hit_BCE")
-                        ):
+                        if cfg.transformer_config.regression and cfg.has_loss_component("hit_BCE"):
 
-                            reconstructed_parameters = encoded_space_points  # [N, max_hit_input, num_regression_parameters]
-                            if cfg.has_loss_component("MSE") or cfg.has_loss_component("L1"):
-                                loss_type = "MSE" if cfg.has_loss_component("MSE") else "L1"
-                                batch_reco_loss_dict = Losses.reconstruction_loss(
-                                    reconstructed_parameters,
-                                    batched_particles,
-                                    batched_masks,
-                                    loss_type=loss_type,
-                                )
-                                # Normalize individual components and store in batch dict
-                                batch_loss["reco_z0"] = batch_reco_loss_dict["z"] / (norm_factors["z0"] * norm_factors["z0"])
-                                batch_loss["reco_eta"] = batch_reco_loss_dict["eta"] / (norm_factors["eta"] * norm_factors["eta"])
-                                batch_loss["reco_phi"] = batch_reco_loss_dict["phi"]
-                                batch_loss["reco_pt"] = batch_reco_loss_dict["pt"] / (norm_factors["pt"] * norm_factors["pt"])
-                                # Average across components
-                                batch_loss["reco"] = (
-                                    batch_loss["reco_z0"]
-                                    + batch_loss["reco_eta"]
-                                    + batch_loss["reco_phi"]
-                                    + batch_loss["reco_pt"]
-                                ) / 4
-
-                            # Note: L1 handled by Losses.reconstruction_loss via loss_type above
-
+                            hits_score = encoded_space_points  # [N, max_hit_input, 1]
                             if cfg.has_loss_component("hit_BCE"):
                                 batch_loss["hit_BCE"] = Losses.hit_classification_loss(
-                                    reconstructed_parameters[:, :, 5],
+                                    hits_score,
                                     batched_particles,
                                     batched_masks,
                                 )
@@ -431,7 +346,7 @@ def run_model(
     Returns (nested lists; indexing is [event_idx][bin_idx]):
         - seeds: Reconstruction seeds (list of seed tuples per bin). Each seed is a
           tuple (hit_indices: np.ndarray, avg_params: np.ndarray). Empty bins yield [].
-        - reconstructed_parameters: per-bin parameters (np.ndarray[num_valid_hits, 5]) or None.
+        - hit_scores: per-bin np.ndarray[n_valid_hits] of hit scores (padding removed), or None.
         - attention_maps: per-bin np.ndarray[num_valid_hits, num_valid_hits] used for seeding, or None.
     """
 
@@ -451,8 +366,7 @@ def run_model(
         event_start_time = time.perf_counter()
 
     event_seeds: List[Any] = []
-    event_encoded_points: List[Optional[np.ndarray]] = []
-    event_parameters: List[Optional[np.ndarray]] = []
+    event_hit_scores: List[Optional[np.ndarray]] = []
     event_attention_maps: List[Optional[np.ndarray]] = []
 
     with torch.no_grad():
@@ -474,16 +388,11 @@ def run_model(
             r0 = time.perf_counter()
 
         if cfg.transformer_config.regression:
-            raw = encoded_space_point
-            phi = torch.atan2(raw[..., 2], raw[..., 3])  # atan2(sin_phi, cos_phi)
-            parameters = torch.cat([raw[..., :2], phi.unsqueeze(-1), raw[..., 4:]], dim=-1)
+            hit_score = encoded_space_point
+
         else:
-            # Initialize parameters with zeros having shape [bins, hits, 5]
-            parameters = torch.zeros(
-                (hits_tensor.shape[0], hits_tensor.shape[1], 5),
-                device=cfg.device_acc,
-                dtype=hits_tensor.dtype,
-            )
+            # Compute hit score as the row-wise max of the attention weights [bins, hits, 1]
+            hit_score = attention_weights.squeeze(1).max(dim=-1).values.unsqueeze(-1)
 
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
@@ -500,21 +409,20 @@ def run_model(
         bin_mask = ~padding_mask[bin_idx].bool()
         if not torch.any(bin_mask):
             # Maintain positional consistency with explicit None placeholders
-            event_encoded_points.append(None)
-            event_parameters.append(None)
+            event_hit_scores.append(None)
             event_attention_maps.append(None)
             event_seeds.append([])
             continue
 
-        # Get encoded space points for valid hits
-        valid_sp = encoded_space_point[bin_idx].cpu().detach()
-        valid_parameters = parameters[bin_idx].cpu().detach()
+        # Get valid hit data for this bin
+        valid_score_full = hit_score[bin_idx].cpu().detach()  # [max_hit_input, 1] — unmasked
         valid_attention_weights = attention_weights[bin_idx].squeeze(0).detach().cpu()
         bin_mask_cpu = bin_mask.detach().cpu()
 
-        # Store the encoded space points
-        event_encoded_points.append(valid_sp.numpy())
-        event_parameters.append(valid_parameters.numpy())
+        # Mask hit scores to valid hits only for reconstruction functions
+        valid_score = valid_score_full[bin_mask_cpu.view(-1)]  # [n_valid, 1]
+
+        event_hit_scores.append(valid_score.squeeze(-1).numpy())
 
         # Extract attention weights for this bin from single layer
         if valid_attention_weights is not None:
@@ -538,7 +446,7 @@ def run_model(
                 neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
                 bin_seeds = Reconstruction.chained_seed_reconstruction(
                     neighbor_matrix_masked,
-                    valid_parameters,
+                    valid_score,
                     score_threshold=0.2,
                     max_chain_length=5,
                 )
@@ -547,7 +455,7 @@ def run_model(
                 neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
                 bin_seeds = Reconstruction.back_chained_seed_reconstruction(
                     neighbor_matrix_masked,
-                    valid_parameters,
+                    valid_score,
                     score_threshold=0.2,
                     max_chain_length=5,
                 )
@@ -556,7 +464,7 @@ def run_model(
                 neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
                 bin_seeds = Reconstruction.weighted_chained_seed_reconstruction(
                     neighbor_matrix_masked,
-                    valid_parameters,
+                    valid_score,
                     score_threshold=0.0,
                     max_chain_length=5,
                     pairs_per_hit=2,
@@ -568,20 +476,7 @@ def run_model(
                 starting_mask = (valid_hits[:, 3] < 500) & (valid_hits[:, 2].abs() < 600)  # r<100, |z|<500
                 bin_seeds = Reconstruction.beam_search_seed_reconstruction(
                     neighbor_matrix_masked,
-                    valid_parameters,
-                    starting_mask=starting_mask,
-                    score_threshold=0.0,
-                    max_chain_length=5,
-                    beam_width=5,
-                )
-            elif reco_method == "beam_search_full":
-                neighbor_matrix_masked.fill_diagonal_(float("-inf"))
-                neighbor_matrix_masked = torch.sigmoid(neighbor_matrix_masked)
-                valid_hits = hits_tensor[bin_idx][bin_mask_cpu]  # [num_valid, num_features]
-                starting_mask = (valid_hits[:, 3] < 150) & (valid_hits[:, 2].abs() < 500)  # r<100, |z|<500
-                bin_seeds = Reconstruction.beam_search_full_seed_reconstruction(
-                    neighbor_matrix_masked,
-                    valid_parameters,
+                    valid_score,
                     starting_mask=starting_mask,
                     score_threshold=0.0,
                     max_chain_length=5,
@@ -591,7 +486,7 @@ def run_model(
                 neighbor_matrix_masked = torch.sigmoid(neighbor_matrix_masked)
                 bin_seeds = Reconstruction.topk_seed_reconstruction(
                     neighbor_matrix_masked,
-                    valid_parameters,
+                    valid_score,
                     threshold=0.8,
                     max_selection=5,
                 )
@@ -614,8 +509,7 @@ def run_model(
 
     return (
         event_seeds,
-        event_encoded_points,
-        event_parameters,
+        event_hit_scores,
         event_attention_maps,
         event_duration,
         transformer_duration,
@@ -814,8 +708,7 @@ def main():
             start_time = time.perf_counter() if cfg.timing_enabled else None
             (
                 batch_seeds,
-                _,
-                batch_reconstructed_parameters,
+                batch_hit_scores,
                 batch_attention_maps,
                 batch_processing_times,
                 batch_transformer_times,
@@ -842,7 +735,6 @@ def main():
                         bin_idx=bin_idx,
                         hits=batch_data["hits_tensor"][event_idx][bin_idx].cpu().numpy(),
                         particles=batch_data["particles_tensor"][event_idx].cpu().numpy(),
-                        reco_params=batch_reconstructed_parameters[bin_idx],
                         seeds=batch_seeds[bin_idx],
                         pairs=batch_data["good_pairs"][event_idx][bin_idx].cpu().numpy(),
                         attention_map=batch_attention_maps[bin_idx],
@@ -854,7 +746,7 @@ def main():
                 event_particles=batch_data["particles_tensor"][event_idx].cpu().numpy(),
                 event_hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx].cpu().numpy(),
                 event_seeds=batch_seeds,
-                event_reco_params=batch_reconstructed_parameters,
+                event_hit_scores=batch_hit_scores,
             )
 
         start_event = end_event

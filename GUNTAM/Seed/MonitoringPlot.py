@@ -444,7 +444,7 @@ def create_seeding_performance_plots(
                 label=f"Orphan hits (n={len(scores_orphan)})",
                 density=True,
             )
-        ax_score.set_xlabel("Hit Score (reco_params[:, 4])")
+        ax_score.set_xlabel("Hit Score")
         ax_score.set_ylabel("Density")
         ax_score.set_title("Hit Score Distribution by Particle Membership")
         ax_score.legend()

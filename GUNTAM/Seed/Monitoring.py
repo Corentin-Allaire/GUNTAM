@@ -70,7 +70,6 @@ class PerformanceMonitor:
             "pt": [],
         }
 
-        # Per-hit scores (index 4 of reco_params) split by particle membership
         self.hit_scores: dict[str, list[float]] = {"particle": [], "orphan": []}
 
         self.eligible_particles: list[dict[str, Any]] = []
@@ -478,7 +477,7 @@ class PerformanceMonitor:
         event_particles,
         event_hit_to_particle,
         event_seeds,
-        event_reco_params: Optional[List[Optional[np.ndarray]]] = None,
+        event_hit_scores: Optional[List[Optional[np.ndarray]]] = None,
     ):
 
         event_particle_best_seeds: Dict[int, Dict[str, Any]] = {}
@@ -491,16 +490,17 @@ class PerformanceMonitor:
             seeds = event_seeds[bin_idx]
             self.total_seeds += len(seeds)
 
-            # Collect per-hit scores (reco_params[:, 5]) split by particle membership
-            if event_reco_params is not None and event_reco_params[bin_idx] is not None:
-                reco_bin = np.asarray(event_reco_params[bin_idx])
-                htp_flat = np.asarray(hit_to_particle).reshape(-1)
-                # Valid (non-padded) hits: at least one non-zero feature
-                valid_mask = np.any(hits != 0, axis=-1)
-                scores = reco_bin[valid_mask, 4]
-                is_particle = htp_flat[valid_mask] >= 0
-                self.hit_scores["particle"].extend(scores[is_particle].tolist())
-                self.hit_scores["orphan"].extend(scores[~is_particle].tolist())
+            # --- Collect hit scores split by particle membership ---
+            if event_hit_scores is not None:
+                scores = event_hit_scores[bin_idx]
+                if scores is not None:
+                    htp = np.asarray(hit_to_particle).reshape(-1)[: len(scores)]
+                    for i, score in enumerate(scores):
+                        pid = int(htp[i]) if i < len(htp) else -1
+                        if pid >= 0:
+                            self.hit_scores["particle"].append(float(score))
+                        else:
+                            self.hit_scores["orphan"].append(float(score))
 
             # --- Build bin_particles dict ---
             bin_particles = self._build_bin_particles(particles, hit_to_particle)
@@ -627,7 +627,6 @@ class PerformanceMonitor:
         bin_idx: int,
         hits: np.ndarray,
         particles: np.ndarray,
-        reco_params: np.ndarray,
         seeds: Sequence[Any],
         pairs: np.ndarray,
         attention_map: np.ndarray,
@@ -642,7 +641,6 @@ class PerformanceMonitor:
             bin_idx: Bin index within event (int)
             hits: Array of valid hits for the bin, shape `[n_hits, 5]`
             particles: Array of truth parameters aligned to hits, shape `[n_hits, 4]`
-            reco_params: Array of reconstructed parameters aligned to hits, shape `[n_hits, 4 or 5]`
             seeds: List of seeds `(hit_indices, parameters)` for the bin
             pairs: Tensor `[num_pairs, 3]` where columns are (pairs1, pairs2, targets)
             attention_map: Array `[n_hits, n_hits]` attention weights for the bin
@@ -657,7 +655,6 @@ class PerformanceMonitor:
             for i in range(len(hits)):
                 hit = hits[i]
                 particle = particles[i]
-                hit_params = reco_params[i]
                 is_orphan = particle[3] <= 0.0
                 print(
                     f"  Coordinates (tx, ty, tz, phi, eta): "
@@ -671,22 +668,6 @@ class PerformanceMonitor:
                     )
                 else:
                     print(f"  Particle: ORPHAN HIT (no associated particle, pT={particle[3]:.1f})")
-
-                print(
-                    f"  Reconstructed (vz, eta, phi, pT): "
-                    f"[{hit_params[0]:8.4f}, {hit_params[1]:6.3f}, {hit_params[2]:6.3f}, {hit_params[3]:8.4f}]"
-                )
-                if len(hit_params) > 4:
-                    print(f" Is_seed score {hit_params[4]}")
-                # Calculate reconstruction errors
-                error_vz = hit_params[0] - particle[0]
-                error_eta = hit_params[1] - particle[1]
-                error_phi = angular_difference(hit_params[2], particle[2])
-                error_pt = hit_params[3] - particle[3]
-                print(
-                    f"  Reconstruction Errors (Δvz, Δeta, Δphi, ΔpT): "
-                    f"[{error_vz:8.4f}, {error_eta:6.3f}, {error_phi:6.3f}, {error_pt:8.4f}]"
-                )
 
             print(f"   Number of seeds reconstructed: {len(seeds)}")
             for seed_idx, s in enumerate(seeds):

@@ -18,7 +18,6 @@ def test_defaults_initialization():
     assert cfg.dim_max == [400.0, 400.0, 2000.0, 500]
     assert cfg.shift == [200, 200, 1000.0, 0.0]
     assert cfg.regression is False
-    assert cfg.num_regression_parameters == 5
 
 
 def test_to_from_dict_roundtrip():
@@ -220,19 +219,11 @@ def test_regression_defaults_and_parse(monkeypatch):
     """regression defaults to False; --regression flag enables it."""
     cfg = TransformerConfig()
     assert cfg.regression is False
-    assert cfg.num_regression_parameters == 5
 
-    monkeypatch.setattr(sys, "argv", ["prog", "--regression", "--num_regression_parameters", "7"])
+    monkeypatch.setattr(sys, "argv", ["prog", "--regression"])
     cfg2 = TransformerConfig()
     cfg2.parse_args()
     assert cfg2.regression is True
-    assert cfg2.num_regression_parameters == 7
-
-
-def test_validation_num_regression_parameters_less_than_one(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["prog", "--num_regression_parameters", "0"])
-    with pytest.raises(ValueError, match="num_regression_parameters"):
-        TransformerConfig().parse_args()
 
 
 def test_dim_max_shift_match_coord_dim_with_cosine_in_embedding(monkeypatch):

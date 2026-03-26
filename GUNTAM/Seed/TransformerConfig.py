@@ -48,7 +48,6 @@ class TransformerConfig:
 
         # Regression head
         self.regression = False  # Whether to enable the regression MLP head
-        self.num_regression_parameters = 5  # Number of output parameters for the regression head
 
         coord_dim = len(self.embedding_feature) + len(set(self.embedding_feature) & set(self.cosine_processing))
         if self.fourier_num_frequencies is None:
@@ -149,12 +148,6 @@ class TransformerConfig:
             default=self.regression,
             help="Enable the regression MLP head on top of the transformer encoder",
         )
-        parser.add_argument(
-            "--num_regression_parameters",
-            type=int,
-            default=self.num_regression_parameters,
-            help="Number of output parameters for the regression MLP head",
-        )
 
     def apply_args(self, args: argparse.Namespace) -> None:
         """
@@ -177,7 +170,6 @@ class TransformerConfig:
         self.dim_max = args.dim_max
         self.shift = args.shift
         self.regression = args.regression
-        self.num_regression_parameters = args.num_regression_parameters
 
         # Validation
         if self.nb_layers_t < 1:
@@ -202,8 +194,6 @@ class TransformerConfig:
             raise ValueError(f"dim_max length ({len(self.dim_max)}) must match coord_dim ({coord_dim})")
         if len(self.shift) != coord_dim:
             raise ValueError(f"shift length ({len(self.shift)}) must match coord_dim ({coord_dim})")
-        if self.num_regression_parameters < 1:
-            raise ValueError(f"num_regression_parameters must be >= 1, got {self.num_regression_parameters}")
         valid_indices = set(self.embedding_feature) | set(self.high_level_features)
         invalid = [i for i in self.cosine_processing if i not in valid_indices]
         if invalid:
@@ -296,7 +286,6 @@ class TransformerConfig:
         print(f"  Cosine processing:     {self.cosine_processing}")
         print("\nRegression Head:")
         print(f"  Enabled:               {self.regression}")
-        print(f"  Output parameters:     {self.num_regression_parameters}")
         print("\nConfiguration file operations available:")
         print("  --save_config <filename>     : Save current config to JSON file")
         print("  --load_config <filename>     : Load config from JSON file")

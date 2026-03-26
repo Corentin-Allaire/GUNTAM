@@ -12,7 +12,6 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
     - particles_test: [E, P, 4]
     - ID_test: [E, B, H]
     - seeds_test: nested list [E][B] of (hit_indices, params)
-    - reconstructed_parameters: nested list [E][B] aligned to valid hits
     - all_pairs_test: nested list [E][B] of (pairs1, pairs2, targets)
     - attention_maps: nested list [E][B] of [H_valid, H_valid]
     """
@@ -46,14 +45,6 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
     seed_params = true_params.copy()
     seeds_test = [[[(particle_hit_indices, seed_params)]]]  # nested [E][B]
 
-    # Reconstructed parameters aligned to valid hits (copy true params + is_seed score)
-    reco_bin = np.zeros((H, 7), dtype=float)  # 7 params + dummy score
-    for hi in range(H):
-        # Copy truth for simplicity; last column as a dummy score
-        reco_bin[hi, :7] = true_params if hi in particle_hit_indices else 0.0
-        # Optionally, add a dummy score as 8th column if needed elsewhere
-    reconstructed_parameters = [[reco_bin]]
-
     # Pair info and attention maps (not used unless detailed analysis enabled)
     pairs1 = np.arange(H, dtype=int)
     pairs2 = np.arange(H, dtype=int)
@@ -66,7 +57,6 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
         particles_test,
         ID_test,
         seeds_test,
-        reconstructed_parameters,
         all_pairs_test,
         attention_maps,
     )
@@ -89,7 +79,7 @@ def make_multi_event_multi_bin_setup():
     padding_mask_hit_test = np.zeros((E, B, H), dtype=bool)
 
     seeds_test = [[[] for _ in range(B)] for _ in range(E)]
-    reconstructed_parameters = [[np.zeros((H, 7), dtype=float) for _ in range(B)] for _ in range(E)]
+
     all_pairs_test = [[(np.arange(H), np.arange(H), np.zeros(H, dtype=int)) for _ in range(B)] for _ in range(E)]
     attention_maps = [[np.zeros((H, H), dtype=float) for _ in range(B)] for _ in range(E)]
 
@@ -108,8 +98,7 @@ def make_multi_event_multi_bin_setup():
             )
             particles_test[e, pid, :] = true_params
             ID_test[e, b, hi] = pid
-            reconstructed_parameters[e][b][hi, :7] = true_params
-            # Optionally, add a dummy score as 8th column if needed elsewhere
+
         # Pure seed over these hits
         seeds_test[e][b].append((idxs, true_params.copy()))
 
@@ -134,7 +123,6 @@ def make_multi_event_multi_bin_setup():
         ID_test,
         padding_mask_hit_test,
         seeds_test,
-        reconstructed_parameters,
         all_pairs_test,
         attention_maps,
     )
@@ -147,7 +135,6 @@ def test_seeding_performance_basic():
         particles_test,
         ID_test,
         seeds_test,
-        reconstructed_parameters,
         all_pairs_test,
         attention_maps,
     ) = make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6)
@@ -186,7 +173,6 @@ def test_seeding_performance_basic():
         b0,
         hits_test[0, 0],
         particles_per_hit,
-        reconstructed_parameters[0][0],
         seeds_test[0][0],
         pairs_np,
         attention_maps[0][0],
@@ -246,7 +232,6 @@ def test_input_validation_mismatched_bins_raises():
         _,
         _,
         _,
-        _,
     ) = make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=4)
 
     monitor = PerformanceMonitor(save_plots=False)
@@ -265,7 +250,6 @@ def test_min_common_hits_threshold_blocks_association():
         particles_test,
         ID_test,
         seeds_test,
-        reconstructed_parameters,
         all_pairs_test,
         attention_maps,
     ) = make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=5)
@@ -301,7 +285,6 @@ def test_min_common_hits_threshold_blocks_association():
         b0,
         hits_test[0, 0],
         particles_per_hit,
-        reconstructed_parameters[0][0],
         seeds_test[0][0],
         pairs_np,
         attention_maps[0][0],
@@ -334,7 +317,6 @@ def test_multi_event_multi_bin_distribution():
         ID_test,
         _,
         seeds_test,
-        _,
         _,
         _,
     ) = make_multi_event_multi_bin_setup()

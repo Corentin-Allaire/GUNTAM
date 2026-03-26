@@ -95,9 +95,6 @@ class SeedTransformer(nn.Module):
                 nn.Linear(self.cfg.dim_embedding * 2, self.cfg.dim_embedding * 2, device=self.device_acc),
                 nn.ReLU(),
             )
-            self.track_parameter_layer = nn.Linear(
-                self.cfg.dim_embedding * 2, self.cfg.num_regression_parameters, device=self.device_acc
-            )
             self.hits_score_layer = nn.Sequential(nn.Linear(self.cfg.dim_embedding * 2, 1, device=self.device_acc), nn.Sigmoid())
 
     def encodeSpacePoint(self, hits: Tensor, mask: Tensor) -> Tensor:
@@ -174,10 +171,8 @@ class SeedTransformer(nn.Module):
 
         if self.cfg.regression:
             embedding = self.regression_MLP(transformer_output)
-            regression_output = self.track_parameter_layer(embedding)
             hits_score = self.hits_score_layer(embedding)
-            transformer_output = torch.cat([regression_output, hits_score], dim=-1)
-            return transformer_output, attn_weights
+            return hits_score, attn_weights
 
         return transformer_output, attn_weights
 
