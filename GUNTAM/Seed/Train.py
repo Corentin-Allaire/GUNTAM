@@ -370,7 +370,7 @@ def run_model(
     event_hit_scores: List[Optional[np.ndarray]] = []
     event_attention_maps: List[Optional[np.ndarray]] = []
 
-    with torch.no_grad():
+    with torch.inference_mode():
         # Timing: Transformer inference (encoding + attention)
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)

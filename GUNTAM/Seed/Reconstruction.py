@@ -386,10 +386,13 @@ def beam_search_seed_reconstruction(
     topk_idx_np = topk_idx.numpy()
     topk_vals_np = topk_vals.float().numpy()
 
-    pairs_dict: dict[int, dict[int, float]] = {
-        i: dict(zip(topk_idx_np[i, valid_mask_np[i]].tolist(), topk_vals_np[i, valid_mask_np[i]].tolist()))
-        for i in range(num_hits)
-    }
+    # Vectorized: extract all valid (row, neighbor, score) triples at once
+    rows, cols_k = np.where(valid_mask_np)
+    neighbors_flat = topk_idx_np[rows, cols_k].tolist()
+    scores_flat = topk_vals_np[rows, cols_k].tolist()
+    pairs_list: list[list[tuple[int, float]]] = [[] for _ in range(num_hits)]
+    for r, n, s in zip(rows.tolist(), neighbors_flat, scores_flat):
+        pairs_list[r].append((n, s))
 
     score_mask = starting_mask & valid_hits
     starting_index = torch.nonzero(score_mask, as_tuple=False).squeeze(1).tolist()
@@ -403,7 +406,7 @@ def beam_search_seed_reconstruction(
             new_beam = []
             for chain, beam_score in beam:
                 last_hit = chain[-1]
-                for neighbor, score in pairs_dict[last_hit].items():
+                for neighbor, score in pairs_list[last_hit]:
                     new_score = beam_score + score
                     new_chain = chain + [neighbor]
                     new_beam.append((new_chain, new_score))
@@ -413,7 +416,7 @@ def beam_search_seed_reconstruction(
                         best_score = chain_score
                         best_chain = new_chain
 
-            new_beam.sort(key=lambda x: _beam_score(x[1], len(x[0])), reverse=True)
+            new_beam.sort(key=lambda x: x[1], reverse=True)
             beam = new_beam[:beam_width]
             len_chain += 1
 
