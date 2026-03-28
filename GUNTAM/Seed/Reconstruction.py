@@ -259,7 +259,7 @@ def weighted_chained_seed_reconstruction(
     mask = both_valid & forward_pairs
     hit_i_np = hit_i_list[mask].numpy()
     hit_j_np = hit_j_list[mask].numpy()
-    scores_np = scores_list[mask].float.numpy()
+    scores_np = scores_list[mask].float().numpy()
 
     sort_order = np.argsort(-scores_np)
     hit_i_np = hit_i_np[sort_order]
