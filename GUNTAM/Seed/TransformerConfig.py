@@ -2,6 +2,14 @@ import argparse
 import json
 import os
 
+import torch
+
+_DTYPE_MAP: dict[str, torch.dtype] = {
+    "float32": torch.float32,
+    "float16": torch.float16,
+    "bfloat16": torch.bfloat16,
+}
+
 
 class TransformerConfig:
     """
@@ -31,6 +39,8 @@ class TransformerConfig:
                 Fourier encoding [x_max, y_max, z_max, r_max].
             - shift: list[float]: Shift applied to each encoded coordinate dimension before
                 normalisation (length == coord_dim) [x_shift, y_shift, z_shift, r_shift].
+            - dtype (torch.dtype): Floating-point precision for all model weights.
+                Supported values: torch.float32, torch.float16, torch.bfloat16.
         """
 
         # Transformer architecture
@@ -45,6 +55,9 @@ class TransformerConfig:
         self.fourier_num_frequencies = None  # list[int] of length 4, one per dimension [x, y, z, r]
         self.dim_max = [400.0, 400.0, 2000.0, 500]
         self.shift = [200, 200, 1000.0, 0.0]
+
+        # Floating-point precision
+        self.dtype: torch.dtype = torch.float32  # Weight dtype for all model parameters
 
         # Regression head
         self.regression = False  # Whether to enable the regression MLP head
@@ -148,6 +161,13 @@ class TransformerConfig:
             default=self.regression,
             help="Enable the regression MLP head on top of the transformer encoder",
         )
+        parser.add_argument(
+            "--dtype",
+            type=str,
+            default="float32",
+            choices=list(_DTYPE_MAP.keys()),
+            help="Floating-point dtype for all model weights (float32, float16, bfloat16)",
+        )
 
     def apply_args(self, args: argparse.Namespace) -> None:
         """
@@ -170,6 +190,7 @@ class TransformerConfig:
         self.dim_max = args.dim_max
         self.shift = args.shift
         self.regression = args.regression
+        self.dtype = _DTYPE_MAP[args.dtype]
 
         # Validation
         if self.nb_layers_t < 1:
@@ -242,11 +263,23 @@ class TransformerConfig:
 
     def to_dict(self) -> dict:
         """Convert configuration to dictionary for JSON serialization."""
-        return {key: value for key, value in self.__dict__.items()}
+        result = {}
+        for key, value in self.__dict__.items():
+            if isinstance(value, torch.dtype):
+                # Store dtype as its string name (e.g. "float32") for JSON compatibility
+                result[key] = str(value).replace("torch.", "")
+            else:
+                result[key] = value
+        return result
 
     def from_dict(self, config_dict: dict):
         """Load configuration from dictionary."""
         for key, value in config_dict.items():
+            if key == "dtype":
+                if isinstance(value, str):
+                    if value not in _DTYPE_MAP:
+                        raise ValueError(f"Unknown dtype '{value}'. Supported: {list(_DTYPE_MAP.keys())}")
+                    value = _DTYPE_MAP[value]
             setattr(self, key, value)
 
     def save_config(self, filepath: str):
@@ -286,6 +319,8 @@ class TransformerConfig:
         print(f"  Cosine processing:     {self.cosine_processing}")
         print("\nRegression Head:")
         print(f"  Enabled:               {self.regression}")
+        print("\nPrecision:")
+        print(f"  dtype:                 {self.dtype}")
         print("\nConfiguration file operations available:")
         print("  --save_config <filename>     : Save current config to JSON file")
         print("  --load_config <filename>     : Load config from JSON file")

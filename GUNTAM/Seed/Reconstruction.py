@@ -257,9 +257,9 @@ def weighted_chained_seed_reconstruction(
     both_valid = valid_hits[hit_i_list] & valid_hits[hit_j_list]
     forward_pairs = hit_i_list < hit_j_list
     mask = both_valid & forward_pairs
-    hit_i_np = hit_i_list[mask].cpu().numpy()
-    hit_j_np = hit_j_list[mask].cpu().numpy()
-    scores_np = scores_list[mask].cpu().numpy()
+    hit_i_np = hit_i_list[mask].numpy()
+    hit_j_np = hit_j_list[mask].numpy()
+    scores_np = scores_list[mask].float.numpy()
 
     sort_order = np.argsort(-scores_np)
     hit_i_np = hit_i_np[sort_order]
@@ -382,9 +382,9 @@ def beam_search_seed_reconstruction(
     valid_mask = valid_hits[topk_idx] & (topk_idx > row_idx)  # [N, k] — filter by hit score
 
     # Transfer to CPU/numpy once instead of calling .item() N*k times
-    valid_mask_np = valid_mask.cpu().numpy()
-    topk_idx_np = topk_idx.cpu().numpy()
-    topk_vals_np = topk_vals.cpu().numpy()
+    valid_mask_np = valid_mask.numpy()
+    topk_idx_np = topk_idx.numpy()
+    topk_vals_np = topk_vals.float().numpy()
 
     pairs_dict: dict[int, dict[int, float]] = {
         i: dict(zip(topk_idx_np[i, valid_mask_np[i]].tolist(), topk_vals_np[i, valid_mask_np[i]].tolist()))

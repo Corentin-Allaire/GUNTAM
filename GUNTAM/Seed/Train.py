@@ -125,13 +125,14 @@ def train_model(
             else:
                 model.train()
 
+            model_dtype = model.dtype
             # Load the data
             batch_data = dataset.get_file(file_idx)
-            hits_tensor = batch_data["hits_tensor"].to(cfg.device_acc)
-            particles_tensor = batch_data["particles_tensor"].to(cfg.device_acc)
-            hit_to_particle_tensor = batch_data["hit_to_particle_tensor"].to(cfg.device_acc)
-            padding_mask = batch_data["padding_mask"].to(cfg.device_acc)
-            good_pairs = batch_data["good_pairs"].to(cfg.device_acc)
+            hits_tensor = batch_data["hits_tensor"].to(cfg.device_acc, dtype=model_dtype)
+            particles_tensor = batch_data["particles_tensor"].to(cfg.device_acc, dtype=model_dtype)
+            hit_to_particle_tensor = batch_data["hit_to_particle_tensor"].to(cfg.device_acc, dtype=model_dtype)
+            padding_mask = batch_data["padding_mask"].to(cfg.device_acc, dtype=model_dtype)
+            good_pairs = batch_data["good_pairs"].to(cfg.device_acc, dtype=model_dtype)
 
             # Iterate through each event in this batch with a random order
             num_events_in_batch = hits_tensor.shape[0]
@@ -375,12 +376,15 @@ def run_model(
             Utils.sync_device(cfg.device_acc)
             t0 = time.perf_counter()
 
+        hits_tensor = hits_tensor.to(cfg.device_acc, dtype=model.dtype)
+
         # Obtain encoded embeddings and attention weights from the model
         encoded_space_point, attention_weights = model(hits_tensor, padding_mask)
 
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
             transformer_duration = time.perf_counter() - t0
+            ts_print(f"Transformer inference duration: {transformer_duration:.4f} seconds")
 
         # Timing: Parameter regression (+ optional pairwise scoring)
         if cfg.timing_enabled:
@@ -397,18 +401,21 @@ def run_model(
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
             regression_duration = time.perf_counter() - r0
+            ts_print(f"Regression duration: {regression_duration:.4f} seconds")
 
     # Timing: Seed reconstruction across all bins
     if cfg.timing_enabled:
         Utils.sync_device(cfg.device_acc)
         seed_reconstruction_start = time.perf_counter()
 
-    for bin_idx in range(hits_tensor.shape[0]):
+    all_bin_masks_cpu = (~padding_mask.bool()).detach().cpu()
+    hits_tensor_cpu = hits_tensor.detach().cpu()
+    attention_weights_cpu = attention_weights.detach().cpu()
 
-        # Get valid hits in this bin
-        bin_mask = ~padding_mask[bin_idx].bool()
-        if not torch.any(bin_mask):
-            # Maintain positional consistency with explicit None placeholders
+    ts_print(f"Finished cpu transfer for seed reconstruction in {time.perf_counter() - seed_reconstruction_start:.4f} seconds")
+    for bin_idx in range(hits_tensor.shape[0]):
+        bin_mask_cpu = all_bin_masks_cpu[bin_idx]
+        if not bin_mask_cpu.any():
             event_hit_scores.append(None)
             event_attention_maps.append(None)
             event_seeds.append([])
@@ -416,13 +423,12 @@ def run_model(
 
         # Get valid hit data for this bin
         valid_score_full = hit_score[bin_idx].cpu().detach()  # [max_hit_input, 1] — unmasked
-        valid_attention_weights = attention_weights[bin_idx].squeeze(0).detach().cpu()
-        bin_mask_cpu = bin_mask.detach().cpu()
+        valid_attention_weights = attention_weights_cpu[bin_idx].squeeze(0)
 
         # Mask hit scores to valid hits only for reconstruction functions
         valid_score = valid_score_full[bin_mask_cpu.view(-1)]  # [n_valid, 1]
 
-        event_hit_scores.append(valid_score.squeeze(-1).numpy())
+        event_hit_scores.append(valid_score.squeeze(-1).float().numpy())
 
         # Extract attention weights for this bin from single layer
         if valid_attention_weights is not None:
@@ -472,7 +478,7 @@ def run_model(
             elif reco_method == "beam_search":
                 neighbor_matrix_masked.fill_diagonal_(float("-inf"))
                 neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
-                valid_hits = hits_tensor[bin_idx][bin_mask_cpu]  # [num_valid, num_features]
+                valid_hits = hits_tensor_cpu[bin_idx][bin_mask_cpu]  # [num_valid, num_features]
                 starting_mask = (valid_hits[:, 3] < 500) & (valid_hits[:, 2].abs() < 600)  # r<100, |z|<500
                 bin_seeds = Reconstruction.beam_search_seed_reconstruction(
                     neighbor_matrix_masked,
@@ -494,7 +500,7 @@ def run_model(
 
             # Apply softmax row-wise to attention weights for monitoring
             attention_softmax = torch.softmax(valid_attention_weights, dim=-1)
-            event_attention_maps.append(attention_softmax.cpu().detach().numpy())
+            event_attention_maps.append(attention_softmax.cpu().detach().float().numpy())
         else:
             # No attention weights or pairwise scores available - append placeholder to keep alignment
             event_seeds.append([])
@@ -506,6 +512,7 @@ def run_model(
         seed_reconstruction_end = time.perf_counter()
         seed_reconstruction_duration = seed_reconstruction_end - seed_reconstruction_start
         event_duration = time.perf_counter() - event_start_time
+        ts_print(f"Seed reconstruction duration: {seed_reconstruction_duration:.4f} seconds")
 
     return (
         event_seeds,
@@ -542,6 +549,7 @@ def main():
     model = SeedTransformer(
         transformer_config=cfg.transformer_config,
         device_acc=cfg.device_acc,
+        dtype=cfg.transformer_config.dtype,
     )
     model.to(cfg.device_acc)
     # Create optimizer right now we are using AdamW as it seem to perform well with transformer models
@@ -609,6 +617,10 @@ def main():
                 optimizer=opt,
                 scheduler=scheduler,
             )
+            # check if the model dtype matches the config, print a warning if not
+            if model.dtype != cfg.transformer_config.dtype:
+                ts_print(f"Warning: Loaded model dtype {model.dtype} does not match config dtype {cfg.dtype}.")
+
             # Load previous tensorboard logs
             if os.path.exists(log_dir):
                 # Append to existing log dir so TensorBoard combines all runs
@@ -664,6 +676,7 @@ def main():
     model_val = SeedTransformer(
         transformer_config=cfg.transformer_config,
         device_acc=cfg.device_acc,
+        dtype=cfg.transformer_config.dtype,
     )
 
     if cfg.no_test:
@@ -675,6 +688,7 @@ def main():
         device=cfg.device_acc,
     )
     model_val.to(cfg.device_acc)
+    model_val = model_val.to(cfg.transformer_config.dtype)
     model_val.eval()
     model_val = torch.compile(model_val)
 
@@ -733,18 +747,18 @@ def main():
                     monitoring.analyse_bin_performance(
                         event_idx=event_idx,
                         bin_idx=bin_idx,
-                        hits=batch_data["hits_tensor"][event_idx][bin_idx].cpu().numpy(),
-                        particles=batch_data["particles_tensor"][event_idx].cpu().numpy(),
+                        hits=batch_data["hits_tensor"][event_idx][bin_idx].cpu().float().numpy(),
+                        particles=batch_data["particles_tensor"][event_idx].cpu().float().numpy(),
                         seeds=batch_seeds[bin_idx],
-                        pairs=batch_data["good_pairs"][event_idx][bin_idx].cpu().numpy(),
+                        pairs=batch_data["good_pairs"][event_idx][bin_idx].cpu().float().numpy(),
                         attention_map=batch_attention_maps[bin_idx],
                     )
 
             monitoring.bin_seeding_performance(
                 event_idx=event_idx,
-                event_hits=batch_data["hits_tensor"][event_idx].cpu().numpy(),
-                event_particles=batch_data["particles_tensor"][event_idx].cpu().numpy(),
-                event_hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx].cpu().numpy(),
+                event_hits=batch_data["hits_tensor"][event_idx].cpu().float().numpy(),
+                event_particles=batch_data["particles_tensor"][event_idx].cpu().float().numpy(),
+                event_hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx].cpu().float().numpy(),
                 event_seeds=batch_seeds,
                 event_hit_scores=batch_hit_scores,
             )

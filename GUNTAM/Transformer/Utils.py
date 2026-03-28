@@ -43,6 +43,8 @@ def sync_device(dev: torch.device):
     if isinstance(dev, torch.device):
         if dev.type == "cuda" and torch.cuda.is_available():
             torch.cuda.synchronize(device=dev)
+        if dev.type == "mps" and torch.backends.mps.is_available():
+            torch.mps.synchronize()
 
 
 class CosineScheduleWithMinLR(LRScheduler):

@@ -36,12 +36,15 @@ class SeedTransformer(nn.Module):
         self,
         transformer_config: TransformerConfig = TransformerConfig(),
         device_acc: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32,
     ) -> None:
         super(SeedTransformer, self).__init__()
 
         self.cfg = transformer_config
         self.device_acc = device_acc
+        self.dtype = dtype
         self._setup_modules()
+        self.to(dtype)
 
     def _setup_modules(
         self,
@@ -207,6 +210,7 @@ class SeedTransformer(nn.Module):
                 "scheduler_state_dict": (scheduler.state_dict() if scheduler is not None else None),
                 # Save full transformer architecture config
                 "transformer_config": self.cfg.to_dict(),
+                "dtype": str(self.dtype).replace("torch.", ""),
             },
             path,
         )
@@ -236,6 +240,11 @@ class SeedTransformer(nn.Module):
                 self._rebuild_from_checkpoint_config(checkpoint.get("transformer_config"), device)
                 load_state_dict_flex(self, state_dict, desc="resume")
                 self.to(device)
+                if "dtype" in checkpoint:
+                    saved_dtype = getattr(torch, checkpoint["dtype"], None)
+                    if saved_dtype is not None:
+                        self.dtype = saved_dtype
+                        self.to(saved_dtype)
                 if "optimizer_state_dict" in checkpoint and optimizer is not None:
                     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
                 if "scheduler_state_dict" in checkpoint and scheduler is not None:
