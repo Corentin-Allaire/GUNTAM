@@ -206,15 +206,14 @@ class TestFullIntegration:
         
         model_path = os.path.join(temp_dir, f"model_{suffix}.pt")
         
-        # Run training with all possible loss components (choose MSE or L1, not both)
+        # Run training with all currently valid loss components
         all_losses = [
             "attention",
             "full_attention",
             "topk_attention",
             "attention_next",
             "attention_back",
-            "MSE",
-            "hit_BCE"
+            "hit_BCE",
         ]
         self._run_training(
             input_path=test_data_dir,

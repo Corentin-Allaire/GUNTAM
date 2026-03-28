@@ -59,7 +59,7 @@ def test_to_from_dict_roundtrip():
     cfg.epoch_nb = 3
     cfg.preprocessing_config.input_path = "data/in"
     cfg.preprocessing_config.max_hit_input = 1500
-    cfg.loss_components = ["cosine", "L1", "attention"]
+    cfg.loss_components = ["hit_BCE", "attention"]
     cfg.loss_weights = [0.5, 2.0, 1.5]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
 
@@ -76,18 +76,17 @@ def test_to_from_dict_roundtrip():
     assert new_cfg.epoch_nb == 3
     assert new_cfg.preprocessing_config.input_path == "data/in"
     assert new_cfg.preprocessing_config.max_hit_input == 1500
-    assert new_cfg.loss_components == ["cosine", "L1", "attention"]
+    assert new_cfg.loss_components == ["hit_BCE", "attention"]
     assert new_cfg.loss_weights == [0.5, 2.0, 1.5]
-    assert new_cfg.get_loss_weight("L1") == 2.0
     assert new_cfg.get_loss_weight("missing") == 0.0
 
 
 def test_save_and_load_config(tmp_path):
     cfg = SeedConfig()
     cfg.epoch_nb = 42
-    cfg.loss_components = ["cosine"]
+    cfg.loss_components = ["hit_BCE"]
     cfg.loss_weights = [3.0]
-    cfg.loss_config = {"cosine": 3.0}
+    cfg.loss_config = {"hit_BCE": 3.0}
 
     file_path = tmp_path / "conf.json"
     cfg.save_config(str(file_path))
@@ -97,21 +96,8 @@ def test_save_and_load_config(tmp_path):
     loaded.load_config(str(file_path))
 
     assert loaded.epoch_nb == 42
-    assert loaded.loss_components == ["cosine"]
-    assert loaded.get_loss_weight("cosine") == 3.0
-
-
-def test_parse_args_conflicting_losses_raises(monkeypatch):
-    # Provide both MSE and L1 -> should raise
-    argv = [
-        "prog",
-        "--loss_components",
-        "MSE",
-        "L1",
-    ]
-    monkeypatch.setattr(sys, "argv", argv)
-    with pytest.raises(ValueError):
-        SeedConfig().parse_args()
+    assert loaded.loss_components == ["hit_BCE"]
+    assert loaded.get_loss_weight("hit_BCE") == 3.0
 
 
 def test_parse_args_infers_default_weights(monkeypatch):
@@ -119,15 +105,15 @@ def test_parse_args_infers_default_weights(monkeypatch):
     argv = [
         "prog",
         "--loss_components",
-        "cosine",
+        "hit_BCE",
         "attention",
     ]
     monkeypatch.setattr(sys, "argv", argv)
     cfg = SeedConfig()
     cfg.parse_args()
-    assert cfg.loss_components == ["cosine", "attention"]
+    assert cfg.loss_components == ["hit_BCE", "attention"]
     assert cfg.loss_weights == [1.0, 1.0]
-    assert cfg.get_loss_weight("cosine") == 1.0
+    assert cfg.get_loss_weight("hit_BCE") == 1.0
     assert cfg.get_loss_weight("attention") == 1.0
 
 
@@ -135,8 +121,8 @@ def test_parse_args_mismatched_lengths_raises(monkeypatch):
     argv = [
         "prog",
         "--loss_components",
-        "cosine",
-        "MSE",
+        "hit_BCE",
+        "attention",
         "--loss_weights",
         "0.5",
     ]
@@ -156,29 +142,29 @@ def test_orphan_hit_fraction_validation(monkeypatch):
 
 def test_has_loss_component_and_get_weight_helpers():
     cfg = SeedConfig()
-    cfg.loss_components = ["cosine", "attention"]
+    cfg.loss_components = ["hit_BCE", "attention"]
     cfg.loss_weights = [0.7, 1.3]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
-    assert cfg.has_loss_component("cosine")
-    assert not cfg.has_loss_component("MSE")
+    assert cfg.has_loss_component("hit_BCE")
+    assert not cfg.has_loss_component("full_attention")
     assert cfg.get_loss_weight("attention") == 1.3
-    assert cfg.get_loss_weight("MSE") == 0.0
+    assert cfg.get_loss_weight("full_attention") == 0.0
 
 
 def test_print_config(capsys):
     """Test that print_config outputs all configuration sections."""
     cfg = SeedConfig()
     cfg.epoch_nb = 15
-    cfg.loss_components = ["cosine", "attention"]
+    cfg.loss_components = ["hit_BCE", "attention"]
     cfg.loss_weights = [0.5, 1.0]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
     cfg.model_path = "custom_model.pt"
-    
+
     cfg.print_config()
-    
+
     captured = capsys.readouterr()
     output = captured.out
-    
+
     # Check main sections are present
     assert "Seed Training Configuration" in output
     assert "Preprocessing Settings" in output

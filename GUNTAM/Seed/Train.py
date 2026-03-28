@@ -130,9 +130,9 @@ def train_model(
             batch_data = dataset.get_file(file_idx)
             hits_tensor = batch_data["hits_tensor"].to(cfg.device_acc, dtype=model_dtype)
             particles_tensor = batch_data["particles_tensor"].to(cfg.device_acc, dtype=model_dtype)
-            hit_to_particle_tensor = batch_data["hit_to_particle_tensor"].to(cfg.device_acc, dtype=model_dtype)
-            padding_mask = batch_data["padding_mask"].to(cfg.device_acc, dtype=model_dtype)
-            good_pairs = batch_data["good_pairs"].to(cfg.device_acc, dtype=model_dtype)
+            hit_to_particle_tensor = batch_data["hit_to_particle_tensor"].to(cfg.device_acc)
+            padding_mask = batch_data["padding_mask"].to(cfg.device_acc)
+            good_pairs = batch_data["good_pairs"].to(cfg.device_acc)
 
             # Iterate through each event in this batch with a random order
             num_events_in_batch = hits_tensor.shape[0]
@@ -509,7 +509,6 @@ def run_model(
         seed_reconstruction_end = time.perf_counter()
         seed_reconstruction_duration = seed_reconstruction_end - seed_reconstruction_start
         event_duration = time.perf_counter() - event_start_time
-        ts_print(f"Seed reconstruction duration: {seed_reconstruction_duration:.4f} seconds")
 
     return (
         event_seeds,
