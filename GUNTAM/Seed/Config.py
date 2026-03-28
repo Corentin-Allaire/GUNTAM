@@ -185,9 +185,6 @@ class SeedConfig:
             nargs="+",
             default=self.loss_components,
             choices=[
-                "cosine",
-                "MSE",
-                "L1",
                 "attention",
                 "full_attention",
                 "topk_attention",

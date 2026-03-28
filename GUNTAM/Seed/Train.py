@@ -384,7 +384,6 @@ def run_model(
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
             transformer_duration = time.perf_counter() - t0
-            ts_print(f"Transformer inference duration: {transformer_duration:.4f} seconds")
 
         # Timing: Parameter regression (+ optional pairwise scoring)
         if cfg.timing_enabled:
@@ -401,7 +400,6 @@ def run_model(
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
             regression_duration = time.perf_counter() - r0
-            ts_print(f"Regression duration: {regression_duration:.4f} seconds")
 
     # Timing: Seed reconstruction across all bins
     if cfg.timing_enabled:
@@ -412,7 +410,6 @@ def run_model(
     hits_tensor_cpu = hits_tensor.detach().cpu()
     attention_weights_cpu = attention_weights.detach().cpu()
 
-    ts_print(f"Finished cpu transfer for seed reconstruction in {time.perf_counter() - seed_reconstruction_start:.4f} seconds")
     for bin_idx in range(hits_tensor.shape[0]):
         bin_mask_cpu = all_bin_masks_cpu[bin_idx]
         if not bin_mask_cpu.any():
