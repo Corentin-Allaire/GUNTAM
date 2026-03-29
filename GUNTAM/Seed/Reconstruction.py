@@ -381,17 +381,16 @@ def beam_search_seed_reconstruction(
     row_idx = torch.arange(num_hits, device=att.device).unsqueeze(1)  # [N, 1]
     valid_mask = valid_hits[topk_idx] & (topk_idx > row_idx)  # [N, k] — filter by hit score
 
-    # Transfer to CPU/numpy once instead of calling .item() N*k times
     valid_mask_np = valid_mask.numpy()
     topk_idx_np = topk_idx.numpy()
     topk_vals_np = topk_vals.float().numpy()
 
-    # Vectorized: extract all valid (row, neighbor, score) triples at once
+    # Find all valid (row, col) entries across the [N, k] mask in one vectorized call,
     rows, cols_k = np.where(valid_mask_np)
-    neighbors_flat = topk_idx_np[rows, cols_k].tolist()
-    scores_flat = topk_vals_np[rows, cols_k].tolist()
+
+    # Group neighbors by source hit: pairs_list[i] = [(neighbor_j, score), ...]
     pairs_list: list[list[tuple[int, float]]] = [[] for _ in range(num_hits)]
-    for r, n, s in zip(rows.tolist(), neighbors_flat, scores_flat):
+    for r, n, s in zip(rows.tolist(), topk_idx_np[rows, cols_k].tolist(), topk_vals_np[rows, cols_k].tolist()):
         pairs_list[r].append((n, s))
 
     score_mask = starting_mask & valid_hits
