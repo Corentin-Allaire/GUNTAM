@@ -634,7 +634,8 @@ def main():
         # Calculate the total number of training events across all training files
         ts_print(f"Training on {train_size} events across {len(train_file_indices)} files")
         # Very important: compile the model
-        model = torch.compile(model)
+        if cfg.device_acc != "mps":
+            model = torch.compile(model)
         # Train the model
         ts_print("Starting training of the model")
         model = train_model(
@@ -686,7 +687,8 @@ def main():
     model_val.to(cfg.device_acc)
     model_val = model_val.to(cfg.transformer_config.dtype)
     model_val.eval()
-    model_val = torch.compile(model_val)
+    if cfg.device_acc != "mps":
+        model_val = torch.compile(model_val)
 
     # Perform validation using test_file_indices
     print("Starting model evaluation with test dataset...")
