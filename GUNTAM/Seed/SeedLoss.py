@@ -489,7 +489,7 @@ def hit_classification_loss(
     # Extract valid (non-padded) data
     valid_scores = seed_hit_scores[non_padded_mask]
     # Inputs are already sigmoid probabilities; clamp for numerical stability
-    valid_probs = torch.clamp(valid_scores, min=1e-7, max=1 - 1e-7)
+    valid_probs = torch.clamp(valid_scores, min=1e-7, max=1 - 1e-7).squeeze(-1)
     valid_particles = particles_data[non_padded_mask]
 
     # Create target labels: 1.0 for hits with particles (seed hits), 0.0 for orphan hits
