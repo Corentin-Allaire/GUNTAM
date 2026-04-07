@@ -770,7 +770,7 @@ def prepare_tensor(
 
         elif input_format == "csv":
             # Read data from CSV files
-            data_csv_file, particles_csv_file = data_file  # type: ignore[misc]
+            data_csv_file, particles_csv_file = data_file  # type: ignore[misc,str-unpack]
             data = pd.read_csv(data_csv_file)  # type: ignore[has-type]
             particles = pd.read_csv(particles_csv_file)  # type: ignore[has-type]
             print(f"  Loaded {data_type} data from {data_csv_file}")  # type: ignore[has-type]
