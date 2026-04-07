@@ -232,7 +232,7 @@ def _to_tensor(
     # Initialize tensors with proper shapes [num_events, num_bins, cfg.max_hit_input, features]
     hits_tensor = torch.zeros((num_events_batch, num_bins, max_hits_per_bin, len(hit_features)), dtype=torch.float32)
     particles_tensor = torch.zeros((num_events_batch, max_particles_per_event, len(particle_features)), dtype=torch.float32)
-    hit_to_particle_tensor = torch.zeros((num_events_batch, num_bins, max_hits_per_bin, 1), dtype=torch.int32)
+    hit_to_particle_tensor = torch.full((num_events_batch, num_bins, max_hits_per_bin, 1), fill_value=-1, dtype=torch.int32)
 
     # Fill tensors event by event and bin by bin
     for event_idx, event_id in enumerate(sorted(unique_events)):
@@ -549,8 +549,8 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
 
     print(f"  Processing events {start_event} to {end_event - 1}")
 
-    # Optionally perform orphan hit removal
-    data_batch = _orphan_hit_removal(data_batch, cfg.orphan_hit_fraction)
+    # Optionally perform orphan hit removal (seed derived from file_id for independent removal per batch)
+    data_batch = _orphan_hit_removal(data_batch, cfg.orphan_hit_fraction, random_state=1993 + file_id)
 
     # Apply geometric hit range cuts [R_max, Z_max]
     data_batch = _hit_selection(data_batch, cfg)
@@ -632,11 +632,13 @@ def compute_barcode(cfg: PreprocessingConfig) -> str:
         cfg: Configuration object containing parameters that affect the dataset preparation.
     Returns:
         A string barcode that encodes key configuration parameters such as binning strategy,
-        bin width, max hits, and orphan hit fraction.
+        bin width, max hits, orphan hit fraction, and total event count.
     """
     barcode = f"BS{cfg.binning_strategy}_BW{cfg.bin_width}_MH{cfg.max_hit_input}_PW{int(cfg.pv_pair_weight)}"
     if cfg.orphan_hit_fraction > 0:
         barcode += f"_OF{int(cfg.orphan_hit_fraction * 100)}"
+    if cfg.max_events > 0:
+        barcode += f"_NE{cfg.max_events}"
     return barcode
 
 
@@ -859,6 +861,5 @@ if __name__ == "__main__":
 
     # Print the configuration
     cfg.print_config()
-
     # Prepare tensors using config settings
     prepare_tensor(cfg)
