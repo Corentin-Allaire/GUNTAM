@@ -469,10 +469,11 @@ def hit_classification_loss(
     to distinguish between these two classes.
 
     Args:
-        seed_hit_scores: Predicted seed hit scores (probabilities in [0,1]) [batch_size, max_hits]
-            (typically taken from the 5th component of the regressed parameters).
-        particles_data: Original particle data [batch_size, max_hits, 4]
-        padded_mask: Boolean mask for padded hits (True for padded)
+        seed_hit_scores: Predicted seed hit scores (probabilities in [0,1]) [batch_size, max_hits, 1]
+            (output of the regression head's sigmoid layer).
+        particles_data: Original particle data [batch_size, max_hits, num_particle_features] (at least 5 features;
+            index 4 is pT, which is > 0 for hits with valid particle association).
+        padded_mask: Boolean mask for padded hits (True for padded) [batch_size, max_hits]
 
     Returns:
         Binary cross-entropy loss scalar tensor

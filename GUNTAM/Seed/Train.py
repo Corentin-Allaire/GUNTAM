@@ -481,7 +481,7 @@ def run_model(
                     neighbor_matrix_masked,
                     valid_score,
                     starting_mask=starting_mask,
-                    score_threshold=0.0,
+                    score_threshold=0.2,
                     max_chain_length=5,
                     beam_width=5,
                 )
@@ -587,8 +587,6 @@ def main():
         device=cfg.device_acc,
     )
 
-    train_size = dataset.get_batch_size(0, len(dataset) - 1)
-
     # Split the dataset at the file level to ensure proper train/test separation
     num_files = dataset.get_file_number()
     test_fraction = cfg.test_fraction
@@ -598,7 +596,11 @@ def main():
 
     # Create file-based train and test indices
     train_file_indices = list(range(train_files))
+    ts_print(f"Train file indices: {train_file_indices}")
     test_file_indices = list(range(train_files, num_files))
+    ts_print(f"Test file indices: {test_file_indices}")
+
+    train_size = dataset.get_batch_size(0, train_files - 1) if train_files > 0 else 0
 
     # Keep training file order deterministic (no shuffling)
     if cfg.epoch_nb > 0:
@@ -634,7 +636,7 @@ def main():
         # Calculate the total number of training events across all training files
         ts_print(f"Training on {train_size} events across {len(train_file_indices)} files")
         # Very important: compile the model
-        if cfg.device_acc != "mps":
+        if cfg.device_acc.type != "mps":
             model = torch.compile(model)
         # Train the model
         ts_print("Starting training of the model")
@@ -687,7 +689,7 @@ def main():
     model_val.to(cfg.device_acc)
     model_val = model_val.to(cfg.transformer_config.dtype)
     model_val.eval()
-    if cfg.device_acc != "mps":
+    if cfg.device_acc.type != "mps":
         model_val = torch.compile(model_val)
 
     # Perform validation using test_file_indices
@@ -699,6 +701,7 @@ def main():
     total_time = 0.0
     start_event = 0
     event_counter = 0
+    global_event_counter = 0  # monotonically increasing across all test files
 
     event_idx_list = [0]
     bin_idx_list = [55]
@@ -753,13 +756,14 @@ def main():
                     )
 
             monitoring.bin_seeding_performance(
-                event_idx=event_idx,
+                event_idx=global_event_counter,
                 event_hits=batch_data["hits_tensor"][event_idx].cpu().float().numpy(),
                 event_particles=batch_data["particles_tensor"][event_idx].cpu().float().numpy(),
                 event_hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx].cpu().float().numpy(),
                 event_seeds=batch_seeds,
                 event_hit_scores=batch_hit_scores,
             )
+            global_event_counter += 1
 
         start_event = end_event
 

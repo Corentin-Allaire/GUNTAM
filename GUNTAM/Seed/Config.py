@@ -274,6 +274,13 @@ class SeedConfig:
         # Create a dictionary mapping loss components to weights for easy lookup
         self.loss_config = dict(zip(self.loss_components, self.loss_weights))
 
+        # hit_BCE relies on the regression head output; raise early rather than silently train on zeros
+        if "hit_BCE" in self.loss_config and not self.transformer_config.regression:
+            raise ValueError(
+                "Loss component 'hit_BCE' requires --regression to be enabled. "
+                "Please add --regression to your command-line arguments."
+            )
+
         # Handle config file saving (after all configuration is set)
         if args.save_config:
             self.save_config(args.save_config)

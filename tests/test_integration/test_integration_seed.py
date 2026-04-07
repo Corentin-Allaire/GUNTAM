@@ -423,6 +423,7 @@ class TestFullIntegration:
             "--max_hit_input", "1200",
             "--eta_range", "-3.0", "3.0",
             "--vertex_cuts", "10", "200",
+            "--regression",
             "--timing_enabled"
         ]
         # Add loss components if provided

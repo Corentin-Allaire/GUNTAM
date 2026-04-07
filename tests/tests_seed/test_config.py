@@ -102,12 +102,7 @@ def test_save_and_load_config(tmp_path):
 
 def test_parse_args_infers_default_weights(monkeypatch):
     # Provide components but no weights -> defaults to 1.0 each
-    argv = [
-        "prog",
-        "--loss_components",
-        "hit_BCE",
-        "attention",
-    ]
+    argv = ["prog", "--loss_components", "hit_BCE", "attention", "--regression"]
     monkeypatch.setattr(sys, "argv", argv)
     cfg = SeedConfig()
     cfg.parse_args()
