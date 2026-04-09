@@ -11,6 +11,27 @@ from GUNTAM.Transformer.Transformer import load_state_dict_flex
 from GUNTAM.Transformer.Embeding import FourierPositionalEncoding
 
 
+def shuffle_features(enc_hits, min_features, max_features) :
+
+    #enc_hits = encoded_hits dans SeedTransformer
+    #max_features = 207 
+
+    for i in range(min_features, max_features + 1) :
+
+        idx = list(range(enc_hits.size(1))) #mélange par hit au sein d'un bin pour chaque bin
+        #[0,1,2]
+        random.shuffle(idx)
+        #[1,2,0]
+        idx = torch.tensor(idx)
+        #tensor([1,2,0])
+        enc_hits[:, :, i] = enc_hits[:, idx, i] #i-ième feature
+
+    return enc_hits
+
+#encoded_h = shuffle_features(données, 2, 2) #shuffle seulement la 3ème feature
+#encoded_h = shuffle_features(données, 2, 3) #shuffle la 3ème et la 4ème features
+
+
 class SeedTransformer(nn.Module):
     """
     Transformer network for seed finding and track fitting.
@@ -143,12 +164,13 @@ class SeedTransformer(nn.Module):
 
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
+        encoded_hits = shuffle_features(encoded_hits, 2, 2) # on shuffle la 3ème variable
         # Apply generic projection if needed
         encoded_hits = self.embedding_projection(encoded_hits)
 
-        transformer_output = self.transformer(x=encoded_hits, mask=mask)
+        #transformer_output = self.transformer(x=encoded_hits, mask=mask)
 
-        return transformer_output
+        return encoded_hits
 
     def forward(
         self,
