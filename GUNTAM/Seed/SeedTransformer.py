@@ -165,6 +165,7 @@ class SeedTransformer(nn.Module):
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
         encoded_hits = shuffle_features(encoded_hits, 2, 2) # on shuffle la 3ème variable
+        print("bloopbloop")
         # Apply generic projection if needed
         encoded_hits = self.embedding_projection(encoded_hits)
 
