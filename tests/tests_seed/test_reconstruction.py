@@ -25,7 +25,7 @@ class TestTopKSeedReconstruction:
         assert isinstance(seeds, list)
         # Each cluster entry: (indices np.ndarray, avg_params np.ndarray)
         assert len(seeds) > 0
-        idx, avg = seeds[0]
+        idx, avg, seed_score = seeds[0]
         assert isinstance(idx, np.ndarray)
         assert isinstance(avg, np.ndarray)
 
@@ -59,7 +59,7 @@ class TestTopKSeedReconstruction:
         # One cluster per hit since score filtering is removed
         assert len(seeds) == score.size(0)
         all_indices = set(range(score.size(0)))
-        for (idxs, _) in seeds:
+        for (idxs, _, _seed_score) in seeds:
             # All clusters must include their seed hit and may include neighbors by attention only
             assert set(idxs.tolist()).issubset(all_indices)
 
@@ -89,7 +89,7 @@ class TestChainedSeedReconstruction:
         assert isinstance(seeds, list)
         # Should discover 2 chains
         assert len(seeds) == 2
-        for idxs, avg in seeds:
+        for idxs, avg, seed_score in seeds:
             assert isinstance(idxs, np.ndarray)
             assert idxs.size >= 3
             assert isinstance(avg, np.ndarray)
@@ -114,7 +114,7 @@ class TestChainedSeedReconstruction:
         
         # Should find a chain starting from index 0 going forward
         assert len(seeds) >= 1
-        chain_indices, _ = seeds[0]
+        chain_indices, _, _seed_score = seeds[0]
         # Chain should start with lowest index and go forward
         assert chain_indices[0] == 0
         # Indices should be increasing
@@ -152,7 +152,7 @@ class TestChainedSeedReconstruction:
         # Should have at least one chain
         assert len(seeds) >= 1
         # The first chain should have exactly max_chain_length hits
-        chain_indices, _ = seeds[0]
+        chain_indices, _, _seed_score = seeds[0]
         assert len(chain_indices) <= 4
 
     def test_forward_processes_from_first_to_last(self):
@@ -194,7 +194,7 @@ class TestChainedSeedReconstruction:
         assert len(seeds) == 1
         # Collect all used indices
         all_indices = set()
-        for idxs, _ in seeds:
+        for idxs, _, _seed_score in seeds:
             for idx in idxs:
                 assert idx not in all_indices, "Hit reused in multiple chains"
                 all_indices.add(idx)
@@ -243,7 +243,7 @@ class TestBackChainedSeedReconstruction:
         assert isinstance(seeds, list)
         # Should discover at least 2 chains
         assert len(seeds) == 2
-        for idxs, avg in seeds:
+        for idxs, avg, seed_score in seeds:
             assert isinstance(idxs, np.ndarray)
             assert idxs.size >= 3
             assert isinstance(avg, np.ndarray)
@@ -282,7 +282,7 @@ class TestBackChainedSeedReconstruction:
         # Should have at least one chain
         assert len(seeds) >= 1
         # The first chain should have exactly max_chain_length hits
-        chain_indices, _ = seeds[0]
+        chain_indices, _, _seed_score = seeds[0]
         assert len(chain_indices) <= 4
 
     def test_backward_prevents_reuse_of_hits(self):
@@ -302,7 +302,7 @@ class TestBackChainedSeedReconstruction:
         assert len(seeds) == 1
         # Collect all used indices
         all_indices = set()
-        for idxs, _ in seeds:
+        for idxs, _, _seed_score in seeds:
             for idx in idxs:
                 assert idx not in all_indices, "Hit reused in multiple chains"
                 all_indices.add(idx)
@@ -408,7 +408,7 @@ class TestWeightedChainedSeedReconstruction:
             att, score, score_threshold=0.8, max_chain_length=max_len, pairs_per_hit=2
         )
         assert len(seeds) >= 1
-        for idxs, _ in seeds:
+        for idxs, _, _seed_score in seeds:
             assert len(idxs) <= max_len
 
     def test_basic_forward_chain(self):
@@ -439,7 +439,7 @@ class TestWeightedChainedSeedReconstruction:
             att, score, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
         )
         assert len(seeds) >= 1
-        idxs, avg = seeds[0]
+        idxs, avg, seed_score = seeds[0]
         assert isinstance(avg, np.ndarray)
 
     def test_no_hit_reuse_across_seeds(self):
@@ -458,7 +458,7 @@ class TestWeightedChainedSeedReconstruction:
         )
         # Collect every index used across all seeds
         all_used: list[int] = []
-        for idxs, _ in seeds:
+        for idxs, _, _seed_score in seeds:
             all_used.extend(idxs.tolist())
         # No index should appear in more than one seed
         assert len(all_used) == len(set(all_used)), "Hits reused across chains"
@@ -485,7 +485,7 @@ class TestWeightedChainedSeedReconstruction:
         indices_1 = set(seeds_1[0][0].tolist()) if seeds_1 else set()
         assert 2 not in indices_1
         # With pairs_per_hit=2 the pair (0,2) may appear
-        all_indices_2 = {idx for idxs, _ in seeds_2 for idx in idxs.tolist()}
+        all_indices_2 = {idx for idxs, _, _s in seeds_2 for idx in idxs.tolist()}
         assert 2 in all_indices_2
 
     def test_two_independent_chains(self):
@@ -504,7 +504,7 @@ class TestWeightedChainedSeedReconstruction:
             att, score, score_threshold=0.8, max_chain_length=5, pairs_per_hit=2
         )
         assert len(seeds) == 2
-        chain_sets = [set(idxs.tolist()) for idxs, _ in seeds]
+        chain_sets = [set(idxs.tolist()) for idxs, _, _s in seeds]
         assert {0, 1, 2} in chain_sets
         assert {4, 5, 6} in chain_sets
 
