@@ -431,37 +431,32 @@ def run_model(
             beam_width=5,
         )
 
+        hit_chains_all = beam_hits_t.cpu().numpy().astype(np.int64)  # [B, N, ML]
+        scores_all = beam_scores_t.cpu().numpy()  # [B, N]
+        params_all = beam_params_t.cpu().numpy()  # [B, N, F]
+        attention_softmax = torch.softmax(attention_weights.squeeze(1), dim=-1)  # [B, N, N]
+        attention_softmax_cpu = attention_softmax.cpu().numpy()
+        hit_score_all = hit_score.squeeze(-1).cpu().detach().float().numpy()  # [B, N]
+
         for bin_idx in range(hits_tensor.shape[0]):
-            hit_chains_np = beam_hits_t[bin_idx].cpu().numpy()  # [N, ML]
-            scores_np = beam_scores_t[bin_idx].cpu().numpy()  # [N]
-            params_np = beam_params_t[bin_idx].cpu().numpy()  # [N, 5]
+            hit_chains_np = hit_chains_all[bin_idx]  # [N, ML]
+            scores_np = scores_all[bin_idx]  # [N]
+            params_np = params_all[bin_idx]  # [N, F]
             bin_seeds = []
             seen_bs: set = set()
-            for i in range(hit_chains_np.shape[0]):
-                if not np.isfinite(scores_np[i]):
-                    continue
-                chain = hit_chains_np[i]
-                length = int((chain >= 0).sum())
-                chain_compact = chain[:length]
-                if np.any(chain_compact < 0):
-                    continue
+            lengths = (hit_chains_np >= 0).sum(axis=1)  # [N] — vectorized length per chain
+            prefilter = np.isfinite(scores_np) & (scores_np > 0.3)
+            for i in np.where(prefilter)[0]:
+                chain_compact = hit_chains_np[i, : lengths[i]]
                 key = tuple(sorted(chain_compact.tolist()))
                 if key in seen_bs:
                     continue
                 seen_bs.add(key)
-                bin_seeds.append((chain_compact.astype(np.int64), params_np[i], float(scores_np[i])))
+                bin_seeds.append((chain_compact, params_np[i], scores_np[i]))
 
-            # Apply softmax row-wise to attention weights for monitoring
-            valid_attention_weights = attention_weights[bin_idx].squeeze(0)
-            if valid_attention_weights is not None:
-                attention_softmax = torch.softmax(valid_attention_weights, dim=-1)
-                event_attention_maps.append(attention_softmax.cpu().detach().float().numpy())
-                event_seeds.append(bin_seeds)
-                event_hit_scores.append(hit_score[bin_idx].squeeze(-1).cpu().detach().float().numpy())
-            else:
-                event_attention_maps.append(None)
-                event_seeds.append([])
-                event_hit_scores.append(None)
+            event_attention_maps.append(attention_softmax_cpu[bin_idx])
+            event_seeds.append(bin_seeds)
+            event_hit_scores.append(hit_score_all[bin_idx])
 
     else:
         all_bin_masks_cpu = (~padding_mask.bool()).detach().cpu()
