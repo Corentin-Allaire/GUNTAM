@@ -413,45 +413,45 @@ def create_seeding_performance_plots(
             )
             ax.set_title(f"{meta['label']} Seed Resolution")
 
-    # 5th subplot: hit score distribution split by particle membership
+    # 5th subplot: seed score distribution split by good/fake
     ax_score = axes_flat[4]
-    hit_scores: Mapping[str, Sequence[float]] = results.get("hit_scores", {})
-    scores_particle = np.asarray(hit_scores.get("particle", []), dtype=float)
-    scores_orphan = np.asarray(hit_scores.get("orphan", []), dtype=float)
-    if scores_particle.size > 0 or scores_orphan.size > 0:
-        all_scores = np.concatenate([scores_particle, scores_orphan])
-        bins_score = min(50, max(10, len(all_scores) // 20))
-        score_range = (float(np.min(all_scores)), float(np.max(all_scores)))
+    seed_scores: Mapping[str, Sequence[float]] = results.get("seed_scores", {})
+    scores_good = np.asarray(seed_scores.get("good", []), dtype=float)
+    scores_fake = np.asarray(seed_scores.get("fake", []), dtype=float)
+    if scores_good.size > 0 or scores_fake.size > 0:
+        all_seed_scores = np.concatenate([scores_good, scores_fake])
+        bins_score = min(50, max(10, all_seed_scores.size // 20))
+        score_range = (float(np.min(all_seed_scores)), float(np.max(all_seed_scores)))
         if score_range[0] == score_range[1]:
             score_range = (score_range[0] - 0.5, score_range[1] + 0.5)
-        if scores_particle.size > 0:
+        if scores_good.size > 0:
             ax_score.hist(
-                scores_particle,
+                scores_good,
                 bins=bins_score,
                 range=score_range,
                 alpha=0.6,
-                color="steelblue",
-                label=f"Particle hits (n={len(scores_particle)})",
+                color="mediumseagreen",
+                label=f"Good seeds (n={scores_good.size})",
                 density=True,
             )
-        if scores_orphan.size > 0:
+        if scores_fake.size > 0:
             ax_score.hist(
-                scores_orphan,
+                scores_fake,
                 bins=bins_score,
                 range=score_range,
                 alpha=0.6,
                 color="tomato",
-                label=f"Orphan hits (n={len(scores_orphan)})",
+                label=f"Fake seeds (n={scores_fake.size})",
                 density=True,
             )
-        ax_score.set_xlabel("Hit Score")
+        ax_score.set_xlabel("Seed Score (sum of edge attention / chain length)")
         ax_score.set_ylabel("Density")
-        ax_score.set_title("Hit Score Distribution by Particle Membership")
+        ax_score.set_title("Seed Score Distribution")
         ax_score.legend()
         ax_score.grid(True, alpha=0.3)
     else:
-        ax_score.text(0.5, 0.5, "No hit scores available", transform=ax_score.transAxes, ha="center", va="center", fontsize=12)
-        ax_score.set_title("Hit Score Distribution by Particle Membership")
+        ax_score.text(0.5, 0.5, "No seed scores available", transform=ax_score.transAxes, ha="center", va="center", fontsize=12)
+        ax_score.set_title("Seed Score Distribution")
 
     # Hide unused 6th subplot
     axes_flat[5].axis("off")
@@ -464,6 +464,65 @@ def create_seeding_performance_plots(
 
     if "bin_complexity_analysis" in results:
         create_bin_complexity_plots(results["bin_complexity_analysis"], bin_summaries)
+
+
+def create_hit_score_plot(results: Mapping[str, Any]) -> None:
+    """
+    Plot the hit score distribution split by particle membership in a standalone figure.
+
+    Inputs
+    - results: Mapping[str, Any]
+        Must contain `"hit_scores"` with keys `"particle"` and `"orphan"`.
+
+    Output
+    - Saves `hit_score_distribution.png`.
+    """
+    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+    hit_scores: Mapping[str, Sequence[float]] = results.get("hit_scores", {})
+    scores_particle = np.asarray(hit_scores.get("particle", []), dtype=float)
+    scores_orphan = np.asarray(hit_scores.get("orphan", []), dtype=float)
+
+    if scores_particle.size > 0 or scores_orphan.size > 0:
+        all_scores = np.concatenate([scores_particle, scores_orphan])
+        bins_score = min(50, max(10, len(all_scores) // 20))
+        score_range = (float(np.min(all_scores)), float(np.max(all_scores)))
+        if score_range[0] == score_range[1]:
+            score_range = (score_range[0] - 0.5, score_range[1] + 0.5)
+        if scores_particle.size > 0:
+            ax.hist(
+                scores_particle,
+                bins=bins_score,
+                range=score_range,
+                alpha=0.6,
+                color="steelblue",
+                label=f"Particle hits (n={len(scores_particle)})",
+                density=True,
+            )
+        if scores_orphan.size > 0:
+            ax.hist(
+                scores_orphan,
+                bins=bins_score,
+                range=score_range,
+                alpha=0.6,
+                color="tomato",
+                label=f"Orphan hits (n={len(scores_orphan)})",
+                density=True,
+            )
+        ax.set_xlabel("Hit Score")
+        ax.set_ylabel("Density")
+        ax.set_title("Hit Score Distribution by Particle Membership")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, "No hit scores available", transform=ax.transAxes, ha="center", va="center", fontsize=12)
+        ax.set_title("Hit Score Distribution by Particle Membership")
+
+    plt.tight_layout()
+    plot_filename = "hit_score_distribution.png"
+    plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
+    print("Hit score distribution plot saved as:", plot_filename)
+    plt.close()
 
 
 def create_bin_complexity_plots(
@@ -743,7 +802,6 @@ def create_particle_reconstruction_comparison_plots(eligible_particles: Sequence
 
 def create_efficiency_vs_truth_param_plots(
     eligible_particles: Sequence[Mapping[str, Any]],
-    exclude_crossing: bool = False,
 ) -> None:
     """
     Plot seeding efficiency (regular and pure) versus truth parameters.
@@ -755,33 +813,20 @@ def create_efficiency_vs_truth_param_plots(
         - `"had_seed"`: bool flag for at least one seed.
         - `"had_pure_seed"`: bool flag for a pure seed.
         - Optional `"deltaR_min"`: float for ΔR to closest neighbor (used if present).
-        - Optional `"crosses_z0"`: bool, True if particle has hits on both +Z and -Z.
-    - exclude_crossing: bool (default False)
-        When True, particles whose hits span both positive and negative Z are removed
-        before computing efficiencies. Output is saved with a ``_no_crossz`` suffix.
 
     Plots
     - Errorbar plots of efficiency vs each parameter: η, φ [rad], z0 [mm], pT [GeV],
         and ΔR when available. Both regular and pure efficiencies are shown.
 
     Output
-    - Saves `seeding_efficiency_vs_truth_params.png` (or ``_no_crossz.png`` variant).
+    - Saves `seeding_efficiency_vs_truth_params.png`.
     """
 
     if not eligible_particles:
         print("No eligible particles for efficiency-vs-parameter plots")
         return
 
-    if exclude_crossing:
-        eligible_particles = [p for p in eligible_particles if not p.get("crosses_z0", False)]
-        if not eligible_particles:
-            print("No non-crossing particles for efficiency-vs-parameter plots")
-            return
-        out_name = "seeding_efficiency_vs_truth_params_no_crossz.png"
-        title_tag = " (non-crossing only)"
-    else:
-        out_name = "seeding_efficiency_vs_truth_params.png"
-        title_tag = ""
+    out_name = "seeding_efficiency_vs_truth_params.png"
 
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     has_seed_flags = np.array([bool(p.get("had_seed", False)) for p in eligible_particles], dtype=bool)
@@ -906,7 +951,7 @@ def create_efficiency_vs_truth_param_plots(
             plot_ax(axes[5], c_dr, w_dr, n_dr, e_dr, e_dr_err, ep_dr, ep_dr_err, "ΔR to closest particle", "Efficiency vs ΔR")
 
         fig.suptitle(
-            f"Seeding efficiency vs truth parameters{title_tag}  (N={len(eligible_particles)})",
+            f"Seeding efficiency vs truth parameters  (N={len(eligible_particles)})",
             fontsize=10,
         )
         plt.tight_layout()
@@ -917,48 +962,14 @@ def create_efficiency_vs_truth_param_plots(
         print(f"Error while plotting efficiency vs parameters: {e}")
 
 
-def create_seeds_per_particle_vs_truth_param_plots(
+def _prepare_rate_plot_data(
     eligible_particles: Sequence[Mapping[str, Any]],
-    exclude_crossing: bool = False,
-) -> None:
+) -> tuple:
+    """Shared data preparation for fake-rate and duplicate-rate plots.
+
+    Returns (truth coordinate arrays, bin arrays, deltaR array, plot_dr flag).
     """
-    Plot the mean number of seeds per particle versus truth parameters.
-
-    Inputs
-    - eligible_particles: Sequence[Mapping[str, Any]]
-        Required keys per particle:
-        - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
-        - `"n_seeds"`: int number of seeds created for the particle.
-        - Optional `"crosses_z0"`: bool, True if particle has hits on both +Z and -Z.
-    - exclude_crossing: bool (default False)
-        When True, particles whose hits span both positive and negative Z are removed
-        before computing means. Output is saved with a ``_no_crossz`` suffix.
-
-    Plots
-    - Errorbar plots of mean seeds-per-particle vs η, φ [rad], z0 [mm], pT [GeV].
-
-    Output
-    - Saves `seeds_per_particle_vs_truth_params.png` (or ``_no_crossz.png`` variant).
-    """
-
-    if not eligible_particles:
-        print("No eligible particles for seeds-per-particle-vs-parameter plots")
-        return
-
-    if exclude_crossing:
-        eligible_particles = [p for p in eligible_particles if not p.get("crosses_z0", False)]
-        if not eligible_particles:
-            print("No non-crossing particles for seeds-per-particle-vs-parameter plots")
-            return
-        out_name = "seeds_per_particle_vs_truth_params_no_crossz.png"
-        title_tag = " (non-crossing only)"
-    else:
-        out_name = "seeds_per_particle_vs_truth_params.png"
-        title_tag = ""
-
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
-    n_seeds = np.array([int(p.get("n_seeds", 0)) for p in eligible_particles])
-    # [d0, z0, phi, eta, pT, q, m]
     d0 = truth_params[:, 0]
     z0 = truth_params[:, 1]
     phi = truth_params[:, 2]
@@ -972,76 +983,192 @@ def create_seeds_per_particle_vs_truth_param_plots(
     bins_z0 = np.linspace(-150, 150, num=20)
     bins_pt = np.linspace(0, 10, num=20)
 
-    def compute_mean_counts(xvals, counts, bins):
-        sum_counts, edges = np.histogram(xvals, bins=bins, weights=counts)
-        sum_squares, _ = np.histogram(xvals, bins=edges, weights=counts**2)
-        denom, _ = np.histogram(xvals, bins=edges)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            mean_counts = np.where(denom > 0, sum_counts / denom, 0.0)
-            var_counts = np.where(denom > 0, (sum_squares / denom) - mean_counts**2, 0.0)
-            var_counts = np.maximum(var_counts, 0.0)
-            sem_counts = np.where(denom > 0, np.sqrt(var_counts / denom), 0.0)
-        centers = 0.5 * (edges[:-1] + edges[1:])
-        half_widths = 0.5 * (edges[1:] - edges[:-1])
-        return centers, half_widths, mean_counts, sem_counts
+    deltaR = np.array([p.get("deltaR_min", np.inf) for p in eligible_particles], dtype=float)
+    finite_dr = np.isfinite(deltaR)
+    if np.any(finite_dr):
+        dr_hi = np.percentile(deltaR[finite_dr], 99)
+        if not np.isfinite(dr_hi) or dr_hi <= 0:
+            dr_hi = float(np.max(deltaR[finite_dr])) if np.any(finite_dr) else 1.0
+        bins_dr = np.linspace(0.0, float(dr_hi), num=20)
+        if np.unique(bins_dr).size < 2:
+            bins_dr = np.linspace(0.0, float(dr_hi) + 1e-6, num=20)
+        plot_dr = True
+    else:
+        bins_dr = None
+        plot_dr = False
 
-    c_d0, w_d0, msp_d0, msp_d0_sem = compute_mean_counts(d0, n_seeds, bins_d0)
-    c_eta, w_eta, msp_eta, msp_eta_sem = compute_mean_counts(eta, n_seeds, bins_eta)
-    c_phi, w_phi, msp_phi, msp_phi_sem = compute_mean_counts(phi, n_seeds, bins_phi)
-    c_z0, w_z0, msp_z0, msp_z0_sem = compute_mean_counts(z0, n_seeds, bins_z0)
-    c_pt, w_pt, msp_pt, msp_pt_sem = compute_mean_counts(pt, n_seeds, bins_pt)
+    return (d0, z0, phi, eta, pt, bins_d0, bins_z0, bins_phi, bins_eta, bins_pt, deltaR, bins_dr, plot_dr)
 
-    try:
-        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-        axes = axes.flatten()
 
-        def plot_ax(ax, centers, widths, mean_counts, mean_sem, xlabel, title):
-            ax.errorbar(
-                centers,
-                mean_counts,
-                xerr=widths,
-                yerr=mean_sem,
-                fmt="o",
-                linestyle="none",
-                color="tab:blue",
-                label="Seeds per particle",
-                capsize=0,
-                linewidth=1,
-            )
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("Mean seeds per particle")
-            ax.set_title(title)
-            ax.grid(True, alpha=0.3)
-            if mean_counts.size > 0:
-                valid = np.isfinite(mean_counts)
-                max_val = np.max(mean_counts[valid]) if np.any(valid) else 0.0
-            else:
-                max_val = 0.0
-            y_max = max(1.0, float(np.ceil(max_val)))
-            ax.set_ylim(0.0, y_max)
-            ax.legend()
+def _compute_mean_counts(xvals: np.ndarray, counts: np.ndarray, bins: np.ndarray) -> tuple:
+    """Bin-average `counts` over `xvals` with standard error on the mean."""
+    sum_counts, edges = np.histogram(xvals, bins=bins, weights=counts)
+    sum_squares, _ = np.histogram(xvals, bins=edges, weights=counts**2)
+    denom, _ = np.histogram(xvals, bins=edges)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean_counts = np.where(denom > 0, sum_counts / denom, 0.0)
+        var_counts = np.where(denom > 0, (sum_squares / denom) - mean_counts**2, 0.0)
+        var_counts = np.maximum(var_counts, 0.0)
+        sem_counts = np.where(denom > 0, np.sqrt(var_counts / denom), 0.0)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    half_widths = 0.5 * (edges[1:] - edges[:-1])
+    return centers, half_widths, mean_counts, sem_counts
 
-        plot_ax(axes[0], c_d0, w_d0, msp_d0, msp_d0_sem, "Truth d0 [mm]", "Seeds/particle vs d0")
-        plot_ax(axes[1], c_z0, w_z0, msp_z0, msp_z0_sem, "Truth z0 [mm]", "Seeds/particle vs z0")
-        plot_ax(axes[2], c_phi, w_phi, msp_phi, msp_phi_sem, "Truth phi [rad]", "Seeds/particle vs phi")
-        plot_ax(axes[3], c_eta, w_eta, msp_eta, msp_eta_sem, "Truth eta", "Seeds/particle vs eta")
-        plot_ax(axes[4], c_pt, w_pt, msp_pt, msp_pt_sem, "Truth pT [GeV]", "Seeds/particle vs pT")
 
-        fig.suptitle(
-            f"Seeds per particle vs truth parameters{title_tag}  (N={len(eligible_particles)})",
-            fontsize=10,
+def _plot_rate_ax(
+    ax: Axes,
+    centers: np.ndarray,
+    widths: np.ndarray,
+    mean_counts: np.ndarray,
+    mean_sem: np.ndarray,
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    color: str,
+    label: str,
+) -> None:
+    """Draw a single rate errorbar panel."""
+    ax.errorbar(
+        centers,
+        mean_counts,
+        xerr=widths,
+        yerr=mean_sem,
+        fmt="o",
+        linestyle="none",
+        color=color,
+        label=label,
+        capsize=0,
+        linewidth=1,
+    )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    valid = np.isfinite(mean_counts + mean_sem) if mean_counts.size > 0 else np.array([], dtype=bool)
+    max_val = float(np.max((mean_counts + mean_sem)[valid])) if np.any(valid) else 0.0
+    ax.set_ylim(0.0, max(1.0, max_val * 1.2))
+    ax.legend()
+
+
+def _save_rate_figure(
+    eligible_particles: Sequence[Mapping[str, Any]],
+    counts: np.ndarray,
+    out_name: str,
+    suptitle: str,
+    ylabel: str,
+    series_label: str,
+    color: str,
+) -> None:
+    """Build and save a 2×3 rate-vs-truth-param figure (matching efficiency plot format)."""
+    d0, z0, phi, eta, pt, bins_d0, bins_z0, bins_phi, bins_eta, bins_pt, deltaR, bins_dr, plot_dr = _prepare_rate_plot_data(
+        eligible_particles
+    )
+
+    param_specs = [
+        (d0, bins_d0, "Truth d0 [mm]", "d0"),
+        (z0, bins_z0, "Truth z0 [mm]", "z0"),
+        (phi, bins_phi, "Truth phi [rad]", "phi"),
+        (eta, bins_eta, "Truth eta", "eta"),
+        (pt, bins_pt, "Truth pT [GeV]", "pT"),
+    ]
+    if plot_dr:
+        param_specs.append((deltaR, bins_dr, "ΔR to closest particle", "ΔR"))
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    axes = axes.flatten()
+
+    for idx, (xvals, bins, xlabel, pname) in enumerate(param_specs):
+        centers, widths, mean_counts, sem_counts = _compute_mean_counts(xvals, counts, bins)
+        _plot_rate_ax(
+            axes[idx], centers, widths, mean_counts, sem_counts, xlabel, ylabel, f"{series_label} vs {pname}", color, series_label
         )
-        plt.tight_layout()
-        plt.savefig(out_name, dpi=300, bbox_inches="tight")
-        print("Seeds-per-particle vs truth-parameter plots saved as:", out_name)
-        plt.close()
+
+    for idx in range(len(param_specs), len(axes)):
+        axes[idx].axis("off")
+
+    fig.suptitle(f"{suptitle}  (N={len(eligible_particles)})", fontsize=10)
+    plt.tight_layout()
+    plt.savefig(out_name, dpi=300, bbox_inches="tight")
+    print(f"Rate plot saved as: {out_name}")
+    plt.close()
+
+
+def create_fake_rate_vs_truth_param_plots(
+    eligible_particles: Sequence[Mapping[str, Any]],
+) -> None:
+    """
+    Plot the mean number of fake seeds per particle versus truth parameters.
+
+    Fake seeds are seeds with fewer than min_common_hits hits from any particle,
+    accumulated over all bins in which the particle appears.
+
+    Inputs
+    - eligible_particles: Sequence[Mapping[str, Any]]
+        Required keys per particle:
+        - `"true_params"`: array-like `[d0, z0, phi, eta, pT, q, m]`.
+        - `"n_fake_seeds"`: int – total fake seeds seen by this particle across bins.
+        - Optional `"deltaR_min"`: float for ΔR to closest neighbor.
+
+    Output
+    - Saves `fake_rate_vs_truth_params.png`.
+    """
+    if not eligible_particles:
+        print("No eligible particles for fake rate plots")
+        return
+    try:
+        n_fakes = np.array([float(p.get("n_fake_seeds", 0)) for p in eligible_particles])
+        _save_rate_figure(
+            eligible_particles,
+            n_fakes,
+            out_name="fake_rate_vs_truth_params.png",
+            suptitle="Fake seed rate vs truth parameters",
+            ylabel="Mean fake seeds per particle",
+            series_label="Fake rate",
+            color="tab:red",
+        )
     except Exception as e:
-        print(f"Error while plotting seeds-per-particle vs parameters: {e}")
+        print(f"Error while plotting fake rate vs parameters: {e}")
+
+
+def create_duplicate_rate_vs_truth_param_plots(
+    eligible_particles: Sequence[Mapping[str, Any]],
+) -> None:
+    """
+    Plot the mean number of duplicate seeds per particle versus truth parameters.
+
+    Duplicate seeds are seeds with at least min_common_hits hits from the particle
+    (i.e. matched seeds, stored as `n_seeds`).
+
+    Inputs
+    - eligible_particles: Sequence[Mapping[str, Any]]
+        Required keys per particle:
+        - `"true_params"`: array-like `[d0, z0, phi, eta, pT, q, m]`.
+        - `"n_seeds"`: int – total matched seeds for this particle.
+        - Optional `"deltaR_min"`: float for ΔR to closest neighbor.
+
+    Output
+    - Saves `duplicate_rate_vs_truth_params.png`.
+    """
+    if not eligible_particles:
+        print("No eligible particles for duplicate rate plots")
+        return
+    try:
+        n_duplicates = np.array([int(p.get("n_seeds", 0)) for p in eligible_particles])
+        _save_rate_figure(
+            eligible_particles,
+            n_duplicates,
+            out_name="duplicate_rate_vs_truth_params.png",
+            suptitle="Duplicate seed rate vs truth parameters",
+            ylabel="Mean duplicate seeds per particle",
+            series_label="Duplicate rate",
+            color="tab:blue",
+        )
+    except Exception as e:
+        print(f"Error while plotting duplicate rate vs parameters: {e}")
 
 
 def create_2d_efficiency_heatmaps(
     eligible_particles: Sequence[Mapping[str, Any]],
-    exclude_crossing: bool = False,
 ) -> None:
     """
     Create 2D heatmaps showing seeding efficiency as a function of pairs of truth parameters.
@@ -1052,32 +1179,19 @@ def create_2d_efficiency_heatmaps(
         - `"true_params"`: array-like length 4 `[z0, eta, phi, pT]`.
         - `"had_seed"`: bool flag for at least one seed.
         - Optional `"deltaR_min"`: float for ΔR to closest neighbor.
-        - Optional `"crosses_z0"`: bool, True if particle has hits on both +Z and -Z.
-    - exclude_crossing: bool (default False)
-        When True, particles whose hits span both positive and negative Z are removed
-        before computing efficiencies. Output is saved with a ``_no_crossz`` suffix.
 
     Plots
     - 2D heatmaps for all pairs including deltaR when available.
 
     Output
-    - Saves `efficiency_2d_heatmaps.png` (or ``_no_crossz.png`` variant).
+    - Saves `efficiency_2d_heatmaps.png`.
     """
 
     if not eligible_particles:
         print("No eligible particles for 2D efficiency heatmaps")
         return
 
-    if exclude_crossing:
-        eligible_particles = [p for p in eligible_particles if not p.get("crosses_z0", False)]
-        if not eligible_particles:
-            print("No non-crossing particles for 2D efficiency heatmaps")
-            return
-        out_name = "efficiency_2d_heatmaps_no_crossz.png"
-        title_tag = " (non-crossing only)"
-    else:
-        out_name = "efficiency_2d_heatmaps.png"
-        title_tag = ""
+    out_name = "efficiency_2d_heatmaps.png"
 
     truth_params = np.asarray([p.get("true_params") for p in eligible_particles], dtype=float)
     has_seed = np.array([bool(p.get("had_seed", False)) for p in eligible_particles])
@@ -1227,7 +1341,7 @@ def create_2d_efficiency_heatmaps(
     for idx in range(n_plots, len(axes)):
         axes[idx].axis("off")
 
-    fig.suptitle(f"2D seeding efficiency heatmaps{title_tag}  (N={len(eligible_particles)})", fontsize=12)
+    fig.suptitle(f"2D seeding efficiency heatmaps  (N={len(eligible_particles)})", fontsize=12)
     plt.tight_layout()
     plt.savefig(out_name, dpi=300, bbox_inches="tight")
     print("2D efficiency heatmap plots saved as:", out_name)

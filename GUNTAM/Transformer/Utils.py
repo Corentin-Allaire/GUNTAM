@@ -100,7 +100,7 @@ class CosineScheduleWithMinLR(LRScheduler):
         ratio = self.get_lr_ratio(self.last_epoch)
         return [base_lr * ratio for base_lr in self.base_lrs]
 
-    def step(self):
+    def step(self, epoch=None):
         """Step the scheduler"""
         self.last_epoch += 1
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):

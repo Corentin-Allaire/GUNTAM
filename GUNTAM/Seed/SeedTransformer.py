@@ -59,7 +59,7 @@ class SeedTransformer(nn.Module):
         )
         self.fourier_encoding = FourierPositionalEncoding(
             input_dim=coord_dim,
-            num_frequencies=self.cfg.fourier_num_frequencies,
+            num_frequencies=self.cfg.fourier_num_frequencies,  # type: ignore[arg-type]
             high_level_dim=high_level_dim,
             dim_max=self.cfg.dim_max,
             shift=self.cfg.shift,

@@ -617,7 +617,7 @@ def main():
             )
             # check if the model dtype matches the config, print a warning if not
             if model.dtype != cfg.transformer_config.dtype:
-                ts_print(f"Warning: Loaded model dtype {model.dtype} does not match config dtype {cfg.dtype}.")
+                ts_print(f"Warning: Loaded model dtype {model.dtype} does not match config dtype {cfg.transformer_config.dtype}.")
 
             # Load previous tensorboard logs
             if os.path.exists(log_dir):
@@ -637,7 +637,7 @@ def main():
         ts_print(f"Training on {train_size} events across {len(train_file_indices)} files")
         # Very important: compile the model
         if cfg.device_acc.type != "mps":
-            model = torch.compile(model)
+            model = torch.compile(model)  # type: ignore[assignment]
         # Train the model
         ts_print("Starting training of the model")
         model = train_model(
@@ -690,7 +690,7 @@ def main():
     model_val = model_val.to(cfg.transformer_config.dtype)
     model_val.eval()
     if cfg.device_acc.type != "mps":
-        model_val = torch.compile(model_val)
+        model_val = torch.compile(model_val)  # type: ignore[assignment]
 
     # Perform validation using test_file_indices
     print("Starting model evaluation with test dataset...")
@@ -720,7 +720,7 @@ def main():
         event_counter += end_event - start_event
         for event in range(start_event, end_event):
             event_idx = event - start_event
-            start_time = time.perf_counter() if cfg.timing_enabled else None
+            start_time = time.perf_counter() if cfg.timing_enabled else 0.0
             (
                 batch_seeds,
                 batch_hit_scores,
@@ -753,6 +753,7 @@ def main():
                         seeds=batch_seeds[bin_idx],
                         pairs=batch_data["good_pairs"][event_idx][bin_idx].cpu().float().numpy(),
                         attention_map=batch_attention_maps[bin_idx],
+                        hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx][bin_idx].cpu().float().numpy(),
                     )
 
             monitoring.bin_seeding_performance(
