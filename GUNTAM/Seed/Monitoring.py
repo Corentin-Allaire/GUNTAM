@@ -694,7 +694,8 @@ class PerformanceMonitor:
                         else:
                             attn_str = "attn→next=  N/A"
                         print(
-                            f"     hit {h:3d} | x={hx:8.2f} y={hy:8.2f} z={hz:8.2f} r={hr:7.2f} phi={hphi:6.3f} eta={heta:6.3f} | {attn_str} | {pid_str}"
+                            f"     hit {h:3d} | x={hx:8.2f} y={hy:8.2f} z={hz:8.2f}"
+                            f" r={hr:7.2f} phi={hphi:6.3f} eta={heta:6.3f} | {attn_str} | {pid_str}"
                         )
             if len(fake_seeds) > 10:
                 print(f"   ... and {len(fake_seeds) - 10} more fake seeds (not shown)")

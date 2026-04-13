@@ -495,7 +495,7 @@ def multi_bin_batched_beam_search_seed_reconstruction(
 
     # Store all the hit chain in one matrix of shape [B, N, BW, CL], initialized to -1 (invalid hit index)
     chains = torch.full((bin_nb, hit_nb, beam_width, max_chain_length), -1, dtype=torch.long, device=device)
-    chains[:, :, :, 0] = row_idx  # broadcasts [N] -> [B, N, BW]
+    chains[:, :, :, 0] = row_idx[None, :, None]  # [1, N, 1] broadcasts to [B, N, BW]
 
     # Initialise the current chain heads and cumulative scores
     heads = chains[:, :, :, 0].clone()  # [B, N, BW]
