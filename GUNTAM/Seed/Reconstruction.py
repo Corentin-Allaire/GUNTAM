@@ -564,3 +564,51 @@ def batched_beam_search_seed_reconstruction(
     params = torch.zeros(bin_nb, hit_nb, 5, device=device, dtype=torch.float32)
 
     return best_chains, params, best_scores
+
+
+def build_seed_features_tensor(
+    hits_tensor: torch.Tensor,
+    seed_tensor: torch.Tensor,
+    feature_indices: List[int] = [0, 1, 2, 3, 4, 5],
+    cosine_feature_indices: List[int] = [4],
+) -> torch.Tensor:
+    """
+    Build a feature tensor for each seed by gathering hit coordinates.
+    This can then be passed to NN for parameter regression and good/fake classification.
+
+    Args:
+        hits_tensor: Float tensor of shape [N, num_features] containing the hit
+            features for all hits in a single bin.
+        seed_tensor: Long tensor of shape [num_seeds, max_seed_size] containing the
+            per-seed hit indices.  A value of -1 indicates a padding slot.
+        feature_indices: Ordered list of column indices from `hits_tensor` to
+            include in the output.  Mirrors `cfg.embedding_feature` /
+            `cfg.high_level_features`.  Default: [0, 1, 2, 3, 4, 5].
+        cosine_feature_indices: Subset of `feature_indices` for which cos/sin
+            decomposition is applied.  Mirrors `cfg.cosine_processing`.
+            Default: [4] (phi).
+
+    Returns:
+        Float tensor of shape [num_seeds, max_seed_size, F] where F is
+        len(feature_indices) + len(cosine_feature_indices) (each cosine-processed
+        feature adds one extra column for sin).  Padding slots contain all zeros.
+    """
+    pad_mask = seed_tensor == -1  # [num_seeds, max_seed_size]
+    ids = seed_tensor.clamp(min=0)  # replace -1 with 0 to avoid out-of-bounds indexing
+
+    feats = hits_tensor[ids]  # [num_seeds, max_seed_size, num_features]
+
+    cosine_set = set(cosine_feature_indices)
+    parts: List[torch.Tensor] = []
+    for idx in feature_indices:
+        if idx in cosine_set:
+            parts.append(torch.cos(feats[..., idx]))
+            parts.append(torch.sin(feats[..., idx]))
+        else:
+            parts.append(feats[..., idx])
+
+    result = torch.stack(parts, dim=-1)  # [num_seeds, max_seed_size, F]
+
+    result[pad_mask] = 0.0
+
+    return result

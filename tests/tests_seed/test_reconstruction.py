@@ -7,7 +7,8 @@ from GUNTAM.Seed.Reconstruction import (topk_seed_reconstruction,
                                         back_chained_seed_reconstruction,
                                         weighted_chained_seed_reconstruction,
                                         beam_search_seed_reconstruction,
-                                        batched_beam_search_seed_reconstruction)
+                                        batched_beam_search_seed_reconstruction,
+                                        build_seed_features_tensor)
 
 
 class TestTopKSeedReconstruction:
@@ -820,6 +821,114 @@ class TestBatchedBeamSearchSeedReconstruction:
         _, _, best_scores = batched_beam_search_seed_reconstruction(att, score, mask, backward=False)
         assert best_scores[0, 0] > float("-inf")
         assert (best_scores[1] == float("-inf")).all()
+
+
+class TestBuildSeedFeaturesTensor:
+    """Tests for build_seed_features_tensor."""
+
+    def _make_hits(self, N: int = 5, num_features: int = 6) -> torch.Tensor:
+        """Return a deterministic hits tensor [N, num_features]."""
+        torch.manual_seed(42)
+        return torch.rand(N, num_features)
+
+    def test_output_shape_default(self):
+        """Default indices: F = 6 features + 1 cosine expansion = 7 columns."""
+        hits = self._make_hits(N=10, num_features=6)
+        seeds = torch.tensor([[0, 1, 2], [3, 4, -1]])
+        out = build_seed_features_tensor(hits, seeds)
+        assert out.shape == (2, 3, 7)
+
+    def test_output_shape_custom_indices(self):
+        """Three direct features, no cosine expansion -> F = 3."""
+        hits = self._make_hits(N=8, num_features=6)
+        seeds = torch.tensor([[0, 1, 2, 3]])
+        out = build_seed_features_tensor(hits, seeds, feature_indices=[0, 1, 2], cosine_feature_indices=[])
+        assert out.shape == (1, 4, 3)
+
+    def test_output_shape_multiple_cosine(self):
+        """Two cosine-processed features -> each adds one extra column."""
+        hits = self._make_hits(N=8, num_features=6)
+        seeds = torch.tensor([[0, 1]])
+        # feature_indices=[0,1,2], cosine on [0,1] -> columns: cos0,sin0,cos1,sin1,2 -> F=5
+        out = build_seed_features_tensor(hits, seeds, feature_indices=[0, 1, 2], cosine_feature_indices=[0, 1])
+        assert out.shape == (1, 2, 5)
+
+    def test_padding_slots_are_zero(self):
+        """Slots with hit index -1 must be all-zero regardless of the hit at index 0."""
+        hits = torch.ones(5, 6) * 99.0  # extreme values to catch any leakage
+        seeds = torch.tensor([[0, -1, 2]])
+        out = build_seed_features_tensor(hits, seeds)
+        assert out[0, 1, :].eq(0.0).all()
+
+    def test_non_padding_slots_are_not_zero(self):
+        """Non-padding slots for a non-zero hit must not be all zero."""
+        hits = self._make_hits(N=5, num_features=6)
+        seeds = torch.tensor([[0, 1]])
+        out = build_seed_features_tensor(hits, seeds)
+        assert not out[0, 0, :].eq(0.0).all()
+        assert not out[0, 1, :].eq(0.0).all()
+
+    def test_all_padding(self):
+        """A fully-padded seed yields an all-zero feature row."""
+        hits = torch.ones(3, 6) * 5.0
+        seeds = torch.tensor([[-1, -1, -1]])
+        out = build_seed_features_tensor(hits, seeds)
+        assert out.eq(0.0).all()
+
+    def test_direct_feature_values(self):
+        """Direct (non-cosine) features are copied verbatim from hits_tensor."""
+        hits = torch.arange(20, dtype=torch.float32).reshape(4, 5)
+        seeds = torch.tensor([[1, 3]])
+        out = build_seed_features_tensor(hits, seeds, feature_indices=[0, 2], cosine_feature_indices=[])
+        # Hit 1 -> features [5,6,7,8,9]; col 0 = 5, col 2 = 7
+        assert out[0, 0, 0].item() == pytest.approx(hits[1, 0].item())
+        assert out[0, 0, 1].item() == pytest.approx(hits[1, 2].item())
+        # Hit 3 -> features [15,16,17,18,19]; col 0 = 15, col 2 = 17
+        assert out[0, 1, 0].item() == pytest.approx(hits[3, 0].item())
+        assert out[0, 1, 1].item() == pytest.approx(hits[3, 2].item())
+
+    def test_cosine_feature_values(self):
+        """Cosine-processed features produce cos then sin of the raw value."""
+        phi_val = 1.2
+        hits = torch.zeros(2, 6)
+        hits[0, 4] = phi_val  # phi at column 4
+        seeds = torch.tensor([[0]])
+        out = build_seed_features_tensor(hits, seeds, feature_indices=[4], cosine_feature_indices=[4])
+        assert out.shape == (1, 1, 2)
+        assert out[0, 0, 0].item() == pytest.approx(torch.cos(torch.tensor(phi_val)).item(), rel=1e-5)
+        assert out[0, 0, 1].item() == pytest.approx(torch.sin(torch.tensor(phi_val)).item(), rel=1e-5)
+
+    def test_feature_ordering_preserved(self):
+        """Features appear in the same order as feature_indices, with cos/sin in-place."""
+        # feature_indices=[0, 4, 2], cosine on [4] -> output order: f0, cos(f4), sin(f4), f2
+        hits = torch.zeros(1, 6)
+        hits[0, 0] = 1.0
+        hits[0, 2] = 3.0
+        hits[0, 4] = 0.5
+        seeds = torch.tensor([[0]])
+        out = build_seed_features_tensor(hits, seeds, feature_indices=[0, 4, 2], cosine_feature_indices=[4])
+        assert out.shape == (1, 1, 4)
+        assert out[0, 0, 0].item() == pytest.approx(1.0)               # direct f0
+        assert out[0, 0, 1].item() == pytest.approx(torch.cos(torch.tensor(0.5)).item(), rel=1e-5)  # cos(f4)
+        assert out[0, 0, 2].item() == pytest.approx(torch.sin(torch.tensor(0.5)).item(), rel=1e-5)  # sin(f4)
+        assert out[0, 0, 3].item() == pytest.approx(3.0)               # direct f2
+
+    def test_multiple_seeds_independent(self):
+        """Each seed row gathers its own hits independently."""
+        hits = torch.eye(6)  # each hit is a one-hot vector
+        seeds = torch.tensor([[0, 1], [4, 5]])
+        out = build_seed_features_tensor(hits, seeds, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[])
+        # Seed 0, slot 0 -> hit 0's row
+        assert out[0, 0, :].tolist() == pytest.approx(hits[0, :].tolist())
+        # Seed 1, slot 1 -> hit 5's row
+        assert out[1, 1, :].tolist() == pytest.approx(hits[5, :].tolist())
+
+    def test_output_dtype_float(self):
+        """Output tensor has float dtype matching the hits tensor."""
+        hits = self._make_hits().float()
+        seeds = torch.tensor([[0, 1]])
+        out = build_seed_features_tensor(hits, seeds)
+        assert out.dtype == torch.float32
 
 
 if __name__ == "__main__":
