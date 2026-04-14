@@ -426,10 +426,14 @@ def run_model(
             attn_full,
             hit_score.float(),
             valid_mask_gpu,
-            score_threshold=0.3,
+            score_threshold=0.2,
             max_chain_length=3,
             beam_width=5,
         )
+
+        if cfg.timing_enabled:
+            Utils.sync_device(cfg.device_acc)
+            seed_reconstruction_end = time.perf_counter()
 
         hit_chains_all = beam_hits_t.cpu().numpy().astype(np.int64)  # [B, N, ML]
         scores_all = beam_scores_t.cpu().numpy()  # [B, N]
@@ -529,11 +533,13 @@ def run_model(
                 # No attention weights or pairwise scores available - append placeholder to keep alignment
                 event_seeds.append([])
                 event_attention_maps.append(None)
+        if cfg.timing_enabled:
+            Utils.sync_device(cfg.device_acc)
+            seed_reconstruction_end = time.perf_counter()
 
     # End seed reconstruction timing
     if cfg.timing_enabled:
         Utils.sync_device(cfg.device_acc)
-        seed_reconstruction_end = time.perf_counter()
         seed_reconstruction_duration = seed_reconstruction_end - seed_reconstruction_start
         event_duration = time.perf_counter() - event_start_time
 
