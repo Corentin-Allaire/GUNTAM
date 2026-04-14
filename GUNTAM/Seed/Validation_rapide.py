@@ -85,6 +85,8 @@ def validate_rapide_model(
 
     with torch.no_grad():
         ts_print("start file")
+        liste_all_files = []
+        nb_file = 0
         for file_idx in file_indices:
 
             ts_print("start get")
@@ -98,7 +100,10 @@ def validate_rapide_model(
 
             num_events = hits_tensor.shape[0] # = 5
             ts_print("finish get")
+
             nb_total_events = 0
+            liste_event_file =[]
+
             ts_print("start for") # ici que c'est long !!!!!
             for event_idx in range(num_events): #pour chaque event
                 
@@ -151,25 +156,30 @@ def validate_rapide_model(
                         attention_map_bin, pairs1, pairs2, target
                     )
 
-                
+                liste_event_file.append(event_loss["attention_next"].item())
+                print(liste_event_file)
                 print(f"[Validation] Event {nb_total_events} - loss = {event_loss["attention_next"].item():.6f}")
                 nb_total_events += 1
 
-            for key, value in event_loss.items():
-                if key == "total":
-                    continue
-                event_loss["total"] += value
-
-        global_losses.append(event_loss["total"].item())
+            liste_all_files.append(liste_event_file) #liste de liste
+            print(liste_all_files)
+            # for key, value in event_loss.items():
+            #     if key == "total":
+            #         continue
+            #     event_loss["total"] += value
+        liste_all_files_applatie = [x for sous_liste in liste_all_files for x in sous_liste]
+        print(liste_all_files_applatie)
+        #global_losses.append(event_loss["total"].item())
         ts_print("finish for")
         ts_print("finish file")
     ts_print("finish no_grad")
 
-    avg_loss = sum(global_losses) / len(global_losses) if global_losses else float("nan")
+    
+    avg_loss = sum(liste_all_files_applatie) / len(liste_all_files_applatie) 
 
-    ts_print(f"Validation finished on {nb_total_events} events")
+    ts_print(f"Validation finished on {nb_file} files")
     ts_print(f"Average validation loss on all data: {avg_loss:.6f}")
 
-    return avg_loss
+    return avg_loss, liste_all_files_applatie
 
 
