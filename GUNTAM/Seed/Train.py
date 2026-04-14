@@ -38,13 +38,6 @@ def initialize_loss_dictionary(active_components: list, device: torch.device) ->
     # Initialize per-event losses dynamically based on active loss components
     event_losses = {"total": torch.tensor(0.0, device=device)}
 
-    # Attention variants
-    if "attention" in active_components:
-        add_loss_key("attention")
-    if "topk_attention" in active_components:
-        add_loss_key("topk_attention")
-    if "full_attention" in active_components:
-        add_loss_key("full_attention")
     if "attention_next" in active_components:
         add_loss_key("attention_next")
     if "attention_back" in active_components:
@@ -209,25 +202,6 @@ def train_model(
 
                             # Extract this bin's attention map and squeeze batch dim -> [seq_len, seq_len]
                             attention_map_bin = attention_maps[idx_in_batch].squeeze(0)
-
-                            # Compute the attention loss
-                            if cfg.has_loss_component("attention"):
-                                if attention_map_bin is not None:
-                                    batch_loss["attention"] += Losses.attention_loss(attention_map_bin, pairs1, pairs2, target)
-
-                            # Compute the full attention loss (treat all non-positive pairs as negatives)
-                            if cfg.has_loss_component("full_attention"):
-                                if attention_map_bin is not None:
-                                    batch_loss["full_attention"] += Losses.full_attention_loss(
-                                        attention_map_bin, pairs1, pairs2, target
-                                    )
-
-                            # Compute the top-k attention loss
-                            if cfg.has_loss_component("topk_attention"):
-                                if attention_map_bin is not None:
-                                    batch_loss["topk_attention"] += Losses.top_attention_loss(
-                                        attention_map_bin, pairs1, pairs2, target
-                                    )
 
                             # Compute the attention next loss (sequential pairs with cross-entropy)
                             if cfg.has_loss_component("attention_next"):
@@ -410,132 +384,78 @@ def run_model(
     reco_method = cfg.reconstruction_method
     if reco_method is None:
         if cfg.has_loss_component("attention_next"):
-            reco_method = "chained"
+            reco_method = "beam_search"
         elif cfg.has_loss_component("attention_back"):
-            reco_method = "back_chained"
+            reco_method = "beam_search_backward"
         else:
-            reco_method = "topk"
+            raise ValueError(
+                "No reconstruction method specified in config."
+                "Please set cfg.reconstruction_method or include 'attention_next'/'attention_back' loss components."
+            )
 
     beam_hits_t, beam_params_t, beam_scores_t = None, None, None
-    all_bin_masks_cpu, attention_weights_cpu = None, None
+
     if reco_method == "beam_search":
 
-        attn_full = attention_weights.squeeze(1).float()  # [B, N, N] on GPU
-        valid_mask_gpu = (~padding_mask.bool()).squeeze(-1)  # [B, N] on GPU
-        beam_hits_t, beam_params_t, beam_scores_t = Reconstruction.multi_bin_batched_beam_search_seed_reconstruction(
+        attn_full = attention_weights.squeeze(1).float()
+        valid_mask_gpu = (~padding_mask.bool()).squeeze(-1)
+        beam_hits_t, beam_params_t, beam_scores_t = Reconstruction.batched_beam_search_seed_reconstruction(
             attn_full,
             hit_score.float(),
             valid_mask_gpu,
+            att_threshold=0.0,
             score_threshold=0.2,
             max_chain_length=3,
             beam_width=5,
         )
+    elif reco_method == "beam_search_backward":
 
-        if cfg.timing_enabled:
-            Utils.sync_device(cfg.device_acc)
-            seed_reconstruction_end = time.perf_counter()
-
-        hit_chains_all = beam_hits_t.cpu().numpy().astype(np.int64)  # [B, N, ML]
-        scores_all = beam_scores_t.cpu().numpy()  # [B, N]
-        params_all = beam_params_t.cpu().numpy()  # [B, N, F]
-        attention_softmax = torch.softmax(attention_weights.squeeze(1), dim=-1)  # [B, N, N]
-        attention_softmax_cpu = attention_softmax.cpu().numpy()
-        hit_score_all = hit_score.squeeze(-1).cpu().detach().float().numpy()  # [B, N]
-
-        for bin_idx in range(hits_tensor.shape[0]):
-            hit_chains_np = hit_chains_all[bin_idx]  # [N, ML]
-            scores_np = scores_all[bin_idx]  # [N]
-            params_np = params_all[bin_idx]  # [N, F]
-            bin_seeds = []
-            seen_bs: set = set()
-            lengths = (hit_chains_np >= 0).sum(axis=1)  # [N] — vectorized length per chain
-            prefilter = np.isfinite(scores_np) & (scores_np > 0.3)
-            for i in np.where(prefilter)[0]:
-                chain_compact = hit_chains_np[i, : lengths[i]]
-                key = tuple(sorted(chain_compact.tolist()))
-                if key in seen_bs:
-                    continue
-                seen_bs.add(key)
-                bin_seeds.append((chain_compact, params_np[i], scores_np[i]))
-
-            event_attention_maps.append(attention_softmax_cpu[bin_idx])
-            event_seeds.append(bin_seeds)
-            event_hit_scores.append(hit_score_all[bin_idx])
-
+        attn_full = attention_weights.squeeze(1).float()
+        valid_mask_gpu = (~padding_mask.bool()).squeeze(-1)
+        beam_hits_t, beam_params_t, beam_scores_t = Reconstruction.batched_beam_search_seed_reconstruction(
+            attn_full,
+            hit_score.float(),
+            valid_mask_gpu,
+            att_threshold=0.4,
+            score_threshold=0.2,
+            max_chain_length=3,
+            beam_width=5,
+            backward=True,
+        )
     else:
-        all_bin_masks_cpu = (~padding_mask.bool()).detach().cpu()
-        attention_weights_cpu = attention_weights.detach().cpu()
-        for bin_idx in range(hits_tensor.shape[0]):
-            bin_mask_cpu = all_bin_masks_cpu[bin_idx]
-            if not bin_mask_cpu.any():
-                event_hit_scores.append(None)
-                event_attention_maps.append(None)
-                event_seeds.append([])
+        raise ValueError(f"Invalid reconstruction method: {reco_method}. Supported: 'beam_search', 'beam_search_backward'.")
+
+    if cfg.timing_enabled:
+        Utils.sync_device(cfg.device_acc)
+        seed_reconstruction_end = time.perf_counter()
+
+    # Transfer the result to CPU and efficiency analysis. This is excluded from timing computation.
+    hit_chains_all = beam_hits_t.cpu().numpy().astype(np.int64)  # [B, N, ML]
+    scores_all = beam_scores_t.cpu().numpy()  # [B, N]
+    params_all = beam_params_t.cpu().numpy()  # [B, N, F]
+    attention_softmax = torch.softmax(attention_weights.squeeze(1), dim=-1)  # [B, N, N]
+    attention_softmax_cpu = attention_softmax.cpu().numpy()
+    hit_score_all = hit_score.squeeze(-1).cpu().detach().float().numpy()  # [B, N]
+
+    for bin_idx in range(hits_tensor.shape[0]):
+        hit_chains_np = hit_chains_all[bin_idx]  # [N, ML]
+        scores_np = scores_all[bin_idx]  # [N]
+        params_np = params_all[bin_idx]  # [N, F]
+        bin_seeds = []
+        seen_bs: set = set()
+        lengths = (hit_chains_np >= 0).sum(axis=1)  # [N] — vectorized length per chain
+        prefilter = np.isfinite(scores_np) & (scores_np > 0.3)
+        for i in np.where(prefilter)[0]:
+            chain_compact = hit_chains_np[i, : lengths[i]]
+            key = tuple(sorted(chain_compact.tolist()))
+            if key in seen_bs:
                 continue
+            seen_bs.add(key)
+            bin_seeds.append((chain_compact, params_np[i], scores_np[i]))
 
-            # Get valid hit data for this bin
-            valid_score_full = hit_score[bin_idx].cpu().detach()  # [max_hit_input, 1] — unmasked
-            valid_attention_weights = attention_weights_cpu[bin_idx].squeeze(0)
-
-            # Mask hit scores to valid hits only for reconstruction functions
-            valid_score = valid_score_full[bin_mask_cpu.view(-1)]  # [n_valid, 1]
-
-            event_hit_scores.append(valid_score.squeeze(-1).float().numpy())
-
-            # Extract attention weights for this bin from single layer
-            if valid_attention_weights is not None:
-
-                # Apply masking for valid hits only
-                neighbor_matrix_masked = valid_attention_weights[bin_mask_cpu, :][:, bin_mask_cpu]
-
-                if reco_method == "chained":
-                    neighbor_matrix_masked.fill_diagonal_(float("-inf"))
-                    neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
-                    bin_seeds = Reconstruction.chained_seed_reconstruction(
-                        neighbor_matrix_masked,
-                        valid_score,
-                        score_threshold=0.2,
-                        max_chain_length=5,
-                    )
-                elif reco_method == "back_chained":
-                    neighbor_matrix_masked.fill_diagonal_(float("-inf"))
-                    neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
-                    bin_seeds = Reconstruction.back_chained_seed_reconstruction(
-                        neighbor_matrix_masked,
-                        valid_score,
-                        score_threshold=0.2,
-                        max_chain_length=5,
-                    )
-                elif reco_method == "weighted_chained":
-                    neighbor_matrix_masked.fill_diagonal_(float("-inf"))
-                    neighbor_matrix_masked = torch.softmax(neighbor_matrix_masked, dim=-1)
-                    bin_seeds = Reconstruction.weighted_chained_seed_reconstruction(
-                        neighbor_matrix_masked,
-                        valid_score,
-                        score_threshold=0.0,
-                        max_chain_length=5,
-                        pairs_per_hit=2,
-                    )
-                else:  # topk
-                    neighbor_matrix_masked = torch.sigmoid(neighbor_matrix_masked)
-                    bin_seeds = Reconstruction.topk_seed_reconstruction(
-                        neighbor_matrix_masked,
-                        valid_score,
-                        threshold=0.8,
-                        max_selection=5,
-                    )
-                event_seeds.append(bin_seeds)
-
-                # Apply softmax row-wise to attention weights for monitoring
-                attention_softmax = torch.softmax(valid_attention_weights, dim=-1)
-                event_attention_maps.append(attention_softmax.cpu().detach().float().numpy())
-            else:
-                # No attention weights or pairwise scores available - append placeholder to keep alignment
-                event_seeds.append([])
-                event_attention_maps.append(None)
-        if cfg.timing_enabled:
-            Utils.sync_device(cfg.device_acc)
-            seed_reconstruction_end = time.perf_counter()
+        event_attention_maps.append(attention_softmax_cpu[bin_idx])
+        event_seeds.append(bin_seeds)
+        event_hit_scores.append(hit_score_all[bin_idx])
 
     # End seed reconstruction timing
     if cfg.timing_enabled:

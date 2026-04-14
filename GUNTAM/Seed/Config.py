@@ -64,7 +64,7 @@ class SeedConfig:
         self.loss_weights = []  # Default weights matching loss_components
 
         # Reconstruction method for inference (None = auto-select from loss config)
-        # Choices: None (auto), "chained", "back_chained", "weighted_chained", "topk"
+        # Choices: None (auto), "beam_search", "beam_search_backward"
         self.reconstruction_method = None
 
         # Boolean configurations
@@ -166,10 +166,11 @@ class SeedConfig:
             "--reconstruction_method",
             type=str,
             default=self.reconstruction_method,
-            choices=["chained", "back_chained", "weighted_chained", "topk", "beam_search"],
+            choices=["beam_search", "beam_search_backward"],
             help=(
                 "Seed reconstruction method to use during inference. "
-                "If omitted, the method is auto-selected from the active loss components."
+                "If omitted, the method is auto-selected from the active loss components. "
+                "Choices: 'beam_search' (forward) or 'beam_search_backward' (backward)."
             ),
         )
         parser.add_argument(
@@ -185,9 +186,6 @@ class SeedConfig:
             nargs="+",
             default=self.loss_components,
             choices=[
-                "attention",
-                "full_attention",
-                "topk_attention",
                 "attention_next",
                 "attention_back",
                 "hit_BCE",
@@ -252,10 +250,6 @@ class SeedConfig:
         # Parse loss configuration lists
         self.loss_components = args.loss_components
         self.loss_weights = args.loss_weights
-
-        # Check that the loss_components does not contain both MSE and L1
-        if "MSE" in self.loss_components and "L1" in self.loss_components:
-            raise ValueError("Cannot use both MSE and L1 loss components at the same time. Please choose one.")
 
         # Set default weights to 1.0 if no weights provided
         if not self.loss_weights or len(self.loss_weights) == 0:

@@ -208,9 +208,6 @@ class TestFullIntegration:
         
         # Run training with all currently valid loss components
         all_losses = [
-            "attention",
-            "full_attention",
-            "topk_attention",
             "attention_next",
             "attention_back",
             "hit_BCE",
