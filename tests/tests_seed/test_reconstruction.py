@@ -5,7 +5,9 @@ import numpy as np
 from GUNTAM.Seed.Reconstruction import (topk_seed_reconstruction,
                                         chained_seed_reconstruction,
                                         back_chained_seed_reconstruction,
-                                        weighted_chained_seed_reconstruction)
+                                        weighted_chained_seed_reconstruction,
+                                        beam_search_seed_reconstruction,
+                                        batched_beam_search_seed_reconstruction)
 
 
 class TestTopKSeedReconstruction:
@@ -507,6 +509,317 @@ class TestWeightedChainedSeedReconstruction:
         chain_sets = [set(idxs.tolist()) for idxs, _, _s in seeds]
         assert {0, 1, 2} in chain_sets
         assert {4, 5, 6} in chain_sets
+
+
+class TestBeamSearchSeedReconstruction:
+    """Tests for beam_search_seed_reconstruction (CPU, single-bin)."""
+
+    def _make_score(self, n: int, val: float = 0.9) -> torch.Tensor:
+        return torch.full((n, 1), val)
+
+    def _make_starting_mask(self, n: int) -> torch.Tensor:
+        return torch.ones(n, dtype=torch.bool)
+
+    def test_output_is_list_of_tuples(self):
+        """Return type is a list of (np.ndarray[int64], np.ndarray[float32], float) tuples."""
+        n = 6
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        score = self._make_score(n)
+        seeds = beam_search_seed_reconstruction(att, score, self._make_starting_mask(n))
+        assert isinstance(seeds, list)
+        for idxs, params, seed_score in seeds:
+            assert isinstance(idxs, np.ndarray)
+            assert idxs.dtype == np.int64
+            assert isinstance(params, np.ndarray)
+            assert params.shape == (5,)
+            assert isinstance(seed_score, float)
+
+    def test_params_are_zeros(self):
+        """avg_parameters is always a zero array of shape (5,) with float32 dtype."""
+        n = 5
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        score = self._make_score(n)
+        seeds = beam_search_seed_reconstruction(att, score, self._make_starting_mask(n))
+        for _, params, _ in seeds:
+            assert np.all(params == 0.0)
+            assert params.dtype == np.float32
+
+    def test_basic_forward_chain(self):
+        """A clear linear chain 0->1->2->3 is recovered as the best seed."""
+        n = 6
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.95
+        att[1, 2] = 0.90
+        att[2, 3] = 0.85
+        score = self._make_score(n)
+        seeds = beam_search_seed_reconstruction(att, score, self._make_starting_mask(n))
+        assert len(seeds) >= 1
+        chain_idxs = seeds[0][0].tolist()
+        assert set(chain_idxs).issuperset({0, 1, 2, 3})
+
+    def test_chains_are_strictly_forward(self):
+        """All returned chains contain strictly increasing hit indices (j > i)."""
+        n = 8
+        att = torch.zeros(n, n)
+        for i in range(n - 1):
+            att[i, i + 1] = 0.9
+        score = self._make_score(n)
+        seeds = beam_search_seed_reconstruction(att, score, self._make_starting_mask(n))
+        for idxs, _, _ in seeds:
+            for a, b in zip(idxs[:-1], idxs[1:]):
+                assert b > a, f"Chain not strictly forward: {idxs}"
+
+    def test_minimum_chain_length_is_three(self):
+        """Only chains of length >= 3 are returned."""
+        n = 6
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        att[2, 3] = 0.9
+        score = self._make_score(n)
+        seeds = beam_search_seed_reconstruction(att, score, self._make_starting_mask(n))
+        for idxs, _, _ in seeds:
+            assert len(idxs) >= 3
+
+    def test_max_chain_length_respected(self):
+        """Chains never exceed max_chain_length hits."""
+        n = 8
+        att = torch.zeros(n, n)
+        for i in range(n - 1):
+            att[i, i + 1] = 0.9
+        score = self._make_score(n)
+        max_len = 4
+        seeds = beam_search_seed_reconstruction(
+            att, score, self._make_starting_mask(n), max_chain_length=max_len
+        )
+        for idxs, _, _ in seeds:
+            assert len(idxs) <= max_len
+
+    def test_score_threshold_filters_hits(self):
+        """Hits below score_threshold are excluded as chain sources and destinations."""
+        n = 5
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        att[2, 3] = 0.9
+        score = self._make_score(n, val=0.9)
+        score[2, 0] = 0.001  # hit 2 below threshold
+        seeds = beam_search_seed_reconstruction(att, score, self._make_starting_mask(n), score_threshold=0.01)
+        for idxs, _, _ in seeds:
+            assert 2 not in idxs.tolist()
+
+    def test_starting_mask_limits_chain_starts(self):
+        """Only hits allowed by starting_mask can start a chain."""
+        n = 6
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        att[2, 3] = 0.9
+        score = self._make_score(n)
+        starting_mask = self._make_starting_mask(n)
+        starting_mask[0] = False  # hit 0 cannot start
+        seeds = beam_search_seed_reconstruction(att, score, starting_mask)
+        for idxs, _, _ in seeds:
+            assert idxs[0] != 0
+
+    def test_no_valid_chain_returns_empty_list(self):
+        """When no chain of length >= 3 can be formed, return an empty list."""
+        n = 2  # Only 2 hits: impossible to form a chain of 3
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        score = self._make_score(n)
+        seeds = beam_search_seed_reconstruction(att, score, self._make_starting_mask(n))
+        assert seeds == []
+
+    def test_empty_starting_mask_returns_empty(self):
+        """If no hit is in starting_mask, return an empty list."""
+        n = 6
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.9
+        att[1, 2] = 0.9
+        score = self._make_score(n)
+        starting_mask = torch.zeros(n, dtype=torch.bool)
+        seeds = beam_search_seed_reconstruction(att, score, starting_mask)
+        assert seeds == []
+
+    def test_seed_score_is_cumulative_over_chain_length(self):
+        """Seed score equals sum of edge attention scores divided by chain length."""
+        n = 5
+        att = torch.zeros(n, n)
+        att[0, 1] = 0.8
+        att[1, 2] = 0.6
+        score = self._make_score(n)
+        seeds = beam_search_seed_reconstruction(
+            att, score, self._make_starting_mask(n), max_chain_length=3
+        )
+        assert len(seeds) >= 1
+        idxs, _, seed_score = seeds[0]
+        # Chain [0, 1, 2]: cumulative = 0.8 + 0.6, n_hits = 3
+        assert idxs.tolist()[:3] == [0, 1, 2]
+        expected = (0.8 + 0.6) / 3
+        assert abs(seed_score - expected) < 1e-5
+
+
+class TestBatchedBeamSearchSeedReconstruction:
+    """Tests for batched_beam_search_seed_reconstruction (GPU-batched)."""
+
+    def _make_inputs(self, B: int, N: int):
+        att = torch.zeros(B, N, N)
+        score = torch.ones(B, N, 1)
+        mask = torch.ones(B, N, dtype=torch.bool)
+        return att, score, mask
+
+    def test_output_shapes(self):
+        """All three output tensors have the expected shapes."""
+        B, N, CL = 2, 8, 5
+        att, score, mask = self._make_inputs(B, N)
+        chains, params, best_scores = batched_beam_search_seed_reconstruction(
+            att, score, mask, max_chain_length=CL
+        )
+        assert chains.shape == (B, N, CL)
+        assert params.shape == (B, N, 5)
+        assert best_scores.shape == (B, N)
+
+    def test_params_all_zeros(self):
+        """The params output tensor is always entirely zero."""
+        B, N = 1, 6
+        att, score, mask = self._make_inputs(B, N)
+        _, params, _ = batched_beam_search_seed_reconstruction(att, score, mask)
+        assert params.eq(0.0).all()
+
+    def test_raises_when_hit_nb_less_than_beam_width(self):
+        """ValueError is raised when hit_nb < beam_width."""
+        att = torch.zeros(1, 2, 2)
+        score = torch.ones(1, 2, 1)
+        mask = torch.ones(1, 2, dtype=torch.bool)
+        with pytest.raises(ValueError):
+            batched_beam_search_seed_reconstruction(att, score, mask, beam_width=3)
+
+    def test_all_hits_invalid_gives_neg_inf_scores(self):
+        """When valid_mask is all False, best_scores stays -inf for every position."""
+        B, N = 1, 6
+        att, score, mask = self._make_inputs(B, N)
+        mask[:] = False
+        _, _, best_scores = batched_beam_search_seed_reconstruction(att, score, mask)
+        assert (best_scores == float("-inf")).all()
+
+    def test_unused_chain_slots_are_minus_one(self):
+        """Positions beyond the chain's length in best_chains are filled with -1."""
+        B, N = 1, 6
+        att = torch.full((B, N, N), -10.0)
+        # Strong chain 0->1->2 only; all other edges stay at -10 logit
+        att[0, 0, 1] = 10.0
+        att[0, 1, 2] = 10.0
+        score = torch.ones(B, N, 1)
+        mask = torch.ones(B, N, dtype=torch.bool)
+        chains, _, _ = batched_beam_search_seed_reconstruction(
+            att, score, mask, max_chain_length=5, beam_width=2
+        )
+        # Best chain from starting hit 0: [0, 1, 2, -1, -1]
+        chain = chains[0, 0, :]
+        assert chain[3].item() == -1
+        assert chain[4].item() == -1
+
+    def test_forward_chains_have_increasing_indices(self):
+        """In forward mode, all non-(-1) indices in best_chains are strictly increasing."""
+        B, N = 1, 8
+        att = torch.full((B, N, N), -10.0)
+        for i in range(N - 1):
+            att[0, i, i + 1] = 10.0  # strong forward edge
+        score = torch.ones(B, N, 1)
+        mask = torch.ones(B, N, dtype=torch.bool)
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(
+            att, score, mask, max_chain_length=5, backward=False
+        )
+        assert best_scores[0, 0] > float("-inf")
+        chain = chains[0, 0, :]
+        valid = chain[chain >= 0].tolist()
+        assert len(valid) >= 3
+        for a, b in zip(valid[:-1], valid[1:]):
+            assert b > a
+
+    def test_backward_chains_have_decreasing_indices(self):
+        """In backward mode, all non-(-1) indices in best_chains are strictly decreasing."""
+        B, N = 1, 8
+        att = torch.full((B, N, N), -10.0)
+        for i in range(1, N):
+            att[0, i, i - 1] = 10.0  # strong backward edge
+        score = torch.ones(B, N, 1)
+        mask = torch.ones(B, N, dtype=torch.bool)
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(
+            att, score, mask, max_chain_length=5, backward=True
+        )
+        assert best_scores[0, N - 1] > float("-inf")
+        chain = chains[0, N - 1, :]
+        valid = chain[chain >= 0].tolist()
+        assert len(valid) >= 3
+        for a, b in zip(valid[:-1], valid[1:]):
+            assert b < a
+
+    def test_valid_mask_excludes_padded_hits(self):
+        """Hits where valid_mask=False are excluded as destinations and have no valid chain."""
+        B, N = 1, 7
+        att = torch.full((B, N, N), -10.0)
+        for i in range(N - 1):
+            att[0, i, i + 1] = 10.0
+        score = torch.ones(B, N, 1)
+        mask = torch.ones(B, N, dtype=torch.bool)
+        mask[0, 5] = False  # hit 5 is padded
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(att, score, mask)
+        # Hit 5 must not appear as a destination in any other hit's chain
+        # (slot 0 always holds the starting-hit index, so skip n=5's own chain)
+        for n in range(N):
+            if n != 5:
+                assert 5 not in chains[0, n, :].tolist()
+        # The padded hit itself has no valid chain
+        assert best_scores[0, 5] == float("-inf")
+
+    def test_score_threshold_excludes_low_score_hits(self):
+        """Hits below score_threshold are treated as invalid and excluded from all chains."""
+        B, N = 1, 6
+        att = torch.full((B, N, N), -10.0)
+        for i in range(N - 1):
+            att[0, i, i + 1] = 10.0
+        score = torch.ones(B, N, 1)
+        score[0, 3, 0] = 0.001  # hit 3 below threshold
+        mask = torch.ones(B, N, dtype=torch.bool)
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(att, score, mask, score_threshold=0.01)
+        # Hit 3 must not appear as a destination in any other hit's chain
+        # (slot 0 always holds the starting-hit index, so skip n=3's own chain)
+        for n in range(N):
+            if n != 3:
+                assert 3 not in chains[0, n, :].tolist()
+        # Hit 3 itself has no valid chain
+        assert best_scores[0, 3] == float("-inf")
+
+    def test_att_threshold_masks_weak_edges(self):
+        """Edges with post-softmax attention below att_threshold are masked, preventing chains."""
+        B, N = 1, 6
+        att, score, mask = self._make_inputs(B, N)
+        # Uniform logits -> softmax gives 1/N per entry, which is always < 1.0
+        _, _, best_scores = batched_beam_search_seed_reconstruction(
+            att, score, mask, att_threshold=1.0
+        )
+        assert (best_scores == float("-inf")).all()
+
+    def test_batch_bins_processed_independently(self):
+        """Bins in the same batch are processed independently."""
+        B, N = 2, 6
+        att = torch.full((B, N, N), -10.0)
+        score = torch.ones(B, N, 1)
+        mask = torch.ones(B, N, dtype=torch.bool)
+        # Bin 0: strong forward chain
+        for i in range(N - 1):
+            att[0, i, i + 1] = 10.0
+        # Bin 1: all hits masked -> no chains possible
+        mask[1, :] = False
+        _, _, best_scores = batched_beam_search_seed_reconstruction(att, score, mask, backward=False)
+        assert best_scores[0, 0] > float("-inf")
+        assert (best_scores[1] == float("-inf")).all()
 
 
 if __name__ == "__main__":

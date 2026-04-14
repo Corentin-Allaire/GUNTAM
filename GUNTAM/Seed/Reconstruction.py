@@ -443,25 +443,30 @@ def beam_search_seed_reconstruction(
     return seeds
 
 
-def multi_bin_batched_beam_search_seed_reconstruction(
+def batched_beam_search_seed_reconstruction(
     attention_map: torch.Tensor,
     hit_score: torch.Tensor,
     valid_mask: torch.Tensor,
     score_threshold: float = 0.01,
+    att_threshold: float = 0.0,
     max_chain_length: int = 5,
     beam_width: int = 3,
+    backward: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    GPU-batched beam search seeding across all bins simultaneously. This algorithm rely on the pytorch topk
-    and gather operations to efficiently maintain and extend the beams in parallel for all hits in all bins.
+    Implementation of the beam search seed reconstruction algorithm that runs in a fully vectorized manner on GPU or CPU.
+    This implementation process an entire event at a time, performing the beam search for all hits in all bins in parallel.
 
     Args:
-        attention_map:    [B, N, N] raw attention logits on device (NOT yet softmaxed)
+        attention_map:    [B, N, N] raw attention logits on device
         hit_score:        [B, N, 1] per-hit scores
         valid_mask:       [B, N] True = valid (not padded) hit
         score_threshold:  minimum hit score to use a hit as chain source or destination
+        att_threshold:    minimum post-softmax attention value to consider an edge (default: 0.0)
         max_chain_length: maximum number of hits per chain
         beam_width:       number of beams per starting hit
+        backward:         if True, chains extend to hits with smaller indices (backward mode);
+                          if False (default), chains extend to hits with larger indices (forward mode).
 
     Returns:
         Tuple of three GPU tensors:
@@ -486,16 +491,21 @@ def multi_bin_batched_beam_search_seed_reconstruction(
     att = attention_map.float().clone()  # [B, N, N]
     att = torch.softmax(att, dim=-1)
 
-    # Mask j<=i and invalid hits: only forward neighbors among valid hits can be selected.
-    combined_mask = (row_idx.unsqueeze(0) <= row_idx.unsqueeze(1)).unsqueeze(0) | ~valid_full.unsqueeze(1)
-    att.masked_fill_(combined_mask, float("-inf"))
+    # Mask out same-side, invalid hits and attention bellow threshold.
+    # Forward: keep j > i (upper triangle). Backward: keep j < i (lower triangle).
+    if backward:
+        combined_mask = (row_idx.unsqueeze(0) >= row_idx.unsqueeze(1)).unsqueeze(0) | ~valid_full.unsqueeze(1)
+    else:
+        combined_mask = (row_idx.unsqueeze(0) <= row_idx.unsqueeze(1)).unsqueeze(0) | ~valid_full.unsqueeze(1)
+
+    att.masked_fill_(combined_mask | (att < att_threshold), float("-inf"))
 
     # Collect for each hits the top-k neighbors and scores in one go
     fwd_vals, fwd_idx = torch.topk(att, beam_width, dim=2, largest=True, sorted=True)  # [B, N, CL]
 
     # Store all the hit chain in one matrix of shape [B, N, BW, CL], initialized to -1 (invalid hit index)
     chains = torch.full((bin_nb, hit_nb, beam_width, max_chain_length), -1, dtype=torch.long, device=device)
-    chains[:, :, :, 0] = row_idx  # broadcasts [N] -> [B, N, BW]
+    chains[:, :, :, 0] = row_idx[None, :, None]  # [1, N, 1] broadcasts to [B, N, BW]
 
     # Initialise the current chain heads and cumulative scores
     heads = chains[:, :, :, 0].clone()  # [B, N, BW]
