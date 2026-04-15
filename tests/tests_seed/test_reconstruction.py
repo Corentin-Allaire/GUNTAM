@@ -7,12 +7,8 @@ from GUNTAM.Seed.Reconstruction import (topk_seed_reconstruction,
                                         back_chained_seed_reconstruction,
                                         weighted_chained_seed_reconstruction,
                                         beam_search_seed_reconstruction,
-<<<<<<< HEAD
                                         batched_beam_search_seed_reconstruction,
                                         build_seed_features_tensor)
-=======
-                                        batched_beam_search_seed_reconstruction)
->>>>>>> origin/main
 
 
 class TestTopKSeedReconstruction:
@@ -827,7 +823,6 @@ class TestBatchedBeamSearchSeedReconstruction:
         assert (best_scores[1] == float("-inf")).all()
 
 
-<<<<<<< HEAD
 class TestBuildSeedFeaturesTensor:
     """Tests for build_seed_features_tensor."""
 
@@ -936,7 +931,5 @@ class TestBuildSeedFeaturesTensor:
         assert out.dtype == torch.float32
 
 
-=======
->>>>>>> origin/main
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
