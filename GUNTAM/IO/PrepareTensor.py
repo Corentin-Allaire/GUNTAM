@@ -102,6 +102,8 @@ def _build_good_pairs_tensors(
     hit_to_particle: pd.Series,
     num_bins: int,
     pv_weight: int = 10,
+    particles_batch: pd.DataFrame | None = None,
+    z0_weight_bin: int = 0,
 ) -> torch.Tensor:
     """
     Build a tensor of all hit pairs and their labels (same particle or not) for a batch of events,
@@ -112,11 +114,26 @@ def _build_good_pairs_tensors(
         bins: DataFrame containing the bin indices for each hit, must have 'bin0', 'bin1', 'bin2' columns.
         hit_to_particle: Series containing the mapping from hits to particles, indexed the same as data_batch.
         num_bins: Total number of bins used in the binning strategy.
+        pv_weight: Weight applied to primary-vertex particle pairs.
+        particles_batch: Optional DataFrame with columns 'event_id', 'particle_id', and 'z0' used to
+            derive per-particle |z0| for bin-based weighting.
+        z0_weight_bin: Bin size for z0-based weighting. The z0 contribution is int(|z0| / z0_weight_bin),
+            added directly to the pair label: final_label = pv_label + int(|z0| / z0_weight_bin).
+            Set to 0 to disable (default).
     Returns:
         A PyTorch tensor of shape [num_events, num_bins, num_pairs, 3] where each pair is represented as
         (hit_idx1, hit_idx2, label) and label is 1 if the hits belong to the same particle.
     """
     print("    Building good pairs tensor...")
+
+    # Build (event_id, particle_id) -> z0 weight lookup: increment = int(|z0| / z0_weight_bin)
+    z0_lookup: Dict[Tuple[int, int], int] = {}
+    if z0_weight_bin != 0 and particles_batch is not None and "z0" in particles_batch.columns:
+        for eid, pid, z0 in particles_batch[["event_id", "particle_id", "z0"]].to_numpy():
+            abs_z0 = abs(float(z0))
+            weight = int(abs_z0 / z0_weight_bin)
+            z0_lookup[(int(eid), int(pid))] = weight
+
     unique_events = data_batch["event_id"].unique()
     unique_bins = bins["bin1"].unique()
     bin_only = bins[["bin0", "bin1", "bin2"]]
@@ -155,7 +172,7 @@ def _build_good_pairs_tensors(
                 i_valid, j_valid = np.where(valid_mask)
 
                 # Create pairs array: (hit_idx1, hit_idx2, label) using bin-relative indices
-                # Label is pv_weight for primary-vertex (PV) particle pairs, 1 otherwise
+                # Label = pv_label + z0_label
                 if len(i_valid) > 0:
                     pv_col = "particle_id_pv"
                     if pv_col in data_batch.columns:
@@ -164,6 +181,16 @@ def _build_good_pairs_tensors(
                         labels = np.where(is_pv_pair, pv_weight, 1).astype(np.int64)
                     else:
                         labels = np.ones(len(i_valid), dtype=np.int64)
+
+                    # Apply z0-based bracket weights additively
+                    if z0_lookup:
+                        pair_pids = bin_particle_ids[i_valid]
+                        z0_labels = np.array(
+                            [z0_lookup.get((int(event_id), int(pid)), 0) for pid in pair_pids],
+                            dtype=np.int64,
+                        )
+                        labels = labels + z0_labels
+
                     pairs = np.stack([i_valid, j_valid, labels], axis=1)
                 else:
                     pairs = np.empty((0, 3), dtype=np.int64)
@@ -573,7 +600,15 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
     )
 
     # Create the good pairs tensor for this batch
-    good_pairs = _build_good_pairs_tensors(data_batch, bins, hit_to_particle, nb_bins_max, pv_weight=cfg.pv_pair_weight)
+    good_pairs = _build_good_pairs_tensors(
+        data_batch,
+        bins,
+        hit_to_particle,
+        nb_bins_max,
+        pv_weight=cfg.pv_pair_weight,
+        particles_batch=particles_batch,
+        z0_weight_bin=cfg.z0_weight_bin,
+    )
 
     data_batch = data_batch.drop(columns=["particle_id_pv"], errors="ignore")
 
