@@ -66,6 +66,8 @@ class PreprocessingConfig:
 
         # Event weights
         self.pv_pair_weight = 10  # Weight for primary-vertex (PV) particle pairs in training
+        # z0-based pair weight bin size: weight = int(|z0| / z0_weight_bin) + 1. 0 disables z0 weighting.
+        self.z0_weight_bin = 0
 
         # Parallelism
         self.num_workers = 1  # Number of parallel worker processes for batch processing
@@ -210,6 +212,15 @@ class PreprocessingConfig:
             default=self.pv_pair_weight,
             help="Weight for primary-vertex (PV) particle pairs in training",
         )
+        parser.add_argument(
+            "--z0_weight_bin",
+            type=int,
+            default=self.z0_weight_bin,
+            help=(
+                "Bin size for z0-based pair weighting: weight = int(|z0| / z0_weight_bin) + 1. "
+                "Set to 0 to disable z0 weighting."
+            ),
+        )
 
     def apply_args(self, args: argparse.Namespace) -> None:
         """
@@ -240,6 +251,7 @@ class PreprocessingConfig:
         self.particle_features = args.particle_features
         self.num_workers = args.num_workers
         self.pv_pair_weight = args.pv_pair_weight
+        self.z0_weight_bin = args.z0_weight_bin
 
         # Validate orphan_hit_fraction range
         if self.orphan_hit_fraction < 0.0 or self.orphan_hit_fraction > 1.0:
