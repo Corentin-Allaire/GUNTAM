@@ -262,6 +262,9 @@ class SeedTransformer(nn.Module):
         """
         Recreate architecture modules to match a checkpoint config.
         Allows loading checkpoints with different architecture parameters.
+        When a field differs between the CLI config and the checkpoint config, the CLI
+        value takes precedence if it was explicitly changed from the default; otherwise
+        the checkpoint value is used.
         Args:
             - model_cfg (dict | None): Model configuration from checkpoint.
             - device (torch.device): Device to allocate rebuilt modules on.
@@ -271,9 +274,24 @@ class SeedTransformer(nn.Module):
         if not model_cfg:
             return
 
+        default_cfg = TransformerConfig().to_dict()
+        cli_cfg = self.cfg.to_dict()
+
+        # Start from checkpoint config, then let non-default CLI values win
         new_cfg = TransformerConfig()
-        new_cfg.from_dict(self.cfg.to_dict())  # start from current (CLI) config
-        new_cfg.from_dict(model_cfg)  # overlay only fields present in checkpoint
+        new_cfg.from_dict(cli_cfg)  # start from current (CLI) config
+        new_cfg.from_dict(model_cfg)  # overlay with checkpoint
+
+        # For any field where CLI != checkpoint, prefer CLI if CLI != default
+        for key, ckpt_val in model_cfg.items():
+            cli_val = cli_cfg.get(key)
+            default_val = default_cfg.get(key)
+            if cli_val != ckpt_val and cli_val != default_val:
+                print(
+                    f"Warning: '{key}' mismatch — checkpoint={ckpt_val}, CLI={cli_val} (not default={default_val}). "
+                    f"Using CLI value."
+                )
+                setattr(new_cfg, key, cli_val)
 
         if new_cfg.to_dict() == self.cfg.to_dict():
             return
