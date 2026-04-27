@@ -475,7 +475,7 @@ def _add_empty_hit(
 
     new_h2p_values = np.concatenate(
         [
-            np.full(num_empty, -2, dtype=hit_to_particle.values.dtype),
+            np.full(num_empty, -2, dtype=np.asarray(hit_to_particle.values).dtype),
             hit_to_particle.values,
         ]
     )
