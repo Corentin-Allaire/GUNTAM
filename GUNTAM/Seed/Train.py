@@ -350,7 +350,7 @@ def run_model(
             Utils.sync_device(cfg.device_acc)
             t0 = time.perf_counter()
 
-        hits_tensor = hits_tensor.to(cfg.device_acc, dtype=model.dtype)
+        hits_tensor = hits_tensor.to(cfg.device_acc, dtype=cfg.transformer_config.dtype)
 
         # Obtain encoded embeddings and attention weights from the model
         encoded_space_point, attention_weights = model(hits_tensor, padding_mask)
@@ -404,7 +404,7 @@ def run_model(
             hit_score.float(),
             valid_mask_gpu,
             att_threshold=0.0,
-            score_threshold=0.2,
+            score_threshold=0.0,
             max_chain_length=3,
             beam_width=5,
         )
@@ -431,10 +431,10 @@ def run_model(
 
     # Transfer the result to CPU and efficiency analysis. This is excluded from timing computation.
     hit_chains_all = beam_hits_t.cpu().numpy().astype(np.int64)  # [B, N, ML]
-    scores_all = beam_scores_t.cpu().numpy()  # [B, N]
-    params_all = beam_params_t.cpu().numpy()  # [B, N, F]
+    scores_all = beam_scores_t.float().cpu().numpy()  # [B, N]
+    params_all = beam_params_t.float().cpu().numpy()  # [B, N, F]
     attention_softmax = torch.softmax(attention_weights.squeeze(1), dim=-1)  # [B, N, N]
-    attention_softmax_cpu = attention_softmax.cpu().numpy()
+    attention_softmax_cpu = attention_softmax.float().cpu().numpy()
     hit_score_all = hit_score.squeeze(-1).cpu().detach().float().numpy()  # [B, N]
 
     for bin_idx in range(hits_tensor.shape[0]):
@@ -444,7 +444,7 @@ def run_model(
         bin_seeds = []
         seen_bs: set = set()
         lengths = (hit_chains_np >= 0).sum(axis=1)  # [N] — vectorized length per chain
-        prefilter = np.isfinite(scores_np) & (scores_np > 0.3)
+        prefilter = np.isfinite(scores_np) & (scores_np > 0.0)
         for i in np.where(prefilter)[0]:
             chain_compact = hit_chains_np[i, : lengths[i]]
             key = tuple(sorted(chain_compact.tolist()))
@@ -667,6 +667,15 @@ def main():
         truth_r_tol=1e-3,
     )
 
+    seed_features_dir = os.path.join(cfg.input_tensor_path, "seed_features")
+    os.makedirs(seed_features_dir, exist_ok=True)
+    feature_indices = cfg.transformer_config.high_level_features
+    cosine_feature_indices = cfg.transformer_config.cosine_processing
+    min_common_hits = 3
+    all_features: List[torch.Tensor] = []
+    all_labels: List[torch.Tensor] = []
+    write_tensor = False
+
     for file_idx in test_file_indices:
         batch_data = dataset.get_file(file_idx)
         end_event = start_event + dataset.get_batch_size(file_idx, file_idx)
@@ -709,6 +718,37 @@ def main():
                         hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx][bin_idx].cpu().float().numpy(),
                     )
 
+            if write_tensor:
+                # Accumulate seed feature tensors across all bins
+                hit_to_particle_event = batch_data["hit_to_particle_tensor"][event_idx]  # [num_bins, max_hits, 1]
+                for bin_idx in range(batch_data["hits_tensor"][event_idx].shape[0]):
+                    seeds = batch_seeds[bin_idx]
+                    bin_hits_tensor = batch_data["hits_tensor"][event_idx][bin_idx]  # [N, num_features]
+                    seed_tensor = torch.full((len(seeds), 3), -1, dtype=torch.long, device=bin_hits_tensor.device)
+                    # Populate seed_tensor with hit indices for each seed, padding with -1 where necessary
+                    for i, seed in enumerate(seeds):
+                        idx = torch.tensor(seed[0], dtype=torch.long, device=bin_hits_tensor.device)
+                        seed_tensor[i, : len(idx)] = idx
+                    # Build feature tensor for this bin's seeds using the specified feature indices and cosine processing
+                    features = Reconstruction.build_seed_features_tensor(
+                        bin_hits_tensor,
+                        seed_tensor,
+                        feature_indices=feature_indices,
+                        cosine_feature_indices=cosine_feature_indices,
+                    )  # [num_seeds, 3, F]
+                    # Flatten the last two dimensions to get a [num_seeds, 3*F] feature vector for each seed
+                    all_features.append(features.float().cpu().flatten(start_dim=1))  # [num_seeds, 3*F]
+                    htp = hit_to_particle_event[bin_idx].cpu().numpy().reshape(-1)  # [max_hits]
+                    labels = torch.zeros(len(seeds), dtype=torch.long)
+                    # Assign label 1 to seeds that have at least `min_common_hits` with any true particle, otherwise label 0
+                    for i, seed in enumerate(seeds):
+                        seed_htp = htp[list(seed[0])]
+                        for pid in np.unique(seed_htp):
+                            if pid >= 0 and int(np.sum(seed_htp == pid)) >= min_common_hits:
+                                labels[i] = 1
+                                break
+                    all_labels.append(labels)
+
             monitoring.bin_seeding_performance(
                 event_idx=global_event_counter,
                 event_hits=batch_data["hits_tensor"][event_idx].cpu().float().numpy(),
@@ -724,9 +764,16 @@ def main():
     print("Model evaluation completed.")
     monitoring.performance_analysis()
 
+    # Save aggregated seed feature tensors and labels to disk
+    if write_tensor and all_features:
+        features_tensor = torch.cat(all_features, dim=0)  # [N_seed_tot, 3*F]
+        labels_tensor = torch.cat(all_labels, dim=0)  # [N_seed_tot]
+        out_path = os.path.join(seed_features_dir, "seed_features.pt")
+        torch.save({"features": features_tensor, "labels": labels_tensor}, out_path)
+        print(f"Saved {features_tensor.shape[0]} seed feature vectors to {out_path}")
+
     # Final speed summary with component breakdown
     if cfg.timing_enabled:
-        total_time
         Utils.sync_device(cfg.device_acc)
         avg_time_per_event = np.mean(processing_times)
         std_time_per_event = np.std(processing_times)

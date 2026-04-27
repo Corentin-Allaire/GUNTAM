@@ -71,6 +71,7 @@ class SeedConfig:
         self.no_test = False
         self.resume_training = False
         self.timing_enabled = False  # Timing measurements during training/testing
+        self.write_seed_tensor = False  # Write seed feature tensors to disk after evaluation
 
     def parse_args(self):
         """
@@ -163,6 +164,11 @@ class SeedConfig:
             help="Enable detailed timing measurements during training/testing",
         )
         parser.add_argument(
+            "--write_seed_tensor",
+            action="store_true",
+            help="Write seed feature tensors and labels to disk after evaluation",
+        )
+        parser.add_argument(
             "--reconstruction_method",
             type=str,
             default=self.reconstruction_method,
@@ -244,6 +250,7 @@ class SeedConfig:
         self.weight_decay = args.weight_decay
         self.batch_size = args.batch_size
         self.timing_enabled = args.timing_enabled
+        self.write_seed_tensor = args.write_seed_tensor
         self.reconstruction_method = args.reconstruction_method
         self.device_acc = torch.device(args.device)
 
