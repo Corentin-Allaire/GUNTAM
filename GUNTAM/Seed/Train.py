@@ -659,10 +659,12 @@ def main():
     event_idx_list = [0]
     bin_idx_list = [55]
 
+    min_common_hits = 3
+
     monitoring = PerformanceMonitor(
         full_print=False,
         save_plots=True,
-        min_common_hits=3,
+        min_common_hits=min_common_hits,
         min_truth_hits=3,
         truth_r_tol=1e-3,
     )
@@ -671,10 +673,8 @@ def main():
     os.makedirs(seed_features_dir, exist_ok=True)
     feature_indices = cfg.transformer_config.high_level_features
     cosine_feature_indices = cfg.transformer_config.cosine_processing
-    min_common_hits = 3
     all_features: List[torch.Tensor] = []
     all_labels: List[torch.Tensor] = []
-    write_tensor = False
 
     for file_idx in test_file_indices:
         batch_data = dataset.get_file(file_idx)
@@ -718,7 +718,7 @@ def main():
                         hit_to_particle=batch_data["hit_to_particle_tensor"][event_idx][bin_idx].cpu().float().numpy(),
                     )
 
-            if write_tensor:
+            if cfg.write_seed_tensor:
                 # Accumulate seed feature tensors across all bins
                 hit_to_particle_event = batch_data["hit_to_particle_tensor"][event_idx]  # [num_bins, max_hits, 1]
                 for bin_idx in range(batch_data["hits_tensor"][event_idx].shape[0]):
@@ -765,7 +765,7 @@ def main():
     monitoring.performance_analysis()
 
     # Save aggregated seed feature tensors and labels to disk
-    if write_tensor and all_features:
+    if cfg.write_seed_tensor and all_features:
         features_tensor = torch.cat(all_features, dim=0)  # [N_seed_tot, 3*F]
         labels_tensor = torch.cat(all_labels, dim=0)  # [N_seed_tot]
         out_path = os.path.join(seed_features_dir, "seed_features.pt")
