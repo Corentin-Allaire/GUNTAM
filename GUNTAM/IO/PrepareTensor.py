@@ -668,8 +668,9 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
     # Perform binning and tensor preparation
     bins, nb_bins_max = _bin_data(data_batch, cfg)
 
-    # Add padding hits to fill bins to max_hit_input - 1, reserving slot 0 for the empty hit
-    data_batch, bins = _add_padding(data_batch, bins, cfg, max_hits=cfg.max_hit_input - 1)
+    # Add padding hits to fill bins up to max_hit_input (reserve slot 0 for empty hit when enabled)
+    padding_max = cfg.max_hit_input - 1 if cfg.orphan_target else cfg.max_hit_input
+    data_batch, bins = _add_padding(data_batch, bins, cfg, max_hits=padding_max)
 
     # Create the hit_to_particle mapping for this batch (after all reordering)
     hit_to_particle = data_batch["particle_id"].copy()
@@ -680,7 +681,8 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
     )
 
     # Prepend one all-zeros empty hit (particle_id = -2) at position 0 of every bin
-    data_batch, bins, hit_to_particle = _add_empty_hit(data_batch, bins, hit_to_particle, nb_bins_max)
+    if cfg.orphan_target:
+        data_batch, bins, hit_to_particle = _add_empty_hit(data_batch, bins, hit_to_particle, nb_bins_max)
 
     # Create the padding mask tensor for this batch (after empty hits are inserted)
     data_batch, padding_mask = _create_padding_mask(data_batch, bins, nb_bins_max, cfg)
