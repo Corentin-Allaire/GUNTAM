@@ -524,6 +524,11 @@ class PerformanceMonitor:
             bin_particles_with_seeds = sum(1 for pid, pdata in bin_particles.items() if "best_seed_idx" in pdata)
             # Count particles with a pure associated seed in this bin
             bin_particles_with_pure_seeds = sum(1 for pid, pdata in bin_particles.items() if pdata.get("is_pure", False))
+            # Count particles with >=3 hits (excluding under-represented particles)
+            bin_particles_min3 = {pid: pdata for pid, pdata in bin_particles.items() if len(pdata.get("hit_indices", [])) >= 3}
+            bin_total_min3 = len(bin_particles_min3)
+            bin_particles_with_seeds_min3 = sum(1 for pdata in bin_particles_min3.values() if "best_seed_idx" in pdata)
+            bin_particles_with_pure_seeds_min3 = sum(1 for pdata in bin_particles_min3.values() if pdata.get("is_pure", False))
 
             self._update_event_particle_bins(
                 event_particle_bins,
@@ -555,6 +560,15 @@ class PerformanceMonitor:
                     "particles_with_pure_seeds": bin_particles_with_pure_seeds,
                     "pure_seeding_efficiency": (
                         bin_particles_with_pure_seeds / bin_total_particles if bin_total_particles > 0 else 0.0
+                    ),
+                    "n_particles_min3hits": bin_total_min3,
+                    "particles_with_seeds_min3hits": bin_particles_with_seeds_min3,
+                    "seeding_efficiency_min3hits": (
+                        bin_particles_with_seeds_min3 / bin_total_min3 if bin_total_min3 > 0 else 0.0
+                    ),
+                    "particles_with_pure_seeds_min3hits": bin_particles_with_pure_seeds_min3,
+                    "pure_seeding_efficiency_min3hits": (
+                        bin_particles_with_pure_seeds_min3 / bin_total_min3 if bin_total_min3 > 0 else 0.0
                     ),
                 }
             )
@@ -614,6 +628,10 @@ class PerformanceMonitor:
                 "std_efficiency": np.std([b["seeding_efficiency"] for b in self.bin_summaries]),
                 "mean_pure_efficiency": np.mean([b["pure_seeding_efficiency"] for b in self.bin_summaries]),
                 "std_pure_efficiency": np.std([b["pure_seeding_efficiency"] for b in self.bin_summaries]),
+                "mean_efficiency_min3hits": np.mean([b["seeding_efficiency_min3hits"] for b in self.bin_summaries]),
+                "std_efficiency_min3hits": np.std([b["seeding_efficiency_min3hits"] for b in self.bin_summaries]),
+                "mean_pure_efficiency_min3hits": np.mean([b["pure_seeding_efficiency_min3hits"] for b in self.bin_summaries]),
+                "std_pure_efficiency_min3hits": np.std([b["pure_seeding_efficiency_min3hits"] for b in self.bin_summaries]),
             },
             "bin_complexity_analysis": self._analyze_bin_complexity(self.bin_summaries),
             "hit_scores": self.hit_scores,
@@ -664,41 +682,81 @@ class PerformanceMonitor:
             attention_map: Array `[n_hits, n_hits]` attention weights for the bin
             hit_to_particle: Optional array of particle IDs per hit (shape `[n_hits]`).
                 When provided, fake seeds (< min_common_hits hits from any particle)
-                are identified and up to 10 are printed with hit positions.
+                are identified and up to 10 are printed with hit positions. Non-reconstructed
+                particles (no associated seed) are also printed with their hits and the seed
+                indices that contain those hits.
         """
 
         print(f"Number of valid hits in event {event_idx} bin {bin_idx}: {len(hits)}")
         print(f"Number of seeds reconstructed: {len(seeds)}")
 
-        # --- Fake seed printout ---
-        if hit_to_particle is not None and len(seeds) > 0:
+        # --- Fake seed + non-reconstructed particle printout ---
+        if hit_to_particle is not None:
             htp = np.asarray(hit_to_particle).reshape(-1)
-            seeded_particle = self._associate_seeds_to_particles(seeds, htp, self.min_common_hits)
+            seeded_particle = self._associate_seeds_to_particles(seeds, htp, self.min_common_hits) if len(seeds) > 0 else {}
             seeded_seed_indices = {s["seed_idx"] for pl in seeded_particle.values() for s in pl}
-            fake_seeds = [(idx, s) for idx, s in enumerate(seeds) if idx not in seeded_seed_indices]
-            print(f"\n  FAKE SEEDS ({len(fake_seeds)} / {len(seeds)} total):")
-            for rank, (seed_idx, s) in enumerate(fake_seeds[:10]):
-                hit_indices = list(s[0])
-                print(f"   Fake seed {rank + 1} (seed #{seed_idx}): {len(hit_indices)} hits")
-                for i_h, h in enumerate(hit_indices):
-                    if h < len(hits):
-                        hx, hy, hz = hits[h, 0], hits[h, 1], hits[h, 2]
-                        hr = hits[h, 3]
-                        hphi = hits[h, 4]
-                        heta = hits[h, 5]
-                        pid = int(htp[h]) if h < len(htp) else -1
-                        pid_str = f"particle {pid}" if pid >= 0 else "orphan"
-                        next_h = hit_indices[i_h + 1] if i_h + 1 < len(hit_indices) else None
-                        if next_h is not None and h < attention_map.shape[0] and next_h < attention_map.shape[1]:
-                            attn_str = f"attn→next={attention_map[h, next_h]:.3f}"
-                        else:
-                            attn_str = "attn→next=  N/A"
-                        print(
-                            f"     hit {h:3d} | x={hx:8.2f} y={hy:8.2f} z={hz:8.2f}"
-                            f" r={hr:7.2f} phi={hphi:6.3f} eta={heta:6.3f} | {attn_str} | {pid_str}"
-                        )
-            if len(fake_seeds) > 10:
-                print(f"   ... and {len(fake_seeds) - 10} more fake seeds (not shown)")
+
+            if len(seeds) > 0:
+                fake_seeds = [(idx, s) for idx, s in enumerate(seeds) if idx not in seeded_seed_indices]
+                print(f"\n  FAKE SEEDS ({len(fake_seeds)} / {len(seeds)} total):")
+                for rank, (seed_idx, s) in enumerate(fake_seeds[:10]):
+                    hit_indices = list(s[0])
+                    print(f"   Fake seed {rank + 1} (seed #{seed_idx}): {len(hit_indices)} hits")
+                    for i_h, h in enumerate(hit_indices):
+                        if h < len(hits):
+                            hx, hy, hz = hits[h, 0], hits[h, 1], hits[h, 2]
+                            hr = hits[h, 3]
+                            hphi = hits[h, 4]
+                            heta = hits[h, 5]
+                            pid = int(htp[h]) if h < len(htp) else -1
+                            pid_str = f"particle {pid}" if pid >= 0 else "orphan"
+                            next_h = hit_indices[i_h + 1] if i_h + 1 < len(hit_indices) else None
+                            if next_h is not None and h < attention_map.shape[0] and next_h < attention_map.shape[1]:
+                                attn_str = f"attn→next={attention_map[h, next_h]:.3f}"
+                            else:
+                                attn_str = "attn→next=  N/A"
+                            print(
+                                f"     hit {h:3d} | x={hx:8.2f} y={hy:8.2f} z={hz:8.2f}"
+                                f" r={hr:7.2f} phi={hphi:6.3f} eta={heta:6.3f} | {attn_str} | {pid_str}"
+                            )
+                if len(fake_seeds) > 10:
+                    print(f"   ... and {len(fake_seeds) - 10} more fake seeds (not shown)")
+
+            # --- Non-reconstructed particle printout ---
+            # Build a reverse map: seed_idx -> set of hit indices, for fast lookup
+            seed_hit_sets = [set(s[0]) for s in seeds]
+
+            unique_pids = sorted([int(p) for p in np.unique(htp) if p >= 0])
+            non_reco_pids = [pid for pid in unique_pids if pid not in seeded_particle]
+            non_reco_pids_min3 = [pid for pid in non_reco_pids if sum(1 for p in htp if int(p) == pid) >= 3]
+            print(
+                f"\n  NON-RECONSTRUCTED PARTICLES ({len(non_reco_pids_min3)} with >=3 hits"
+                f" / {len(non_reco_pids)} total non-reco / {len(unique_pids)} total):"
+            )
+            for rank, pid in enumerate(non_reco_pids_min3[:10]):
+                p_hit_indices = [i for i, p in enumerate(htp) if int(p) == pid]
+                true_params_str = "N/A"
+                if pid < len(particles):
+                    p = particles[pid]
+                    true_params_str = f"d0={p[0]:.2f} z0={p[1]:.2f} phi={p[2]:.3f} eta={p[3]:.3f} pT={p[4]:.2f}"
+                print(f"   Particle {pid}: {len(p_hit_indices)} hits | {true_params_str}")
+                for h in p_hit_indices:
+                    if h >= len(hits):
+                        continue
+                    hx, hy, hz = hits[h, 0], hits[h, 1], hits[h, 2]
+                    hr = hits[h, 3]
+                    hphi = hits[h, 4]
+                    heta = hits[h, 5]
+                    seeds_with_hit = [
+                        seed_idx for seed_idx, s_hits in enumerate(seed_hit_sets) if h in s_hits and len(seeds[seed_idx][0]) > 2
+                    ]
+                    seeds_str = f"in seeds {seeds_with_hit}" if seeds_with_hit else "in no seed"
+                    print(
+                        f"     hit {h:3d} | x={hx:8.2f} y={hy:8.2f} z={hz:8.2f}"
+                        f" r={hr:7.2f} phi={hphi:6.3f} eta={heta:6.3f} | {seeds_str}"
+                    )
+            if len(non_reco_pids_min3) > 10:
+                print(f"   ... and {len(non_reco_pids_min3) - 10} more non-reconstructed particles (not shown)")
 
         # If full_print is enabled, print hit-by-hit information for de purpose
         if self.full_print:
@@ -877,6 +935,14 @@ class PerformanceMonitor:
         print(
             "   Mean pure seeding efficiency per bin: "
             f"{bin_stats['mean_pure_efficiency']:.1%} ± {bin_stats['std_pure_efficiency']:.1%}"
+        )
+        print(
+            "   Mean seeding efficiency per bin (>=3 hits): "
+            f"{bin_stats['mean_efficiency_min3hits']:.1%} ± {bin_stats['std_efficiency_min3hits']:.1%}"
+        )
+        print(
+            "   Mean pure seeding efficiency per bin (>=3 hits): "
+            f"{bin_stats['mean_pure_efficiency_min3hits']:.1%} ± {bin_stats['std_pure_efficiency_min3hits']:.1%}"
         )
 
         # Print bin complexity analysis
