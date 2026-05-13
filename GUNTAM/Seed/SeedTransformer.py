@@ -146,8 +146,7 @@ class SeedTransformer(nn.Module):
         r = hits[..., 3].unsqueeze(-1)  # [..., n_hits, 1]
         dz = hits[..., 2].unsqueeze(-1) - z0_vals  # [..., n_hits, 8]
         eta_z0 = torch.arctanh(dz / torch.sqrt(r ** 2 + dz ** 2))  # [..., n_hits, 8]
-        if mask is not None and mask.dim() == 2:
-            eta_z0 = eta_z0.masked_fill(mask.unsqueeze(-1), 0.0)
+        eta_z0 = eta_z0.masked_fill(r <= 0, 0.0)
         high_level = torch.cat([high_level, eta_z0], dim=-1) if high_level is not None else eta_z0
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
