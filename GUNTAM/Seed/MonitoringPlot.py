@@ -466,65 +466,6 @@ def create_seeding_performance_plots(
         create_bin_complexity_plots(results["bin_complexity_analysis"], bin_summaries)
 
 
-def create_hit_score_plot(results: Mapping[str, Any]) -> None:
-    """
-    Plot the hit score distribution split by particle membership in a standalone figure.
-
-    Inputs
-    - results: Mapping[str, Any]
-        Must contain `"hit_scores"` with keys `"particle"` and `"orphan"`.
-
-    Output
-    - Saves `hit_score_distribution.png`.
-    """
-    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-
-    hit_scores: Mapping[str, Sequence[float]] = results.get("hit_scores", {})
-    scores_particle = np.asarray(hit_scores.get("particle", []), dtype=float)
-    scores_orphan = np.asarray(hit_scores.get("orphan", []), dtype=float)
-
-    if scores_particle.size > 0 or scores_orphan.size > 0:
-        all_scores = np.concatenate([scores_particle, scores_orphan])
-        bins_score = min(50, max(10, len(all_scores) // 20))
-        score_range = (float(np.min(all_scores)), float(np.max(all_scores)))
-        if score_range[0] == score_range[1]:
-            score_range = (score_range[0] - 0.5, score_range[1] + 0.5)
-        if scores_particle.size > 0:
-            ax.hist(
-                scores_particle,
-                bins=bins_score,
-                range=score_range,
-                alpha=0.6,
-                color="steelblue",
-                label=f"Particle hits (n={len(scores_particle)})",
-                density=True,
-            )
-        if scores_orphan.size > 0:
-            ax.hist(
-                scores_orphan,
-                bins=bins_score,
-                range=score_range,
-                alpha=0.6,
-                color="tomato",
-                label=f"Orphan hits (n={len(scores_orphan)})",
-                density=True,
-            )
-        ax.set_xlabel("Hit Score")
-        ax.set_ylabel("Density")
-        ax.set_title("Hit Score Distribution by Particle Membership")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    else:
-        ax.text(0.5, 0.5, "No hit scores available", transform=ax.transAxes, ha="center", va="center", fontsize=12)
-        ax.set_title("Hit Score Distribution by Particle Membership")
-
-    plt.tight_layout()
-    plot_filename = "hit_score_distribution.png"
-    plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
-    print("Hit score distribution plot saved as:", plot_filename)
-    plt.close()
-
-
 def create_bin_complexity_plots(
     complexity_analysis: Mapping[str, Any],
     bin_summaries: Sequence[Mapping[str, Any]],

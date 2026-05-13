@@ -4,72 +4,56 @@ from typing import List, Tuple
 
 
 def topk_seed_reconstruction(
-    attention_map: torch.Tensor,
-    hit_score: torch.Tensor,
-    threshold: float = 0.8,
+    attention_edge: torch.Tensor,
     max_selection: int = 4,
+    att_threshold: float = 0.2,
 ) -> List[Tuple[np.ndarray, np.ndarray, float]]:
     """
-    K-nearest seeding with threshold: for each valid hit, create a seed consisting of the hit
-    itself plus up to "max_selection" other hits with the highest attention values from that hit,
-    keeping only those neighbors whose hit score is >= threshold.
+    K-nearest seeding: for each hit, create a seed consisting of the hit itself plus up to
+    "max_selection" neighbors with the highest attention values.
 
     Args:
-        attention_map: 2D tensor [N, N] with attention weights
-        hit_score: tensor [N, 1] with per-hit scores
-        threshold: Minimum hit score required to keep a neighbor (default: 0.8)
-        max_selection: Maximum number of neighbors to select per hit (default: 4)
+        attention_edge: 3D tensor [N, width, 3] of top-k edge triplets (source, target, score)
+        max_selection: Maximum number of neighbors to select per hit (default: 4).
+            Silently capped by width.
 
     Returns:
-        List of (hit_indices, avg_parameters, seed_score) tuples; one seed per valid hit.
+        List of (hit_indices, avg_parameters, seed_score) tuples; one seed per hit.
     """
-    device = attention_map.device
+    device = attention_edge.device
     seeds: List[Tuple[np.ndarray, np.ndarray, float]] = []
 
-    num_hits = attention_map.size(0)
+    num_hits = attention_edge.shape[0]
     if num_hits == 0:
         return seeds
 
-    # Use all hits (remove selection on scores)
-    allowed_indices = torch.arange(num_hits, device=device)
-    allowed_count = num_hits
-    k = min(max_selection, max(0, allowed_count - 1))
+    # Extract target indices and scores; mask self-edges
+    topk_idx_all = attention_edge[:, :, 1].long()  # [N, width]
+    topk_vals_all = attention_edge[:, :, 2].float()  # [N, width]
+    self_mask = topk_idx_all == attention_edge[:, :, 0].long()
+    topk_vals_all = topk_vals_all.masked_fill(self_mask, float("-inf"))
 
-    # Restrict attention matrix to allowed columns
-    att_allowed = attention_map[:, allowed_indices].clone()
-
-    # Forbid self-attention (set diagonal to -inf)
-    if allowed_count == num_hits:
-        att_allowed.fill_diagonal_(float("-inf"))
-    else:
-        arange = torch.arange(num_hits, device=device)
-        common = torch.where((arange[:, None] == allowed_indices[None, :]))
-        if common[0].numel() > 0:
-            att_allowed[common] = float("-inf")
-
+    # Select top-max_selection neighbors per hit
+    k = min(max_selection, attention_edge.shape[1])
     if k > 0:
-        # Get top-k attention scores and indices per row
-        _, topk_idx = torch.topk(att_allowed, k, dim=1, largest=True, sorted=True)  # [N, k]
-        topk_global = allowed_indices[topk_idx]  # [N, k]
+        _, top_pos = torch.topk(topk_vals_all, k, dim=1, largest=True, sorted=True)  # [N, k]
+        topk_global = topk_idx_all.gather(1, top_pos)  # [N, k]
+        topk_scores = topk_vals_all.gather(1, top_pos)  # [N, k]
     else:
         topk_global = torch.empty((num_hits, 0), dtype=torch.long, device=device)
+        topk_scores = torch.empty((num_hits, 0), device=device)
 
-    # Build clusters per valid hit, applying attention threshold filter
+    # Build clusters per hit
     for i in range(num_hits):
-        neighbor_indices = topk_global[i]  # [k]
+        # Exclude self-edges (score == -inf)
+        valid_nbr = topk_scores[i] > att_threshold
+        neighbor_indices = topk_global[i][valid_nbr]
 
-        # Keep only neighbors whose hit score is above threshold
-        keep_mask = hit_score[neighbor_indices].squeeze(-1) >= threshold
-        kept_neighbors = neighbor_indices[keep_mask]
+        # Cluster = hit itself + all valid neighbors
+        cluster_idx = torch.cat([torch.tensor([i], device=device, dtype=torch.long), neighbor_indices], dim=0)
 
-        # Cluster = hit itself + kept neighbors (could be only the hit if none kept)
-        cluster_idx = torch.cat([torch.tensor([i], device=device, dtype=torch.long), kept_neighbors], dim=0)
-
-        # Seed score: sum of attention to kept neighbors / cluster size
-        if kept_neighbors.numel() > 0:
-            att_sum = float(attention_map[i, kept_neighbors].sum().item())
-        else:
-            att_sum = 0.0
+        # Seed score: sum of attention to neighbors / cluster size
+        att_sum = float(topk_scores[i][valid_nbr].sum().item())
         seed_score = att_sum / max(1, cluster_idx.numel())
 
         # No parameter reconstruction: seed params set to zero
@@ -82,38 +66,38 @@ def topk_seed_reconstruction(
 
 
 def chained_seed_reconstruction(
-    attention_map: torch.Tensor,
-    hit_score: torch.Tensor,
-    score_threshold: float = 0.01,
+    attention_edge: torch.Tensor,
     max_chain_length: int = 5,
+    att_threshold: float = 0.2,
 ) -> List[Tuple[np.ndarray, np.ndarray, float]]:
     """
     Chain-based seeding: starting from each hit, iteratively add the highest-attention
-    neighbor with a greater index above a score threshold to form a chain of hits.
+    forward neighbor (greater index) to form a chain of hits.
 
     Args:
-        attention_map: 2D tensor [N, N] with attention weights
-        hit_score: tensor [N, 1] with per-hit scores
-        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
+        attention_edge: 3D tensor [N, width, 3] of top-k edge triplets (source, target, score)
         max_chain_length: Maximum length of the chain (default: 5)
 
     Returns:
         List of (hit_indices, avg_parameters, seed_score) tuples for initial per-hit chains.
     """
-    device = attention_map.device
-    num_hits = attention_map.size(0)
+    device = attention_edge.device
+    num_hits = attention_edge.shape[0]
     seeds: List[Tuple[np.ndarray, np.ndarray, float]] = []
 
     if num_hits == 0:
         return seeds
 
-    # Precompute things
-    all_indices = torch.arange(num_hits, device=device)
-    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N] filter by hit score
+    # Extract target indices and scores; mask self-edges
+    topk_idx = attention_edge[:, :, 1].long()  # [N, width]
+    topk_vals = attention_edge[:, :, 2].float()  # [N, width]
+    self_mask = topk_idx == attention_edge[:, :, 0].long()
+    topk_vals = topk_vals.masked_fill(self_mask, float("-inf"))
+
     used_mask = torch.zeros(num_hits, dtype=torch.bool, device=device)
 
     for start_idx in range(num_hits):
-        if used_mask[start_idx] or not valid_hits[start_idx]:
+        if used_mask[start_idx]:
             continue
 
         chain = [start_idx]
@@ -121,20 +105,20 @@ def chained_seed_reconstruction(
         edge_score_sum = 0.0
 
         for _ in range(max_chain_length - 1):
-            # Get scores only for valid, unused hits after current index
-            att_scores = attention_map[current_idx]
-            valid_mask = (all_indices > current_idx) & (~used_mask) & valid_hits
-            if not torch.any(valid_mask):
+            # Find best forward neighbor (j > current_idx) that is unused
+            row_j = topk_idx[current_idx]  # [width]
+            row_s = topk_vals[current_idx]  # [width]
+            cand_mask = (row_j > current_idx) & ~used_mask[row_j]
+            row_s = row_s.masked_fill(~cand_mask, float("-inf"))
+            best_k = int(row_s.argmax().item())
+            best_score = row_s[best_k].item()
+            if best_score < att_threshold:
                 break
+            best_next = int(row_j[best_k].item())
 
-            # Get best next index and associated attention_score directly
-            next_idx = int(torch.argmax(att_scores * valid_mask.float()).item())
-            if att_scores[next_idx].item() * valid_mask[next_idx].float() == 0:
-                break
-
-            edge_score_sum += att_scores[next_idx].item()
-            chain.append(next_idx)
-            current_idx = next_idx
+            edge_score_sum += best_score
+            chain.append(best_next)
+            current_idx = best_next
 
         used_mask[chain] = True
 
@@ -148,42 +132,42 @@ def chained_seed_reconstruction(
 
 
 def back_chained_seed_reconstruction(
-    attention_map: torch.Tensor,
-    hit_score: torch.Tensor,
-    score_threshold: float = 0.01,
+    attention_edge: torch.Tensor,
     max_chain_length: int = 5,
+    att_threshold: float = 0.2,
 ) -> List[Tuple[np.ndarray, np.ndarray, float]]:
     """
     Backward chain-based seeding: starting from each hit, iteratively add the highest-attention
-    neighbor with a smaller index above a score threshold to form a backward chain of hits.
+    backward neighbor (smaller index) to form a backward chain of hits.
 
     This is the backward counterpart to chained_seed_reconstruction, meant to be used with
     attention_backward_loss. It chains hits in reverse order (from later to earlier indices).
 
     Args:
-        attention_map: 2D tensor [N, N] with attention weights
-        hit_score: tensor [N, 1] with per-hit scores
-        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
+        attention_edge: 3D tensor [N, width, 3] of top-k edge triplets (source, target, score)
         max_chain_length: Maximum length of the chain (default: 5)
 
     Returns:
         List of (hit_indices, avg_parameters, seed_score) tuples for initial per-hit backward chains.
     """
-    device = attention_map.device
-    num_hits = attention_map.size(0)
+    device = attention_edge.device
+    num_hits = attention_edge.shape[0]
     seeds: List[Tuple[np.ndarray, np.ndarray, float]] = []
 
     if num_hits == 0:
         return seeds
 
-    # Precompute things
-    all_indices = torch.arange(num_hits, device=device)
-    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N] filter by hit score
+    # Extract target indices and scores; mask self-edges
+    topk_idx = attention_edge[:, :, 1].long()  # [N, width]
+    topk_vals = attention_edge[:, :, 2].float()  # [N, width]
+    self_mask = topk_idx == attention_edge[:, :, 0].long()
+    topk_vals = topk_vals.masked_fill(self_mask, float("-inf"))
+
     used_mask = torch.zeros(num_hits, dtype=torch.bool, device=device)
 
     # Process hits from last to first
     for start_idx in range(num_hits - 1, -1, -1):
-        if used_mask[start_idx] or not valid_hits[start_idx]:
+        if used_mask[start_idx]:
             continue
 
         chain = [start_idx]
@@ -191,20 +175,20 @@ def back_chained_seed_reconstruction(
         edge_score_sum = 0.0
 
         for _ in range(max_chain_length - 1):
-            # Get scores only for valid, unused hits before current index
-            att_scores = attention_map[current_idx]
-            valid_mask = (all_indices < current_idx) & (~used_mask) & valid_hits
-            if not torch.any(valid_mask):
+            # Find best backward neighbor (j < current_idx) that is unused
+            row_j = topk_idx[current_idx]  # [width]
+            row_s = topk_vals[current_idx]  # [width]
+            cand_mask = (row_j < current_idx) & ~used_mask[row_j]
+            row_s = row_s.masked_fill(~cand_mask, float("-inf"))
+            best_k = int(row_s.argmax().item())
+            best_score = row_s[best_k].item()
+            if best_score < att_threshold:
                 break
+            best_prev = int(row_j[best_k].item())
 
-            # Get best previous index directly
-            prev_idx = int(torch.argmax(att_scores * valid_mask.float()).item())
-            if att_scores[prev_idx].item() * valid_mask[prev_idx].float() == 0:
-                break
-
-            edge_score_sum += att_scores[prev_idx].item()
-            chain.append(prev_idx)
-            current_idx = prev_idx
+            edge_score_sum += best_score
+            chain.append(best_prev)
+            current_idx = best_prev
 
         used_mask[chain] = True
 
@@ -218,58 +202,56 @@ def back_chained_seed_reconstruction(
 
 
 def weighted_chained_seed_reconstruction(
-    attention_map: torch.Tensor,
-    hit_score: torch.Tensor,
-    score_threshold: float = 0.01,
+    attention_edge: torch.Tensor,
     max_chain_length: int = 5,
     pairs_per_hit: int = 2,
+    att_threshold: float = 0.2,
 ) -> List[Tuple[np.ndarray, np.ndarray, float]]:
     """
     Weighted chain seeding: build chains of hits by extending forward/backward
     along the highest-attention edges.
 
-    For each hit, the `pairs_per_hit` highest-attention neighbors above `score_threshold`
-    are selected. Only forward pairs (hit_i < hit_j) are retained, de-duplicated across
-    hits, and processed in descending score order. Each pair seeds a chain that is
-    iteratively extended: at every step the algorithm looks at the best outgoing edge
-    from the current chain head (forward extension) and the best incoming edge to the
-    current chain tail (backward extension), picks whichever has the higher score, and
-    appends that hit. Once a hit has been added to a chain it is removed from the
-    candidate pool so it cannot be reused. Chains with fewer than 3 hits are discarded.
+    For each hit, the `pairs_per_hit` highest-attention neighbors are selected. Only
+    forward pairs (hit_i < hit_j) are retained, de-duplicated across hits, and processed
+    in descending score order. Each pair seeds a chain that is iteratively extended: at
+    every step the algorithm looks at the best outgoing edge from the current chain head
+    (forward extension) and the best incoming edge to the current chain tail (backward
+    extension), picks whichever has the higher score, and appends that hit. Once a hit
+    has been added to a chain it is removed from the candidate pool so it cannot be
+    reused. Chains with fewer than 3 hits are discarded.
 
     Args:
-        attention_map: 2D tensor [N, N] with attention weights
-        hit_score: tensor [N, 1] with per-hit scores
-        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
+        attention_edge: 3D tensor [N, width, 3] of top-k edge triplets (source, target, score)
         max_chain_length: Maximum length of the chain (default: 5)
         pairs_per_hit: Number of top-attention neighbors to consider per hit when
-            building the initial pair list (default: 2).
+            building the initial pair list (default: 2). Silently capped by width.
 
     Returns:
         List of (hit_indices, avg_parameters, seed_score) tuples for initial per-hit chains.
     """
 
-    device = attention_map.device
-    num_hits = attention_map.size(0)
+    device = attention_edge.device
+    num_hits = attention_edge.shape[0]
     seeds: List[Tuple[np.ndarray, np.ndarray, float]] = []
 
-    # Filter hits by score threshold
-    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N]
+    # Extract target indices and scores; mask self-edges
+    topk_idx_all = attention_edge[:, :, 1].long()  # [N, width]
+    topk_vals_all = attention_edge[:, :, 2].float()  # [N, width]
+    self_mask = topk_idx_all == attention_edge[:, :, 0].long()
+    topk_vals_all = topk_vals_all.masked_fill(self_mask, float("-inf"))
 
-    # For each hit, keep the top pairs_per_hit neighbors among valid hits
-    k = min(pairs_per_hit, num_hits - 1)
-    att = attention_map.clone()
-    att.fill_diagonal_(float("-inf"))  # exclude self-pairs
+    # Select top-pairs_per_hit neighbors per hit
+    k = min(pairs_per_hit, attention_edge.shape[1])
+    _, top_pos = torch.topk(topk_vals_all, k, dim=1, largest=True, sorted=True)  # [N, k]
+    topk_idx = topk_idx_all.gather(1, top_pos)  # [N, k]
+    topk_vals = topk_vals_all.gather(1, top_pos)  # [N, k]
 
-    topk_vals, topk_idx = torch.topk(att, k, dim=1, largest=True, sorted=True)  # [N, k]
     # Flatten into (hit_i, hit_j, score) rows, filtering by hit score
     hit_i_list = torch.arange(num_hits, device=device).unsqueeze(1).expand_as(topk_idx).reshape(-1).long()
     hit_j_list = topk_idx.reshape(-1).long()
     scores_list = topk_vals.reshape(-1)
 
-    both_valid = valid_hits[hit_i_list] & valid_hits[hit_j_list]
-    forward_pairs = hit_i_list < hit_j_list
-    mask = both_valid & forward_pairs
+    mask = hit_i_list < hit_j_list  # keep only forward pairs
     hit_i_np = hit_i_list[mask].numpy()
     hit_j_np = hit_j_list[mask].numpy()
     scores_np = scores_list[mask].float().numpy()
@@ -296,7 +278,7 @@ def weighted_chained_seed_reconstruction(
         score = scores_np[i].item()
         to_remove = []
 
-        if score <= 0.0:
+        if score < att_threshold:
             continue
 
         to_remove.append(hit_j)
@@ -345,10 +327,9 @@ def weighted_chained_seed_reconstruction(
 
 
 def beam_search_seed_reconstruction(
-    attention_map: torch.Tensor,
-    hit_score: torch.Tensor,
+    attention_edge: torch.Tensor,
     starting_mask: torch.Tensor,
-    score_threshold: float = 0.01,
+    att_threshold: float = 0.2,
     max_chain_length: int = 5,
     beam_width: int = 3,
 ) -> List[Tuple[np.ndarray, np.ndarray, float]]:
@@ -368,12 +349,10 @@ def beam_search_seed_reconstruction(
     returned.
 
     Args:
-        attention_map: 2D tensor [N, N] with attention weights
-        hit_score: tensor [N, 1] with per-hit scores
+        attention_edge: 3D tensor [N, width, 3] of top-k edge triplets (source, target, score)
         starting_mask: 1D boolean tensor [N] indicating which hits can be used as starting points
-        score_threshold: Minimum attention score to add a hit to the chain (default: 0.01)
         max_chain_length: Maximum length of the chain (default: 5)
-        beam_width: Number of top chains to keep at each step (default: 3)
+        beam_width: Number of top chains to keep at each step (default: 3). Silently capped by width.
     Returns:
         List of (hit_indices, avg_parameters, seed_score) tuples; one seed per unique best chain.
     """
@@ -382,21 +361,25 @@ def beam_search_seed_reconstruction(
         """Return the score used to rank beam entries."""
         return cumulative / n_hits
 
-    num_hits = attention_map.size(0)
+    device = attention_edge.device
+    num_hits = attention_edge.shape[0]
     seeds: List[Tuple[np.ndarray, np.ndarray, float]] = []
 
-    # Filter hits by score threshold
-    valid_hits = hit_score.squeeze(-1) >= score_threshold  # [N]
+    # Extract target indices and scores; mask self-edges
+    topk_idx_all = attention_edge[:, :, 1].long()  # [N, width]
+    topk_vals_all = attention_edge[:, :, 2].float()  # [N, width]
+    self_mask = topk_idx_all == attention_edge[:, :, 0].long()
+    topk_vals_all = topk_vals_all.masked_fill(self_mask, float("-inf"))
 
-    # For each hit, keep the top beam_width forward neighbors among valid hits
-    k = min(beam_width, num_hits - 1)
-    att = attention_map.clone()
-    att.fill_diagonal_(float("-inf"))  # exclude self-pairs
+    # Select top-beam_width neighbors per hit
+    k = min(beam_width, attention_edge.shape[1])
+    _, top_pos = torch.topk(topk_vals_all, k, dim=1, largest=True, sorted=True)  # [N, k]
+    topk_idx = topk_idx_all.gather(1, top_pos)  # [N, k]
+    topk_vals = topk_vals_all.gather(1, top_pos)  # [N, k]
 
-    topk_vals, topk_idx = torch.topk(att, k, dim=1, largest=True, sorted=True)  # [N, k]
-    # Build dict: hit_i -> [[hit_j, score], ...], keeping only forward pairs among valid hits
-    row_idx = torch.arange(num_hits, device=att.device).unsqueeze(1)  # [N, 1]
-    valid_mask = valid_hits[topk_idx] & (topk_idx > row_idx)  # [N, k] — filter by hit score
+    # Build dict: hit_i -> [[hit_j, score], ...], keeping only forward pairs
+    row_idx = torch.arange(num_hits, device=device).unsqueeze(1)  # [N, 1]
+    valid_mask = topk_idx > row_idx  # [N, k]
 
     valid_mask_np = valid_mask.numpy()
     topk_idx_np = topk_idx.numpy()
@@ -410,13 +393,12 @@ def beam_search_seed_reconstruction(
     for r, n, s in zip(rows.tolist(), topk_idx_np[rows, cols_k].tolist(), topk_vals_np[rows, cols_k].tolist()):
         pairs_list[r].append((n, s))
 
-    score_mask = starting_mask & valid_hits
-    starting_index = torch.nonzero(score_mask, as_tuple=False).squeeze(1).tolist()
+    starting_index = torch.nonzero(starting_mask, as_tuple=False).squeeze(1).tolist()
 
     for start in starting_index:
         beam = [([start], 0.0)]  # list of (chain, cumulative_score)
         best_chain = None
-        best_score = float("-inf")
+        best_score = att_threshold
         len_chain = 1
         while len_chain < max_chain_length and beam:
             new_beam = []
@@ -444,10 +426,8 @@ def beam_search_seed_reconstruction(
 
 
 def batched_beam_search_seed_reconstruction(
-    attention_map: torch.Tensor,
-    hit_score: torch.Tensor,
+    attention_edge: torch.Tensor,
     valid_mask: torch.Tensor,
-    score_threshold: float = 0.01,
     att_threshold: float = 0.0,
     max_chain_length: int = 5,
     beam_width: int = 3,
@@ -458,11 +438,9 @@ def batched_beam_search_seed_reconstruction(
     This implementation process an entire event at a time, performing the beam search for all hits in all bins in parallel.
 
     Args:
-        attention_map:    [B, N, N] raw attention logits on device
-        hit_score:        [B, N, 1] per-hit scores
+        attention_edge:   [B, N, width, 3] top-k edge triplets (source, target, score) from forward()
         valid_mask:       [B, N] True = valid (not padded) hit
-        score_threshold:  minimum hit score to use a hit as chain source or destination
-        att_threshold:    minimum post-softmax attention value to consider an edge (default: 0.0)
+        att_threshold:    minimum attention score to consider an edge (default: 0.0)
         max_chain_length: maximum number of hits per chain
         beam_width:       number of beams per starting hit
         backward:         if True, chains extend to hits with smaller indices (backward mode);
@@ -475,33 +453,40 @@ def batched_beam_search_seed_reconstruction(
           - params         [B, N, 5]:               seed parameters (all zeros).
           - best_scores    [B, N]:                  best average edge score (-inf if no valid chain).
     """
-    device = attention_map.device
-    bin_nb = attention_map.size(0)  # B
-    hit_nb = attention_map.size(1)  # N
+    device = attention_edge.device
+    bin_nb = attention_edge.shape[0]  # B
+    hit_nb = attention_edge.shape[1]  # N
+    edge_width = attention_edge.shape[2]  # width
 
     if hit_nb < beam_width:
-        raise ValueError("hit_nb must be greater than beam_width for valid seed reconstruction.")
+        raise ValueError(f"hit_nb ({hit_nb}) must be >= beam_width ({beam_width})")
+
+    # Extract target indices and scores from triplets
+    raw_idx = attention_edge[..., 1].long()  # [B, N, width]
+    raw_vals = attention_edge[..., 2]  # [B, N, width]
 
     # Initialize a tensor with all the row indices
     row_idx = torch.arange(hit_nb, device=device)
 
-    # valid_full: hit must be valid (not padded) AND score >= threshold
-    valid_full = (hit_score.squeeze(-1) >= score_threshold) & valid_mask  # [B, N]
+    # valid_full: hit must be valid (not padded)
+    valid_full = valid_mask  # [B, N]
 
-    att = attention_map.float().clone()  # [B, N, N]
-    att = torch.softmax(att, dim=-1)
-
-    # Mask out same-side, invalid hits and attention bellow threshold.
-    # Forward: keep j > i (upper triangle). Backward: keep j < i (lower triangle).
+    # Direction mask: kill edges that go the wrong way
+    # Forward: keep j > i. Backward: keep j < i.
     if backward:
-        combined_mask = (row_idx.unsqueeze(0) >= row_idx.unsqueeze(1)).unsqueeze(0) | ~valid_full.unsqueeze(1)
+        dir_mask = raw_idx >= row_idx[None, :, None]  # kill j >= i
     else:
-        combined_mask = (row_idx.unsqueeze(0) <= row_idx.unsqueeze(1)).unsqueeze(0) | ~valid_full.unsqueeze(1)
+        dir_mask = raw_idx <= row_idx[None, :, None]  # kill j <= i
 
-    att.masked_fill_(combined_mask | (att < att_threshold), float("-inf"))
+    # Remove edge from padded hits, hits below score threshold, and edges that go the wrong way
+    b_exp = torch.arange(bin_nb, device=device)[:, None, None].expand_as(raw_idx)  # [B, N, width] for batch indexing
+    tgt_valid = valid_full[b_exp, raw_idx]  # [B, N, width]
+    raw_vals = raw_vals.masked_fill(dir_mask | ~tgt_valid | (raw_vals < att_threshold), float("-inf"))
 
-    # Collect for each hits the top-k neighbors and scores in one go
-    fwd_vals, fwd_idx = torch.topk(att, beam_width, dim=2, largest=True, sorted=True)  # [B, N, CL]
+    # Re-topk to enforce beam_width (clipped to available edge_width)
+    beam_width = min(beam_width, edge_width)
+    fwd_vals, top_pos = torch.topk(raw_vals, beam_width, dim=2, largest=True, sorted=True)
+    fwd_idx = raw_idx.gather(2, top_pos)  # [B, N, beam_width]
 
     # Store all the hit chain in one matrix of shape [B, N, BW, CL], initialized to -1 (invalid hit index)
     chains = torch.full((bin_nb, hit_nb, beam_width, max_chain_length), -1, dtype=torch.long, device=device)
@@ -509,8 +494,8 @@ def batched_beam_search_seed_reconstruction(
 
     # Initialise the current chain heads and cumulative scores
     heads = chains[:, :, :, 0].clone()  # [B, N, BW]
-    chain_scores = torch.zeros(bin_nb, hit_nb, beam_width, device=device, dtype=torch.float32)
-    chain_scores[~valid_full] = float("-inf")
+    chain_scores = torch.full((bin_nb, hit_nb, beam_width), float("-inf"), device=device, dtype=torch.float32)
+    chain_scores = chain_scores.masked_fill(valid_full.unsqueeze(-1), 0.0)
 
     # Initialise the best chain tracking tensors
     best_chains = chains[:, :, 0, :].clone()  # [B, N, CL]

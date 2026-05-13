@@ -5,7 +5,6 @@ import torch
 from GUNTAM.Seed.MonitoringPlot import (
     visualize_attention_map,
     create_seeding_performance_plots,
-    create_hit_score_plot,
     create_particle_reconstruction_comparison_plots,
     create_efficiency_vs_truth_param_plots,
     create_fake_rate_vs_truth_param_plots,
@@ -71,8 +70,6 @@ class PerformanceMonitor:
             "phi": [],
             "pt": [],
         }
-
-        self.hit_scores: dict[str, list[float]] = {"particle": [], "orphan": []}
 
         self.seed_scores: dict[str, list[float]] = {"good": [], "fake": []}
 
@@ -476,7 +473,6 @@ class PerformanceMonitor:
         event_particles,
         event_hit_to_particle,
         event_seeds,
-        event_hit_scores: Optional[List[Optional[np.ndarray]]] = None,
     ):
 
         event_particle_best_seeds: Dict[int, Dict[str, Any]] = {}
@@ -488,18 +484,6 @@ class PerformanceMonitor:
             hit_to_particle = event_hit_to_particle[bin_idx]
             seeds = event_seeds[bin_idx]
             self.total_seeds += len(seeds)
-
-            # --- Collect hit scores split by particle membership ---
-            if event_hit_scores is not None:
-                scores = event_hit_scores[bin_idx]
-                if scores is not None:
-                    htp = np.asarray(hit_to_particle).reshape(-1)[: len(scores)]
-                    for i, score in enumerate(scores):
-                        pid = int(htp[i]) if i < len(htp) else -1
-                        if pid >= 0:
-                            self.hit_scores["particle"].append(float(score))
-                        else:
-                            self.hit_scores["orphan"].append(float(score))
 
             # --- Build bin_particles dict ---
             bin_particles = self._build_bin_particles(particles, hit_to_particle)
@@ -634,7 +618,6 @@ class PerformanceMonitor:
                 "std_pure_efficiency_min3hits": np.std([b["pure_seeding_efficiency_min3hits"] for b in self.bin_summaries]),
             },
             "bin_complexity_analysis": self._analyze_bin_complexity(self.bin_summaries),
-            "hit_scores": self.hit_scores,
             "seed_scores": self.seed_scores,
         }
 
@@ -644,7 +627,6 @@ class PerformanceMonitor:
         # Plots
         if self.save_plots:
             create_seeding_performance_plots(performance_results, self.seed_errors, self.bin_summaries)
-            create_hit_score_plot(performance_results)
             if self.eligible_particles:
                 create_particle_reconstruction_comparison_plots(self.eligible_particles)
             try:
