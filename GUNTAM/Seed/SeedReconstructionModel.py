@@ -197,7 +197,7 @@ class SeedReconstructionModel(nn.Module):
     def forward(
         self,
         hits: Tensor,
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor]:
         """
         Forward pass of the full seed-reconstruction model.
         Args:
@@ -205,6 +205,7 @@ class SeedReconstructionModel(nn.Module):
         Returns:
             - seed_triplets (Tensor): Shape [S, max_seed_length] — the S seeds that were
               successfully reconstructed, each row containing original hit IDs.
+            - scores (Tensor): Shape [S] — score for each reconstructed seed.
         """
         binned_hits, padding_mask = self.bin_and_pad(hits)
         # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
