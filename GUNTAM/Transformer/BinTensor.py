@@ -1,5 +1,9 @@
+import math
+
 import pandas as pd
 import numpy as np
+import torch
+from torch import Tensor
 from typing import Tuple
 
 
@@ -10,7 +14,7 @@ def no_bin(
     No binning, return 0 for all the bins.
 
     Args:
-        values: DataFrame of shape [N] containing the values to bin.
+        values: DataFrame of shape [N, 1] containing the values to bin.
 
     Returns:
         Tuple of (binned dataframe with shape (N, 3), num_bins)
@@ -26,6 +30,25 @@ def no_bin(
         }
     )
     return bins_df, 1
+
+
+def no_bin_torch(
+    values: Tensor,
+) -> Tuple[Tensor, int]:
+    """
+    No binning, return 0 for all the bins.
+
+      Args:
+          values: Tensor of shape [N] or [N, 1] containing the values to bin.
+
+      Returns:
+          Tuple of (bins tensor of shape [N, 3] with dtype=torch.long, num_bins=1)
+    """
+
+    values = values.flatten()
+    N = values.shape[0]
+    bins = torch.zeros(N, 3, dtype=torch.long, device=values.device)
+    return bins, 1
 
 
 def global_bin(
@@ -64,6 +87,37 @@ def global_bin(
     return bins_df, num_bins
 
 
+def global_bin_torch(
+    values: Tensor,
+    bin_width: float,
+    value_range: Tuple[float, float],
+) -> Tuple[Tensor, int]:
+    """
+    Global binning of the detector.
+
+    Args:
+        values: Tensor of shape [N] or [N, 1] containing the values to bin.
+        bin_width: Width of each bin.
+        value_range: Tuple (min_value, max_value) defining the range of values.
+
+    Returns:
+        Tuple of (bins tensor of shape [N, 3] with dtype=torch.long, num_bins)
+    """
+    min_value, max_value = value_range
+    range_width = max_value - min_value
+
+    if range_width <= 0:
+        raise ValueError("max_value must be greater than min_value")
+    if bin_width <= 0:
+        raise ValueError("bin_width must be greater than 0")
+
+    values = values.flatten()
+    num_bins = int(math.ceil(range_width / bin_width))
+    primary = ((values - min_value) / bin_width).long().clamp(0, num_bins - 1)
+    bins = torch.stack([primary, primary, primary], dim=1)  # [N, 3]
+    return bins, num_bins
+
+
 def neighbor_bin(
     values: pd.DataFrame,
     bin_width: float,
@@ -89,6 +143,30 @@ def neighbor_bin(
     return bin, num_bins
 
 
+def neighbor_bin_torch(
+    values: Tensor,
+    bin_width: float,
+    value_range: Tuple[float, float],
+) -> Tuple[Tensor, int]:
+    """
+    Binning with neighboring bins. Each hit is also assigned to the bin immediately
+    before (bin0) and after (bin2) its primary bin, wrapping at the boundaries.
+
+    Args:
+        values: Tensor of shape [N] or [N, 1] containing the values to bin.
+        bin_width: Width of each bin.
+        value_range: Tuple (min_value, max_value) defining the range of values.
+
+    Returns:
+        Tuple of (bins tensor of shape [N, 3] with dtype=torch.long, num_bins)
+    """
+    bins, num_bins = global_bin_torch(values, bin_width, value_range)
+    primary = bins[:, 1]
+    bins[:, 0] = (primary - 1) % num_bins
+    bins[:, 2] = (primary + 1) % num_bins
+    return bins, num_bins
+
+
 def margin_bin(
     values: pd.DataFrame,
     bin_width: float,
@@ -98,7 +176,7 @@ def margin_bin(
     """
     Binning of the detector with margin. For each value, we compute the bin it falls into (bin1).
     If the value falls within margin of the start/end of the bin, we also include the neighboring bin:
-    bin0 if in the start margin and bin2 if in the end margin. This allows some redundancy and can help with edge cases.
+    bin0 if in the start margin and bin2 if in the end margin.
 
     Args:
         values: DataFrame of shape [N, 1] containing the values to bin.
@@ -109,7 +187,6 @@ def margin_bin(
     Returns:
         Tuple of (binned dataframe with shape (N, 3), num_bins)
     """
-
     if margin < 0 or margin >= bin_width / 2:
         raise ValueError("Margin must be non-negative and less than half of the bin width")
 
@@ -135,3 +212,39 @@ def margin_bin(
     bin.loc[in_end_margin, "bin2"] = (bin_indices[in_end_margin] + 1) % num_bins
 
     return bin, num_bins
+
+
+def margin_bin_torch(
+    values: Tensor,
+    bin_width: float,
+    margin: float,
+    value_range: Tuple[float, float],
+) -> Tuple[Tensor, int]:
+    """
+    Binning with margin. A hit is additionally assigned to the previous bin (bin0) if
+    it falls within `margin` of the bin's lower edge, or to the next bin (bin2) if it
+    falls within `margin` of the upper edge.
+
+    Args:
+        values: Tensor of shape [N] or [N, 1] containing the values to bin.
+        bin_width: Width of each bin.
+        margin: Distance from a bin edge within which the neighboring bin is also included.
+        value_range: Tuple (min_value, max_value) defining the range of values.
+
+    Returns:
+        Tuple of (bins tensor of shape [N, 3] with dtype=torch.long, num_bins)
+    """
+    if margin < 0 or margin >= bin_width / 2:
+        raise ValueError("Margin must be non-negative and less than half of the bin width")
+
+    min_value, _ = value_range
+    bins, num_bins = global_bin_torch(values, bin_width, value_range)
+    primary = bins[:, 1]
+
+    values_flat = values.flatten()
+    bin_starts = min_value + primary.float() * bin_width
+    position_in_bin = values_flat - bin_starts
+
+    bins[:, 0] = torch.where(position_in_bin < margin, (primary - 1) % num_bins, primary)
+    bins[:, 2] = torch.where(position_in_bin > (bin_width - margin), (primary + 1) % num_bins, primary)
+    return bins, num_bins
