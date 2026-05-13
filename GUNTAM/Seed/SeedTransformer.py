@@ -60,7 +60,7 @@ class SeedTransformer(nn.Module):
         self.fourier_encoding = FourierPositionalEncoding(
             input_dim=coord_dim,
             num_frequencies=self.cfg.fourier_num_frequencies,  # type: ignore[arg-type]
-            high_level_dim=high_level_dim,
+            high_level_dim=high_level_dim+8,  # Account for eta computed from z0 offsets
             dim_max=self.cfg.dim_max,
             shift=self.cfg.shift,
             device_acc=self.device_acc,
@@ -140,6 +140,13 @@ class SeedTransformer(nn.Module):
                 high_level = hits[..., self.cfg.high_level_features]  # Select high-level features (e.g., phi, eta)
         else:
             high_level = None
+
+        # Augment high_level with eta computed from different z0 offsets
+        z0_vals = torch.tensor([-200, -150.0, -100.0, -50.0, 50.0, 100.0, 150.0, 200], dtype=hits.dtype, device=hits.device)
+        r = hits[..., 3].unsqueeze(-1)  # [..., n_hits, 1]
+        dz = hits[..., 2].unsqueeze(-1) - z0_vals  # [..., n_hits, 6]
+        eta_z0 = torch.arctanh(dz / torch.sqrt(r ** 2 + dz ** 2))  # [..., n_hits, 6]
+        high_level = torch.cat([high_level, eta_z0], dim=-1) if high_level is not None else eta_z0
 
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
