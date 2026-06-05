@@ -585,6 +585,12 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
     # Perform binning and tensor preparation
     bins, nb_bins_max = _bin_data(data_batch, cfg)
 
+    # Sort hits by r before padding so that padding (r=0) is not sorted to the front
+    if "r" in data_batch.columns:
+        data_batch = data_batch.sort_values("r", ascending=True)
+        bins = bins.loc[data_batch.index].reset_index(drop=True)
+        data_batch = data_batch.reset_index(drop=True)
+
     # Add padding hits and corresponding bins to ensure consistent input size
     data_batch, bins = _add_padding(data_batch, bins, cfg)
 
