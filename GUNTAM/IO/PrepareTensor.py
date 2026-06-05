@@ -80,7 +80,7 @@ def _hit_selection(data_batch: pd.DataFrame, cfg) -> pd.DataFrame:
 
     Args:
         data_batch: DataFrame containing hit data.  Must have columns 'r' (transverse
-            radius) and 'z'.  Padding hits (particle_id == -2) are kept regardless.
+            radius) and 'z'.
         cfg: Configuration object with a ``hit_range`` attribute
             ``[R_max, Z_max]``.
 
@@ -88,12 +88,11 @@ def _hit_selection(data_batch: pd.DataFrame, cfg) -> pd.DataFrame:
         Filtered DataFrame with the index reset.
     """
     r_max, z_max = cfg.hit_range
-
-    # Keep padding hits (particle_id == -2) unconditionally
-    padding_mask = data_batch["particle_id"] == -2
     geometric_mask = (data_batch["r"] <= r_max) & (data_batch["z"].abs() <= z_max)
+    # Always keep empty hit (particle_id == -2) regardless of their geometric coordinates
+    empty_hit_mask = data_batch["particle_id"] == -2
 
-    return data_batch[padding_mask | geometric_mask].reset_index(drop=True)
+    return data_batch[geometric_mask | empty_hit_mask].reset_index(drop=True)
 
 
 def _build_good_pairs_tensors(
@@ -117,9 +116,10 @@ def _build_good_pairs_tensors(
         pv_weight: Weight applied to primary-vertex particle pairs.
         particles_batch: Optional DataFrame with columns 'event_id', 'particle_id', and 'z0' used to
             derive per-particle |z0| for bin-based weighting.
-        z0_weight_bin: Bin size for z0-based weighting. The z0 contribution is int(|z0| / z0_weight_bin),
-            added directly to the pair label: final_label = pv_label + int(|z0| / z0_weight_bin).
-            Set to 0 to disable (default).
+        z0_weight_bin: Bin size for z0-based weighting. The z0 contribution is 2**int(|z0| / z0_weight_bin) - 1,
+            added directly to the pair label: final_label = pv_label + 2**int(|z0| / z0_weight_bin) - 1.
+            Set to 0 to disable (default). With this formula a particle at weight bracket 0 contributes 0,
+            so the minimum label for a non-PV pair is 1 (unchanged).
     Returns:
         A PyTorch tensor of shape [num_events, num_bins, num_pairs, 3] where each pair is represented as
         (hit_idx1, hit_idx2, label) and label is 1 if the hits belong to the same particle.
@@ -132,7 +132,7 @@ def _build_good_pairs_tensors(
         for eid, pid, z0 in particles_batch[["event_id", "particle_id", "z0"]].to_numpy():
             abs_z0 = abs(float(z0))
             weight = int(abs_z0 / z0_weight_bin)
-            z0_lookup[(int(eid), int(pid))] = weight
+            z0_lookup[(int(eid), int(pid))] = 2**weight - 1
 
     unique_events = data_batch["event_id"].unique()
     unique_bins = bins["bin1"].unique()
@@ -164,8 +164,13 @@ def _build_good_pairs_tensors(
                 # Create masks for valid pairs
                 not_self_mask = i_indices != j_indices
                 same_particle_mask = bin_particle_ids[i_indices] == bin_particle_ids[j_indices]
-                # Exclude orphan hits (particle_id == -1) from pair construction
-                not_orphan_mask = (bin_particle_ids[i_indices] != -1) & (bin_particle_ids[j_indices] != -1)
+                # Exclude orphan hits (particle_id == -1) and empty hits (particle_id == -2) from regular pairs
+                not_orphan_mask = (
+                    (bin_particle_ids[i_indices] != -1)
+                    & (bin_particle_ids[j_indices] != -1)
+                    & (bin_particle_ids[i_indices] != -2)
+                    & (bin_particle_ids[j_indices] != -2)
+                )
                 valid_mask = not_self_mask & same_particle_mask & not_orphan_mask
 
                 # Get valid pair indices
@@ -194,6 +199,25 @@ def _build_good_pairs_tensors(
                     pairs = np.stack([i_valid, j_valid, labels], axis=1)
                 else:
                     pairs = np.empty((0, 3), dtype=np.int64)
+
+                # Add pairs from non-padded orphan hits to the empty hit (particle_id == -2)
+                empty_positions = np.where(bin_particle_ids == -2)[0]
+                if len(empty_positions) > 0:
+                    empty_pos = empty_positions[0]
+                    bin_is_padding = data_batch.loc[bin_hit_indices_array, "is_padding"].values
+
+                    orphan_positions = np.where((bin_particle_ids == -1) & (~bin_is_padding))[0]
+
+                    if len(orphan_positions) > 0:
+                        orphan_pairs = np.stack(
+                            [
+                                orphan_positions,
+                                np.full(len(orphan_positions), empty_pos, dtype=np.int64),
+                                np.ones(len(orphan_positions), dtype=np.int64),
+                            ],
+                            axis=1,
+                        )
+                        pairs = np.concatenate([pairs, orphan_pairs]) if len(pairs) > 0 else orphan_pairs
             else:
                 pairs = np.empty((0, 3), dtype=np.int64)
 
@@ -300,6 +324,7 @@ def _add_padding(
     data_batch: pd.DataFrame,
     bins: pd.DataFrame,
     cfg: PreprocessingConfig,
+    max_hits: int | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Add padding hits to the data batch and corresponding bins to ensure each event has a consistent
@@ -307,12 +332,15 @@ def _add_padding(
 
     Args:
         data_batch: DataFrame containing the hit data for a batch of events,
-            must have 'event_id' and 'is_padding' columns.
+            must have 'event_id' columns.
         bins: DataFrame containing the bin indices for each hit, must have 'bin0', 'bin1', 'bin2' columns.
         cfg: Configuration object containing parameters for max_hit_input.
+        max_hits: Target number of hits per bin. Defaults to cfg.max_hit_input when None.
     Returns:
         Tuple of (data_batch with padding hits added, bins with corresponding padding bins added)
     """
+    target_hits = max_hits if max_hits is not None else cfg.max_hit_input
+
     # Prepare the padding for each event
     print("    Preparing padding for events...")
     data_batch["is_padding"] = False
@@ -337,14 +365,14 @@ def _add_padding(
             bin_mask = global_bin_mask[bin_id] & event_mask
             hits_in_bin_ = data_batch[bin_mask]
             num_hits = len(hits_in_bin_)
-            # Remove excess hits if there are more than max_hit_input
-            if num_hits > cfg.max_hit_input:
+            # Remove excess hits if there are more than target_hits
+            if num_hits > target_hits:
                 # Too many hits - prioritize removing hits where bin1 != bin_id
                 bins_in_bin = bins.loc[hits_in_bin_.index]
                 primary_mask = bins_in_bin["bin1"] == bin_id
                 duplicate_indices = hits_in_bin_.index[~primary_mask].tolist()
 
-                hits_to_remove_count = num_hits - cfg.max_hit_input
+                hits_to_remove_count = num_hits - target_hits
 
                 # Remove from duplicates first (from the start)
                 if len(duplicate_indices) >= hits_to_remove_count:
@@ -367,9 +395,9 @@ def _add_padding(
                         f"Consider adjusting max_hit_input or binning strategy."
                     )
 
-            # Add padding if there are fewer than max_hit_input
-            elif num_hits < cfg.max_hit_input and num_hits > 0:
-                num_padding = cfg.max_hit_input - num_hits
+            # Add padding if there are fewer than target_hits
+            elif num_hits < target_hits and num_hits > 0:
+                num_padding = target_hits - num_hits
                 # Create padding entries with same structure as data
                 for _ in range(num_padding):
                     # Create padding data row
@@ -400,6 +428,62 @@ def _add_padding(
     return data_batch, bins
 
 
+def _add_empty_hit(
+    data_batch: pd.DataFrame,
+    bins: pd.DataFrame,
+    hit_to_particle: pd.Series,
+    num_bins: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
+    """
+    Prepend one all-zeros empty hit (particle_id = -2) at position 0 of every bin for every event.
+
+    The empty hit serves as an anchor: non-padded orphan hits will be paired with it during pair
+    construction. It is distinct from padding (particle_id = -1) so it can be identified
+    unambiguously later.
+
+    Args:
+        data_batch: DataFrame with hit data, must have 'event_id' and 'is_padding' columns.
+        bins: DataFrame with 'bin0', 'bin1', 'bin2' columns, aligned with data_batch.
+        hit_to_particle: Series mapping each hit (same index as data_batch) to its particle_id.
+        num_bins: Total number of bins.
+
+    Returns:
+        Tuple of (data_batch, bins, hit_to_particle) with empty hits prepended.
+    """
+    print("    Adding empty hits at the start of each bin...")
+    unique_events = sorted(data_batch["event_id"].unique())
+
+    empty_data_rows = []
+    empty_bin_rows = []
+
+    for event_id in unique_events:
+        for bin_id in range(num_bins):
+            empty_row = {col: 0 for col in data_batch.columns}
+            empty_row["event_id"] = event_id
+            empty_row["particle_id"] = -2
+            empty_row["is_padding"] = False
+            empty_data_rows.append(empty_row)
+            empty_bin_rows.append({"bin0": bin_id, "bin1": bin_id, "bin2": bin_id})
+
+    num_empty = len(empty_data_rows)
+    empty_data_df = pd.DataFrame(empty_data_rows)
+    empty_bins_df = pd.DataFrame(empty_bin_rows)
+
+    # Prepend empty hits so they occupy position 0 inside each bin slice
+    data_batch = pd.concat([empty_data_df, data_batch], ignore_index=True)
+    bins = pd.concat([empty_bins_df, bins], ignore_index=True)
+
+    new_h2p_values = np.concatenate(
+        [
+            np.full(num_empty, -2, dtype=np.asarray(hit_to_particle.values).dtype),
+            hit_to_particle.values,
+        ]
+    )
+    hit_to_particle = pd.Series(new_h2p_values, index=range(len(new_h2p_values)))
+
+    return data_batch, bins, hit_to_particle
+
+
 def _create_padding_mask(
     data_batch: pd.DataFrame,
     bins: pd.DataFrame,
@@ -417,8 +501,9 @@ def _create_padding_mask(
         num_bins: Total number of bins used in the binning strategy.
         cfg: Configuration object containing parameters for max_hit_input.
     Returns:
-        Padding mask tensor of shape [num_events, num_bins, max_hit_input]
-        where True indicates padding positions.
+        data_batch : input DataFrame with 'is_padding' removed
+        padding_mask: tensor of shape [num_events, num_bins, max_hit_input]
+            where True indicates padding positions.
     """
     unique_bins = bins["bin1"].unique()
     unique_events = data_batch["event_id"].unique()
@@ -454,8 +539,6 @@ def _create_padding_mask(
             elif num_real_hits < cfg.max_hit_input:
                 # Create mask: True if position >= num_real_hits
                 padding_mask[event_idx, bin_id, num_real_hits:] = True
-
-    data_batch = data_batch.drop(columns=["is_padding"])
 
     return data_batch, padding_mask
 
@@ -585,11 +668,9 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
     # Perform binning and tensor preparation
     bins, nb_bins_max = _bin_data(data_batch, cfg)
 
-    # Add padding hits and corresponding bins to ensure consistent input size
-    data_batch, bins = _add_padding(data_batch, bins, cfg)
-
-    # Create the padding mask tensor for this batch
-    data_batch, padding_mask = _create_padding_mask(data_batch, bins, nb_bins_max, cfg)
+    # Add padding hits to fill bins up to max_hit_input (reserve slot 0 for empty hit when enabled)
+    padding_max = cfg.max_hit_input - 1 if cfg.orphan_target else cfg.max_hit_input
+    data_batch, bins = _add_padding(data_batch, bins, cfg, max_hits=padding_max)
 
     # Create the hit_to_particle mapping for this batch (after all reordering)
     hit_to_particle = data_batch["particle_id"].copy()
@@ -598,6 +679,13 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
     data_batch, particles_batch, bins, hit_to_particle = _particle_selection(
         data_batch, particles_batch, bins, hit_to_particle, cfg
     )
+
+    # Prepend one all-zeros empty hit (particle_id = -2) at position 0 of every bin
+    if cfg.orphan_target:
+        data_batch, bins, hit_to_particle = _add_empty_hit(data_batch, bins, hit_to_particle, nb_bins_max)
+
+    # Create the padding mask tensor for this batch (after empty hits are inserted)
+    data_batch, padding_mask = _create_padding_mask(data_batch, bins, nb_bins_max, cfg)
 
     # Create the good pairs tensor for this batch
     good_pairs = _build_good_pairs_tensors(
@@ -610,7 +698,7 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
         z0_weight_bin=cfg.z0_weight_bin,
     )
 
-    data_batch = data_batch.drop(columns=["particle_id_pv"], errors="ignore")
+    data_batch = data_batch.drop(columns=["is_padding", "particle_id_pv"], errors="ignore")
 
     # Convert to tensors
     hits_tensor, particles_tensor, hit_to_particle_tensor = _to_tensor(

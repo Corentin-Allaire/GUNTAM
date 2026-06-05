@@ -147,12 +147,12 @@ class TestBuildGoodPairsTensors:
         assert len(non_zero_pairs) > 0  # Should have at least one positive pair
 
     def test_z0_weight_no_brackets_below_threshold(self):
-        """With default z0_weight_bin=1000 (=Z_max), all accepted particles (|z0|<200 from vertex cuts) get label 1."""
+        """With z0_weight_bin=1000, int(|z0|/1000)=0 -> 2**0-1=0, so label = base(1) + 0 = 1."""
         data_batch, bins, hit_to_particle = self._make_base()
         particles_batch = pd.DataFrame({
             "event_id": [0, 0],
             "particle_id": [0, 1],
-            "z0": [30.0, 175.0],  # both within vertex cuts -> int(|z0|/1000)=0 -> label 1
+            "z0": [30.0, 175.0],  # int(|z0|/1000)=0 -> 2**0-1=0 -> label 1+0=1
         })
         result = _build_good_pairs_tensors(
             data_batch, bins, hit_to_particle, num_bins=1,
@@ -165,7 +165,7 @@ class TestBuildGoodPairsTensors:
         assert (non_zero == 1).all()
 
     def test_z0_weight_first_bracket(self):
-        """Particles with 50 <= |z0| < 100 get label 2: base(1) + int(75/50)=1 = 2."""
+        """Particles with 50 <= |z0| < 100: int(75/50)=1 -> 2**1-1=1, label = base(1) + 1 = 2."""
         data_batch, bins, hit_to_particle = self._make_base()
         particles_batch = pd.DataFrame({
             "event_id": [0, 0],
@@ -183,7 +183,7 @@ class TestBuildGoodPairsTensors:
         assert (non_zero == 2).all()
 
     def test_z0_weight_second_bracket(self):
-        """Particles with 100 <= |z0| < 150 get label 3: base(1) + int(120/50)=2 = 3."""
+        """Particles with 100 <= |z0| < 150: int(120/50)=2 -> 2**2-1=3, label = base(1) + 3 = 4."""
         data_batch, bins, hit_to_particle = self._make_base()
         particles_batch = pd.DataFrame({
             "event_id": [0, 0],
@@ -198,10 +198,10 @@ class TestBuildGoodPairsTensors:
         )
         labels = result[0, 0, :, 2]
         non_zero = labels[labels > 0]
-        assert (non_zero == 3).all()
+        assert (non_zero == 4).all()
 
     def test_z0_weight_third_bracket(self):
-        """Particles with 150 <= |z0| < 200 get label 4: base(1) + int(175/50)=3 = 4."""
+        """Particles with 150 <= |z0| < 200: int(175/50)=3 -> 2**3-1=7, label = base(1) + 7 = 8."""
         data_batch, bins, hit_to_particle = self._make_base()
         particles_batch = pd.DataFrame({
             "event_id": [0, 0],
@@ -216,10 +216,10 @@ class TestBuildGoodPairsTensors:
         )
         labels = result[0, 0, :, 2]
         non_zero = labels[labels > 0]
-        assert (non_zero == 4).all()
+        assert (non_zero == 8).all()
 
     def test_z0_weight_pv_and_z0_are_summed(self):
-        """pv_label + z0_label = 10 + int(120/50)=2 = 12: both weights are summed for overlapping class."""
+        """pv_label + z0_label = 10 + (2**int(120/50) - 1) = 10 + (2**2 - 1) = 10 + 3 = 13."""
         data_batch = pd.DataFrame({
             "event_id": [0, 0],
             "particle_id": [0, 0],
@@ -230,7 +230,7 @@ class TestBuildGoodPairsTensors:
         particles_batch = pd.DataFrame({
             "event_id": [0],
             "particle_id": [0],
-            "z0": [120.0],  # int(120/50)=2: pv_weight(10) + 2 = 12
+            "z0": [120.0],  # int(120/50)=2 -> 2**2-1=3: pv_weight(10) + 3 = 13
         })
         result = _build_good_pairs_tensors(
             data_batch, bins, hit_to_particle, num_bins=1,
@@ -240,10 +240,10 @@ class TestBuildGoodPairsTensors:
         )
         labels = result[0, 0, :, 2]
         non_zero = labels[labels > 0]
-        assert (non_zero == 12).all()
+        assert (non_zero == 13).all()
 
     def test_z0_weight_z0_added_to_non_pv(self):
-        """pv_label(1) + z0_label(int(120/50)=2) = 3: z0 weight is added for non-PV displaced particle."""
+        """Non-PV: base(1) + (2**int(120/50) - 1) = 1 + (2**2 - 1) = 1 + 3 = 4."""
         data_batch = pd.DataFrame({
             "event_id": [0, 0],
             "particle_id": [0, 0],
@@ -254,7 +254,7 @@ class TestBuildGoodPairsTensors:
         particles_batch = pd.DataFrame({
             "event_id": [0],
             "particle_id": [0],
-            "z0": [120.0],  # int(120/50)=2
+            "z0": [120.0],  # int(120/50)=2 -> 2**2-1=3
         })
         result = _build_good_pairs_tensors(
             data_batch, bins, hit_to_particle, num_bins=1,
@@ -264,7 +264,7 @@ class TestBuildGoodPairsTensors:
         )
         labels = result[0, 0, :, 2]
         non_zero = labels[labels > 0]
-        assert (non_zero == 3).all()
+        assert (non_zero == 4).all()
 
     def test_z0_weight_none_is_backward_compatible(self):
         """z0_weight_bin=0 explicitly disables z0 weighting; z0_weight_bin=1000 (default) also gives label 1 for typical z0."""

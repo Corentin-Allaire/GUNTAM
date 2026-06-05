@@ -69,6 +69,9 @@ class PreprocessingConfig:
         # z0-based pair weight bin size: weight = int(|z0| / z0_weight_bin) + 1. 0 disables z0 weighting.
         self.z0_weight_bin = 0
 
+        # Orphan target hit
+        self.orphan_target = False
+
         # Parallelism
         self.num_workers = 1  # Number of parallel worker processes for batch processing
 
@@ -183,6 +186,14 @@ class PreprocessingConfig:
             help="Cuts on R and Z for hit selection [R_max, Z_max]",
         )
 
+        # Orphan target hit
+        parser.add_argument(
+            "--orphan_target",
+            action=argparse.BooleanOptionalAction,
+            default=self.orphan_target,
+            help="Prepend an all-zeros hit (particle_id=-2) at position 0 of every bin as a target for orphan hits",
+        )
+
         # Parallelism
         parser.add_argument(
             "--num_workers",
@@ -252,6 +263,7 @@ class PreprocessingConfig:
         self.num_workers = args.num_workers
         self.pv_pair_weight = args.pv_pair_weight
         self.z0_weight_bin = args.z0_weight_bin
+        self.orphan_target = args.orphan_target
 
         # Validate orphan_hit_fraction range
         if self.orphan_hit_fraction < 0.0 or self.orphan_hit_fraction > 1.0:
