@@ -95,8 +95,11 @@ jobs:
       - name: Ensure deps
         run: pdm install
 
+      - name: Run onnx integration tests
+        run: pdm run pytest tests/test_integration/test_onnx_full_model.py
+
       - name: Run integration tests
-        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=xml
+        run: pdm run pytest --cov=GUNTAM --ignore=tests/test_integration/test_onnx_full_model --cov-branch --cov-report=xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
