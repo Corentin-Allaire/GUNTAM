@@ -674,6 +674,10 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
         bins = bins.loc[data_batch.index].reset_index(drop=True)
         data_batch = data_batch.reset_index(drop=True)
 
+    # Add padding hits to fill bins up to max_hit_input (reserve slot 0 for empty hit when enabled)
+    padding_max = cfg.max_hit_input - 1 if cfg.orphan_target else cfg.max_hit_input
+    data_batch, bins = _add_padding(data_batch, bins, cfg, max_hits=padding_max)
+
     # Create the hit_to_particle mapping for this batch (after all reordering)
     hit_to_particle = data_batch["particle_id"].copy()
 
