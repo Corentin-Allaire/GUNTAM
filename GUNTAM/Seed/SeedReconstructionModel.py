@@ -78,8 +78,8 @@ class SeedReconstructionModel(nn.Module):
         # Build augmented hit matrix with columns (x, y, z, r, phi, eta, orig_idx)
         hits_matrix = torch.stack([x, y, z, R, phi, eta, orig_idx], dim=1)  # [N, 7]
 
-        # Sort hits by r ascending so that hits within each bin are radially ordered
-        sort_order = torch.argsort(hits_matrix[:, 3])
+        # Sort hits by R+rho ascending so that hits within each bin are radially ordered
+        sort_order = torch.argsort(R + rho)
         hits_matrix = hits_matrix[sort_order]
 
         bin_width = self.cfg.preprocessing_config.bin_width
@@ -108,51 +108,48 @@ class SeedReconstructionModel(nn.Module):
         b2 = bins_t[:, 2]
 
         if strategy in ("no_bin", "global"):
-            # All three columns are identical — each hit belongs to exactly one bin
             bins_u = b1
             hit_pos_u = pos_idx
+            is_secondary = torch.zeros(N, device=device, dtype=torch.long)
         elif strategy == "neighbor":
-            # b0, b1, b2 are always three distinct bins — no duplicates possible
             bins_u = torch.cat([b0, b1, b2])
             hit_pos_u = pos_idx.repeat(3)
-            # Sort by (bin, is_secondary, pos): primary hits (b1 == bin) fill first,
-            is_secondary = (b1[hit_pos_u] != bins_u).long()  # 0 = primary, 1 = guest
-            order = torch.argsort(bins_u * (2 * N) + is_secondary * N + hit_pos_u)
-            bins_u = bins_u[order]
-            hit_pos_u = hit_pos_u[order]
-        else:
-            # margin: hits near bin edges get an extra neighbor assignment → dedup needed
+            is_secondary = (b1[hit_pos_u] != bins_u).long()  # 0 = primary, 1 = neighbor
+        else:  # margin: hits near bin edges get an extra neighbor assignment → dedup needed
             pairs = torch.stack([torch.cat([b0, b1, b2]), pos_idx.repeat(3)], dim=1)  # [3N, 2]
             pairs = torch.unique(pairs, dim=0)  # sorts lexicographically, removing duplicates
             bins_u = pairs[:, 0]
             hit_pos_u = pairs[:, 1]
-            # Same priority ordering: primary hits first, margin guests after
-            is_secondary = (b1[hit_pos_u] != bins_u).long()  # 0 = primary, 1 = guest
-            order = torch.argsort(bins_u * (2 * N) + is_secondary * N + hit_pos_u)
-            bins_u = bins_u[order]
-            hit_pos_u = hit_pos_u[order]
+            is_secondary = (b1[hit_pos_u] != bins_u).long()  # 0 = primary, 1 = neighbor
 
-        # Compute the number of hits per bin
+        # Sort by (bin, is_secondary, hit_pos): primaries fill slots before neighbors on overflow;
+        # bins_u is non-decreasing after this step.
+        order = torch.argsort(bins_u * (2 * N) + is_secondary * N + hit_pos_u)
+        bins_u = bins_u[order]
+        hit_pos_u = hit_pos_u[order]
+
+        # Compute the position of each hit within its assigned bin using searchsorted 
         M = bins_u.shape[0]
-        arange_m = torch.arange(M, device=device, dtype=torch.long)
-        bin_counts = torch.zeros(num_bins, device=device, dtype=torch.long).scatter_add(
-            0, bins_u, torch.ones(M, device=device, dtype=torch.long)
-        )  # [num_bins] — number of elements per bin
-        bin_starts = torch.cat(
-            [
-                torch.zeros(1, device=device, dtype=torch.long),
-                bin_counts[:-1].cumsum(0),
-            ]
-        )  # [num_bins] — start index of each bin in the sorted bins_u array
-        offset_in_bin = arange_m - bin_starts[bins_u]  # [M]
+        offset_in_bin = torch.arange(M, device=device, dtype=torch.long) - torch.searchsorted(bins_u, bins_u)
+        valid = offset_in_bin < max_hits
 
-        # Allocate output tensors (mask: True = padding, False = valid hit)
+        # Keep only the hits that fit within the max_hits limit per bin
+        bins_v = bins_u[valid]
+        hit_pos_v = hit_pos_u[valid]
+
+        # Re-sort survivors by (bin, hit_pos) to restore the order within each bin
+        reorder = torch.argsort(bins_v * N + hit_pos_v)
+        bins_v = bins_v[reorder]
+        hit_pos_v = hit_pos_v[reorder]
+
+        # Compute the position of each hit within its assigned bin again after filtering and reordering
+        M_v = bins_v.shape[0]
+        offset_v = torch.arange(M_v, device=device, dtype=torch.long) - torch.searchsorted(bins_v, bins_v)
+
         binned = torch.zeros(num_bins, max_hits, 7, device=device, dtype=dtype)
         mask = torch.ones(num_bins, max_hits, 1, device=device, dtype=torch.bool)
-
-        valid = offset_in_bin < max_hits
-        binned[bins_u[valid], offset_in_bin[valid]] = hits_matrix[hit_pos_u[valid]]
-        mask[bins_u[valid], offset_in_bin[valid], 0] = False
+        binned[bins_v, offset_v] = hits_matrix[hit_pos_v]
+        mask[bins_v, offset_v, 0] = False
 
         return binned, mask
 
