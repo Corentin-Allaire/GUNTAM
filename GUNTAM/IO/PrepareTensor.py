@@ -673,7 +673,7 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
         data_batch = data_batch.sort_values("r", ascending=True)
         bins = bins.loc[data_batch.index].reset_index(drop=True)
         data_batch = data_batch.reset_index(drop=True)
-    
+
     # Create the hit_to_particle mapping for this batch (after all reordering)
     hit_to_particle = data_batch["particle_id"].copy()
 
