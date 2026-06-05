@@ -149,38 +149,41 @@ def _run_inference(ort_session, sp: "pd.DataFrame"):
     return seeds, seed_scores
 
 
+@pytest.fixture(scope="module")
+def inference_results(ort_session, event0):
+    """Run inference once and share the results across all tests in the module."""
+    sp, _ = event0
+    return _run_inference(ort_session, sp)
+
+
 class TestOnnxFullModel:
     def test_model_file_exists(self):
         assert PT_MODEL.exists(), f"transformer.pt not found at {PT_MODEL}"
 
-    def test_output_shape(self, ort_session, event0):
+    def test_output_shape(self, event0, inference_results):
         """Seeds tensor must be 2-D and scores 1-D with matching first dimension."""
-        sp, _ = event0
-        seeds, seed_scores = _run_inference(ort_session, sp)
+        seeds, seed_scores = inference_results
 
         assert seeds.ndim == 2, f"Expected 2-D seeds output, got shape {seeds.shape}"
         assert seeds.shape[1] >= 2, "Seed length must be ≥ 2"
         assert seed_scores.ndim == 1, f"Expected 1-D seed_scores, got shape {seed_scores.shape}"
         assert seed_scores.shape[0] == seeds.shape[0], "seeds and seed_scores must have the same length"
 
-    def test_seed_indices_in_range(self, ort_session, event0):
+    def test_seed_indices_in_range(self, event0, inference_results):
         """Every non-negative index in the seed output must be a valid space-point index."""
         sp, _ = event0
-        N = len(sp)
-
-        seeds, _ = _run_inference(ort_session, sp)
+        seeds, _ = inference_results
 
         valid_indices = seeds[seeds >= 0]
-        assert valid_indices.max() < N, (
-            f"Seed index {valid_indices.max()} out of range for {N} space points"
+        assert valid_indices.max() < len(sp), (
+            f"Seed index {valid_indices.max()} out of range for {len(sp)} space points"
         )
 
-    def test_seeding_efficiency(self, ort_session, event0):
+    def test_seeding_efficiency(self, event0, inference_results):
         """Compute efficiency and assert a non-trivial lower bound."""
         sp, particles = event0
         pid_array = sp["particle_id"].to_numpy()
-
-        seeds, _ = _run_inference(ort_session, sp)
+        seeds, _ = inference_results
 
         seeded_particles: set = set()
         for seed in seeds:
@@ -195,12 +198,11 @@ class TestOnnxFullModel:
         assert total_particles > 0, "No particles found in event 0"
         assert efficiency >= 0.0  # Tighten once a baseline is established.
 
-    def test_fake_rate(self, ort_session, event0):
+    def test_fake_rate(self, event0, inference_results):
         """Compute fake rate (seeds whose majority particle is ambiguous or absent)."""
         sp, _ = event0
         pid_array = sp["particle_id"].to_numpy()
-
-        seeds, _ = _run_inference(ort_session, sp)
+        seeds, _ = inference_results
 
         fake_count = 0
         for seed in seeds:
@@ -225,14 +227,13 @@ class TestOnnxFullModel:
         assert total_seeds > 0, "No seeds produced"
         assert fake_rate <= 1.0  # Tighten once a baseline is established.
 
-    def test_efficiency_and_fake_rate_with_score_threshold(self, ort_session, event0):
+    def test_efficiency_and_fake_rate_with_score_threshold(self, event0, inference_results):
         """Efficiency and fake rate after applying a score threshold of 0.4 on seeds."""
         sp, particles = event0
         pid_array = sp["particle_id"].to_numpy()
         score_threshold = 0.4
 
-        seeds, seed_scores = _run_inference(ort_session, sp)
-
+        seeds, seed_scores = inference_results
         keep = seed_scores >= score_threshold
         seeds_filtered = seeds[keep]
 
