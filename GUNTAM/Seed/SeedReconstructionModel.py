@@ -128,9 +128,12 @@ class SeedReconstructionModel(nn.Module):
         bins_u = bins_u[order]
         hit_pos_u = hit_pos_u[order]
 
-        # Compute the position of each hit within its assigned bin using searchsorted
+        # Compute the position of each hit within its assigned bin
         M = bins_u.shape[0]
-        offset_in_bin = torch.arange(M, device=device, dtype=torch.long) - torch.searchsorted(bins_u, bins_u)
+        _is_new_u = torch.cat([bins_u.new_ones(1, dtype=torch.bool), bins_u[1:] != bins_u[:-1]])
+        _bin_rank_u = torch.cumsum(_is_new_u.long(), dim=0) - 1  # 0-based bin index per element
+        _first_starts_u = torch.arange(M, device=device, dtype=torch.long)[_is_new_u]  # start pos of each bin
+        offset_in_bin = torch.arange(M, device=device, dtype=torch.long) - _first_starts_u[_bin_rank_u]
         valid = offset_in_bin < max_hits
 
         # Keep only the hits that fit within the max_hits limit per bin
@@ -144,7 +147,10 @@ class SeedReconstructionModel(nn.Module):
 
         # Compute the position of each hit within its assigned bin again after filtering and reordering
         M_v = bins_v.shape[0]
-        offset_v = torch.arange(M_v, device=device, dtype=torch.long) - torch.searchsorted(bins_v, bins_v)
+        _is_new_v = torch.cat([bins_v.new_ones(1, dtype=torch.bool), bins_v[1:] != bins_v[:-1]])
+        _bin_rank_v = torch.cumsum(_is_new_v.long(), dim=0) - 1
+        _first_starts_v = torch.arange(M_v, device=device, dtype=torch.long)[_is_new_v]
+        offset_v = torch.arange(M_v, device=device, dtype=torch.long) - _first_starts_v[_bin_rank_v]
 
         binned = torch.zeros(num_bins, max_hits, 7, device=device, dtype=dtype)
         mask = torch.ones(num_bins, max_hits, 1, device=device, dtype=torch.bool)
