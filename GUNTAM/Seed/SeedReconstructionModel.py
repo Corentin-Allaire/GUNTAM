@@ -128,7 +128,7 @@ class SeedReconstructionModel(nn.Module):
         bins_u = bins_u[order]
         hit_pos_u = hit_pos_u[order]
 
-        # Compute the position of each hit within its assigned bin using searchsorted 
+        # Compute the position of each hit within its assigned bin using searchsorted
         M = bins_u.shape[0]
         offset_in_bin = torch.arange(M, device=device, dtype=torch.long) - torch.searchsorted(bins_u, bins_u)
         valid = offset_in_bin < max_hits
