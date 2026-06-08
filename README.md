@@ -7,7 +7,8 @@ In particular, it focuses on charged particle tracking, integrating with the dat
 
 For more information, you can refer to the presentation in the Connecting the Dots 2025 conference and the associated proceedings: https://indico.cern.ch/event/1499357/contributions/6628608/ 
 
-<img width="1086" height="622" alt="GUNTAM" src="[GUNTAM.pdf](https://github.com/user-attachments/files/28701286/GUNTAM.pdf)" />
+<img width="567" height="482" alt="GUNTAM" src="https://github.com/user-attachments/assets/3f0df579-06b9-4dae-8b0e-73ba51442dc7" />
+
 
 ## Installation 
 
