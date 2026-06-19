@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-
 def load_state_dict_flex(model: torch.nn.Module, raw_state_dict: Dict[str, Any], desc: str = "model") -> None:
     """
     Attempt to load a raw state_dict handling compile / DP prefixes.
@@ -58,13 +57,12 @@ def _normalize_state_dict_keys(state_dict: Dict[str, Any]) -> Dict[str, Any]:
     return state_dict
 
 
-def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
-    """Scaled dot-product attention mechanism.
+def manual_attention(q: Tensor, k: Tensor, mask: Optional[Tensor] = None) -> Tensor:
+    """Compute the attention matrix manually 
 
     Args:
           q: Query tensor of shape (batch_size, num_heads, seq_len, d_k)
           k: Key tensor of shape (batch_size, num_heads, seq_len, d_k)
-          v: Value tensor of shape (batch_size, num_heads, seq_len, d_v)
           mask: Optional mask tensor of shape (batch_size, num_heads, seq_len, seq_len)
 
     Returns:
@@ -78,9 +76,25 @@ def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: O
     if mask is not None:
         scores = scores.masked_fill(mask, float("-inf"))
 
+    return scores
+
+def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+    """Scaled dot-product attention mechanism.
+
+    Args:
+          q: Query tensor of shape (batch_size, num_heads, seq_len, d_k)
+          k: Key tensor of shape (batch_size, num_heads, seq_len, d_k)
+          v: Value tensor of shape (batch_size, num_heads, seq_len, d_v)
+          mask: Optional mask tensor of shape (batch_size, num_heads, seq_len, seq_len)
+
+    Returns:
+        Tuple of (output tensor, attention weights matrix on the last attention layer (after softmax))
+    """
+
+    scores = manual_attention(q, k, mask)
     score = F.softmax(scores, dim=-1)
     output = torch.matmul(score, v)
-    return output, scores
+    return output, score
 
 
 class MultiHeadAttention(nn.Module):
@@ -126,6 +140,49 @@ class MultiHeadAttention(nn.Module):
         self.qkv_linear = nn.Linear(self.input_dim, self.model_dim * 3, device=device)
         self.dropout = nn.Dropout(dropout)
         self.out_linear = nn.Linear(self.model_dim, self.input_dim, device=device)
+
+    def compute_attention(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor | None]:
+        """Compute attention matrix for the last layer of transformer
+
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, d_model)
+            mask: Optional mask tensor of shape (batch_size, seq_len, seq_len)
+
+        Returns:
+            Attention weights of shape (batch_size, num_heads, seq_len, seq_len)
+                or None if use_pytorch=True
+        """
+        batch_size = x.size(0)
+        if x.size(-1) != self.input_dim:
+            raise ValueError(
+                f"Input tensor dimension must be the same as the transformer dim: {self.input_dim}, got {x.size(-1)}"
+            )
+
+        if mask is not None:
+            if mask.dim() == 2:
+                key_mask = mask.unsqueeze(1).unsqueeze(2)
+            elif mask.dim() == 3:
+                key_mask = mask.unsqueeze(1)
+                if torch.any(torch.all(key_mask, dim=-1)):
+                    raise ValueError("All positions are masked for at least one query position.")
+            else:
+                raise ValueError(
+                    "Mask tensor must have 2 or 3 dimensions (batch_size, seq_len) or (batch_size, seq_len, seq_len)"
+                )
+        else:
+            key_mask = None
+
+        # Use manual multi-head attention with same q/k/v shapes as PyTorch path
+        qkv = self.qkv_linear(x)
+        # (batch_size, seq_len, 3 * model_dim)
+        qkv = qkv.view(batch_size, -1, self.num_heads, 3 * self.head_dim)
+        # (batch_size, seq_len, num_heads, 3 * head_dim)
+        q, k, _ = qkv.transpose(1, 2).chunk(3, dim=-1)
+
+        attn_weights = manual_attention(q, k, key_mask)
+
+        return attn_weights
+
 
     def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor | None]:
         """Forward pass through multi-head attention layer.
@@ -196,8 +253,8 @@ class MultiHeadAttention(nn.Module):
             attn_output, attn_weights = manual_scaled_dot_product_attention(q, k, v, key_mask)
 
             # If multiple heads, extracting the attention weights doesn't make sense
-            if self.num_heads > 1:
-                attn_weights = None
+            # if self.num_heads > 1:
+            #     attn_weights = attn_weights.mean(dim=1, keepdim=True)  # average over heads
 
             # Concatenate heads back: (batch_size, seq_len, model_dim)
             output = attn_output.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
@@ -450,6 +507,39 @@ class TransformerEncoder(nn.Module):
             x_layer = layer(x_layer, mask)
 
         return x_layer
+
+    # def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
+    #     """
+    #     Forward pass through the transformer encoder layer.
+    #     Args:
+    #         x (Tensor): Input tensor of shape (batch_size, seq_len, d_model).
+    #         mask (Tensor): Optional mask tensor of shape (batch_size, seq_len).
+    #     Returns:
+    #         Tensor: Output tensor of shape (batch_size, seq_len, d_model).
+    #     """
+    #     from GUNTAM.Seed.MonitoringPlot import visualize_attention_map
+    #
+    #     x_layer = x
+    #     layer_idx = 0
+    #     for layer in self.layers:
+    #         x_layer, attn_weights = layer.encode(x_layer, mask)
+    #         if attn_weights is not None:
+    #             att = torch.softmax(attn_weights, dim=-1)
+    #             # att = att.mean(dim=1, keepdim=True)  # average over heads
+    #             att = att.max(dim=1, keepdim=True).values
+    #             aw = att[55, 0].detach().cpu().float().numpy()
+    #             n = aw.shape[0]
+    #             visualize_attention_map(
+    #                 attention_weights=aw,
+    #                 pair_info={},
+    #                 valid_hits=np.arange(n),
+    #                 event_idx=0,
+    #                 bin_idx=layer_idx,
+    #                 max_hits=600,
+    #             )
+    #         layer_idx += 1
+
+    #     return x_layer
 
     def _init_weights(self) -> None:
         """

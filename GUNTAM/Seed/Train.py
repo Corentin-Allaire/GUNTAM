@@ -300,7 +300,7 @@ def run_model(
         - attention_maps: per-bin np.ndarray[num_valid_hits, num_valid_hits] used for seeding, or None.
     """
     reco_width = 5  # max hits per seed (fixed for now, could be dynamic in the future)
-    seed_score_threshold = 0.4  # minimum score for a seed to be considered valid (tunable)
+    seed_score_threshold = 15  # minimum score for a seed to be considered valid (tunable)
     att_threshold = 0.2  # minimum attention score to consider an edge for seeding (tunable)
 
     event_duration = 0.0
@@ -430,6 +430,8 @@ def main():
     """
     Main function to run the training of the transformer model for seed reconstruction
     """
+    # torch.set_num_threads(1)
+    # torch.set_num_interop_threads(1)
     # Parse the command line argument
     cfg = SeedConfig()
     cfg.parse_args()
@@ -608,7 +610,7 @@ def main():
     global_event_counter = 0  # monotonically increasing across all test files
 
     event_idx_list = [0]
-    bin_idx_list = [55]
+    bin_idx_list = [55]  # example bins to analyze in detail (tunable)
 
     min_common_hits = 3
 
