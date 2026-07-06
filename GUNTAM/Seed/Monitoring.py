@@ -7,7 +7,8 @@ from GUNTAM.Seed.MonitoringPlot import (
     create_seeding_performance_plots,
     create_particle_reconstruction_comparison_plots,
     create_efficiency_vs_truth_param_plots,
-    create_seeds_per_particle_vs_truth_param_plots,
+    create_fake_rate_vs_truth_param_plots,
+    create_duplicate_rate_vs_truth_param_plots,
     create_2d_efficiency_heatmaps,
 )
 
@@ -70,7 +71,7 @@ class PerformanceMonitor:
             "pt": [],
         }
 
-        self.hit_scores: dict[str, list[float]] = {"particle": [], "orphan": []}
+        self.seed_scores: dict[str, list[float]] = {"good": [], "fake": []}
 
         self.eligible_particles: list[dict[str, Any]] = []
 
@@ -249,6 +250,7 @@ class PerformanceMonitor:
         hits: np.ndarray,
         bin_idx: int,
         truth_r_tol: float,
+        n_fake_seeds_in_bin: float = 0.0,
     ) -> None:
         """Update per-event particle tracking with info from one bin.
 
@@ -280,9 +282,8 @@ class PerformanceMonitor:
                     "unique_r_keys": set(),
                     # Track seeds associated per bin
                     "n_seeds_in_bins": [],
-                    # Track whether particle has hits at positive and negative Z
-                    "has_pos_z": False,
-                    "has_neg_z": False,
+                    # Track fake seeds (no particle match) per bin
+                    "n_fake_seeds_in_bins": [],
                 }
 
             # Accumulate unique r keys for this particle in this bin
@@ -293,12 +294,6 @@ class PerformanceMonitor:
                 r_keys = np.round(rs / truth_r_tol)
                 for k in r_keys:
                     event_particle_bins[particle_id]["unique_r_keys"].add(int(k))
-                # Track whether the particle has hits at positive / negative Z
-                zs = tx_ty_tz[:, 2]
-                if np.any(zs > 0):
-                    event_particle_bins[particle_id]["has_pos_z"] = True
-                if np.any(zs < 0):
-                    event_particle_bins[particle_id]["has_neg_z"] = True
 
             # Record bin index and seed presence flags
             event_particle_bins[particle_id]["bins"].append(bin_idx)
@@ -308,6 +303,8 @@ class PerformanceMonitor:
 
             # Record number of seeds associated to this particle in this bin
             event_particle_bins[particle_id]["n_seeds_in_bins"].append(pdata.get("nb_seed", 0))
+            # Record number of fake seeds in this bin (shared across all particles in the bin)
+            event_particle_bins[particle_id]["n_fake_seeds_in_bins"].append(n_fake_seeds_in_bin)
 
     def _update_best_seed_selection(
         self,
@@ -403,8 +400,7 @@ class PerformanceMonitor:
 
             # Aggregate seed counts across all bins for this particle
             n_seeds_total = int(np.sum(info.get("n_seeds_in_bins", [])))
-
-            crosses_z0 = info.get("has_pos_z", False) and info.get("has_neg_z", False)
+            n_fake_seeds_total = float(np.sum(info.get("n_fake_seeds_in_bins", [])))
 
             info = {
                 "particle_id": particle_id,
@@ -415,7 +411,7 @@ class PerformanceMonitor:
                 "had_seed": has_seed_globally,
                 "had_pure_seed": has_pure_seed_globally,
                 "n_seeds": n_seeds_total,
-                "crosses_z0": crosses_z0,
+                "n_fake_seeds": n_fake_seeds_total,
             }
 
             self.eligible_particles.append(info)
@@ -477,7 +473,6 @@ class PerformanceMonitor:
         event_particles,
         event_hit_to_particle,
         event_seeds,
-        event_hit_scores: Optional[List[Optional[np.ndarray]]] = None,
     ):
 
         event_particle_best_seeds: Dict[int, Dict[str, Any]] = {}
@@ -490,18 +485,6 @@ class PerformanceMonitor:
             seeds = event_seeds[bin_idx]
             self.total_seeds += len(seeds)
 
-            # --- Collect hit scores split by particle membership ---
-            if event_hit_scores is not None:
-                scores = event_hit_scores[bin_idx]
-                if scores is not None:
-                    htp = np.asarray(hit_to_particle).reshape(-1)[: len(scores)]
-                    for i, score in enumerate(scores):
-                        pid = int(htp[i]) if i < len(htp) else -1
-                        if pid >= 0:
-                            self.hit_scores["particle"].append(float(score))
-                        else:
-                            self.hit_scores["orphan"].append(float(score))
-
             # --- Build bin_particles dict ---
             bin_particles = self._build_bin_particles(particles, hit_to_particle)
 
@@ -509,12 +492,27 @@ class PerformanceMonitor:
             seeded_particle = self._associate_seeds_to_particles(seeds, hit_to_particle, self.min_common_hits)
             bin_particles = self._select_best_seed_for_particles(seeded_particle, bin_particles)
 
+            # Fake seeds: seeds that share <min_common_hits hits with any particle.
+            seeded_seed_indices = {s["seed_idx"] for pl in seeded_particle.values() for s in pl}
+            n_fake_seeds_in_bin = (len(seeds) - len(seeded_seed_indices)) / max(1, len(bin_particles))
+
+            # --- Collect seed scores split by good/fake ---
+            for seed_idx, seed in enumerate(seeds):
+                if len(seed) >= 3:
+                    category = "good" if seed_idx in seeded_seed_indices else "fake"
+                    self.seed_scores[category].append(float(seed[2]))
+
             # --- Collect stats ---
             bin_total_particles = len(bin_particles)
             # Count particles with any associated seed in this bin
             bin_particles_with_seeds = sum(1 for pid, pdata in bin_particles.items() if "best_seed_idx" in pdata)
             # Count particles with a pure associated seed in this bin
             bin_particles_with_pure_seeds = sum(1 for pid, pdata in bin_particles.items() if pdata.get("is_pure", False))
+            # Count particles with >=3 hits (excluding under-represented particles)
+            bin_particles_min3 = {pid: pdata for pid, pdata in bin_particles.items() if len(pdata.get("hit_indices", [])) >= 3}
+            bin_total_min3 = len(bin_particles_min3)
+            bin_particles_with_seeds_min3 = sum(1 for pdata in bin_particles_min3.values() if "best_seed_idx" in pdata)
+            bin_particles_with_pure_seeds_min3 = sum(1 for pdata in bin_particles_min3.values() if pdata.get("is_pure", False))
 
             self._update_event_particle_bins(
                 event_particle_bins,
@@ -522,6 +520,7 @@ class PerformanceMonitor:
                 hits,
                 bin_idx,
                 self.truth_r_tol,
+                n_fake_seeds_in_bin,
             )
 
             # Update per-event best seed selection directly from seeding_performance
@@ -545,6 +544,15 @@ class PerformanceMonitor:
                     "particles_with_pure_seeds": bin_particles_with_pure_seeds,
                     "pure_seeding_efficiency": (
                         bin_particles_with_pure_seeds / bin_total_particles if bin_total_particles > 0 else 0.0
+                    ),
+                    "n_particles_min3hits": bin_total_min3,
+                    "particles_with_seeds_min3hits": bin_particles_with_seeds_min3,
+                    "seeding_efficiency_min3hits": (
+                        bin_particles_with_seeds_min3 / bin_total_min3 if bin_total_min3 > 0 else 0.0
+                    ),
+                    "particles_with_pure_seeds_min3hits": bin_particles_with_pure_seeds_min3,
+                    "pure_seeding_efficiency_min3hits": (
+                        bin_particles_with_pure_seeds_min3 / bin_total_min3 if bin_total_min3 > 0 else 0.0
                     ),
                 }
             )
@@ -581,6 +589,11 @@ class PerformanceMonitor:
                 resolution_metrics[param] = {k: 0.0 for k in ["mean_error", "std_error", "rms_error", "median_error"]}
                 resolution_metrics[param]["n_seeds"] = 0
 
+        total_fake_seeds = sum(p.get("n_fake_seeds", 0.0) for p in self.eligible_particles)
+        total_duplicate_seeds = sum(p.get("n_seeds", 0) for p in self.eligible_particles)
+        fake_rate = total_fake_seeds / total_unique_particles if total_unique_particles > 0 else 0.0
+        duplicate_rate = total_duplicate_seeds / total_unique_particles if total_unique_particles > 0 else 0.0
+
         performance_results = {
             "efficiency_metrics": {
                 "total_particles": total_unique_particles,
@@ -590,6 +603,8 @@ class PerformanceMonitor:
                 "particles_with_pure_seeds": particles_with_pure_seeds_count,
                 "pure_seeding_efficiency": pure_seeding_efficiency,
                 "total_bins_processed": len(self.bin_summaries),
+                "fake_rate": fake_rate,
+                "duplicate_rate": duplicate_rate,
             },
             "resolution_metrics": resolution_metrics,
             "bin_statistics": {
@@ -597,9 +612,13 @@ class PerformanceMonitor:
                 "std_efficiency": np.std([b["seeding_efficiency"] for b in self.bin_summaries]),
                 "mean_pure_efficiency": np.mean([b["pure_seeding_efficiency"] for b in self.bin_summaries]),
                 "std_pure_efficiency": np.std([b["pure_seeding_efficiency"] for b in self.bin_summaries]),
+                "mean_efficiency_min3hits": np.mean([b["seeding_efficiency_min3hits"] for b in self.bin_summaries]),
+                "std_efficiency_min3hits": np.std([b["seeding_efficiency_min3hits"] for b in self.bin_summaries]),
+                "mean_pure_efficiency_min3hits": np.mean([b["pure_seeding_efficiency_min3hits"] for b in self.bin_summaries]),
+                "std_pure_efficiency_min3hits": np.std([b["pure_seeding_efficiency_min3hits"] for b in self.bin_summaries]),
             },
             "bin_complexity_analysis": self._analyze_bin_complexity(self.bin_summaries),
-            "hit_scores": self.hit_scores,
+            "seed_scores": self.seed_scores,
         }
 
         # Print
@@ -613,11 +632,9 @@ class PerformanceMonitor:
             try:
                 self._annotate_deltaR_min(self.eligible_particles)
                 create_efficiency_vs_truth_param_plots(self.eligible_particles)
-                create_seeds_per_particle_vs_truth_param_plots(self.eligible_particles)
+                create_fake_rate_vs_truth_param_plots(self.eligible_particles)
+                create_duplicate_rate_vs_truth_param_plots(self.eligible_particles)
                 create_2d_efficiency_heatmaps(self.eligible_particles)
-                create_efficiency_vs_truth_param_plots(self.eligible_particles, exclude_crossing=True)
-                create_seeds_per_particle_vs_truth_param_plots(self.eligible_particles, exclude_crossing=True)
-                create_2d_efficiency_heatmaps(self.eligible_particles, exclude_crossing=True)
             except Exception as e:
                 print(f"Error creating efficiency-vs-parameter plots: {e}")
 
@@ -630,6 +647,7 @@ class PerformanceMonitor:
         seeds: Sequence[Any],
         pairs: np.ndarray,
         attention_map: np.ndarray,
+        hit_to_particle: Optional[np.ndarray] = None,
     ) -> None:
         """Detailed, optional analysis for a specific event/bin.
 
@@ -644,9 +662,83 @@ class PerformanceMonitor:
             seeds: List of seeds `(hit_indices, parameters)` for the bin
             pairs: Tensor `[num_pairs, 3]` where columns are (pairs1, pairs2, targets)
             attention_map: Array `[n_hits, n_hits]` attention weights for the bin
+            hit_to_particle: Optional array of particle IDs per hit (shape `[n_hits]`).
+                When provided, fake seeds (< min_common_hits hits from any particle)
+                are identified and up to 10 are printed with hit positions. Non-reconstructed
+                particles (no associated seed) are also printed with their hits and the seed
+                indices that contain those hits.
         """
 
         print(f"Number of valid hits in event {event_idx} bin {bin_idx}: {len(hits)}")
+        print(f"Number of seeds reconstructed: {len(seeds)}")
+
+        # --- Fake seed + non-reconstructed particle printout ---
+        if hit_to_particle is not None:
+            htp = np.asarray(hit_to_particle).reshape(-1)
+            seeded_particle = self._associate_seeds_to_particles(seeds, htp, self.min_common_hits) if len(seeds) > 0 else {}
+            seeded_seed_indices = {s["seed_idx"] for pl in seeded_particle.values() for s in pl}
+
+            if len(seeds) > 0:
+                fake_seeds = [(idx, s) for idx, s in enumerate(seeds) if idx not in seeded_seed_indices]
+                print(f"\n  FAKE SEEDS ({len(fake_seeds)} / {len(seeds)} total):")
+                for rank, (seed_idx, s) in enumerate(fake_seeds[:10]):
+                    hit_indices = list(s[0])
+                    print(f"   Fake seed {rank + 1} (seed #{seed_idx}): {len(hit_indices)} hits")
+                    for i_h, h in enumerate(hit_indices):
+                        if h < len(hits):
+                            hx, hy, hz = hits[h, 0], hits[h, 1], hits[h, 2]
+                            hr = hits[h, 3]
+                            hphi = hits[h, 4]
+                            heta = hits[h, 5]
+                            pid = int(htp[h]) if h < len(htp) else -1
+                            pid_str = f"particle {pid}" if pid >= 0 else "orphan"
+                            next_h = hit_indices[i_h + 1] if i_h + 1 < len(hit_indices) else None
+                            if next_h is not None and h < attention_map.shape[0] and next_h < attention_map.shape[1]:
+                                attn_str = f"attn→next={attention_map[h, next_h]:.3f}"
+                            else:
+                                attn_str = "attn→next=  N/A"
+                            print(
+                                f"     hit {h:3d} | x={hx:8.2f} y={hy:8.2f} z={hz:8.2f}"
+                                f" r={hr:7.2f} phi={hphi:6.3f} eta={heta:6.3f} | {attn_str} | {pid_str}"
+                            )
+                if len(fake_seeds) > 10:
+                    print(f"   ... and {len(fake_seeds) - 10} more fake seeds (not shown)")
+
+            # --- Non-reconstructed particle printout ---
+            # Build a reverse map: seed_idx -> set of hit indices, for fast lookup
+            seed_hit_sets = [set(s[0]) for s in seeds]
+
+            unique_pids = sorted([int(p) for p in np.unique(htp) if p >= 0])
+            non_reco_pids = [pid for pid in unique_pids if pid not in seeded_particle]
+            non_reco_pids_min3 = [pid for pid in non_reco_pids if sum(1 for p in htp if int(p) == pid) >= 3]
+            print(
+                f"\n  NON-RECONSTRUCTED PARTICLES ({len(non_reco_pids_min3)} with >=3 hits"
+                f" / {len(non_reco_pids)} total non-reco / {len(unique_pids)} total):"
+            )
+            for rank, pid in enumerate(non_reco_pids_min3[:10]):
+                p_hit_indices = [i for i, p in enumerate(htp) if int(p) == pid]
+                true_params_str = "N/A"
+                if pid < len(particles):
+                    p = particles[pid]
+                    true_params_str = f"d0={p[0]:.2f} z0={p[1]:.2f} phi={p[2]:.3f} eta={p[3]:.3f} pT={p[4]:.2f}"
+                print(f"   Particle {pid}: {len(p_hit_indices)} hits | {true_params_str}")
+                for h in p_hit_indices:
+                    if h >= len(hits):
+                        continue
+                    hx, hy, hz = hits[h, 0], hits[h, 1], hits[h, 2]
+                    hr = hits[h, 3]
+                    hphi = hits[h, 4]
+                    heta = hits[h, 5]
+                    seeds_with_hit = [
+                        seed_idx for seed_idx, s_hits in enumerate(seed_hit_sets) if h in s_hits and len(seeds[seed_idx][0]) > 2
+                    ]
+                    seeds_str = f"in seeds {seeds_with_hit}" if seeds_with_hit else "in no seed"
+                    print(
+                        f"     hit {h:3d} | x={hx:8.2f} y={hy:8.2f} z={hz:8.2f}"
+                        f" r={hr:7.2f} phi={hphi:6.3f} eta={heta:6.3f} | {seeds_str}"
+                    )
+            if len(non_reco_pids_min3) > 10:
+                print(f"   ... and {len(non_reco_pids_min3) - 10} more non-reconstructed particles (not shown)")
 
         # If full_print is enabled, print hit-by-hit information for de purpose
         if self.full_print:
@@ -815,6 +907,8 @@ class PerformanceMonitor:
             f"{eff_metrics['total_particles'] - eff_metrics['particles_with_seeds']} "
             f"({1 - eff_metrics['seeding_efficiency']:.1%})"
         )
+        print(f"   Fake rate (fake seeds per particle):      {eff_metrics['fake_rate']:.4f}")
+        print(f"   Duplicate rate (matched seeds per particle): {eff_metrics['duplicate_rate']:.4f}")
         print("     Detailed particle comparison plots: particle_reconstruction_comparison.png")
 
         bin_stats = results["bin_statistics"]
@@ -823,6 +917,14 @@ class PerformanceMonitor:
         print(
             "   Mean pure seeding efficiency per bin: "
             f"{bin_stats['mean_pure_efficiency']:.1%} ± {bin_stats['std_pure_efficiency']:.1%}"
+        )
+        print(
+            "   Mean seeding efficiency per bin (>=3 hits): "
+            f"{bin_stats['mean_efficiency_min3hits']:.1%} ± {bin_stats['std_efficiency_min3hits']:.1%}"
+        )
+        print(
+            "   Mean pure seeding efficiency per bin (>=3 hits): "
+            f"{bin_stats['mean_pure_efficiency_min3hits']:.1%} ± {bin_stats['std_pure_efficiency_min3hits']:.1%}"
         )
 
         # Print bin complexity analysis

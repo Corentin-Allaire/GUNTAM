@@ -53,8 +53,8 @@ class TransformerConfig:
         self.high_level_features = [4, 5]  # list of indices of the high-level features to be concatenated (4-5 phi, eta)
         self.cosine_processing = [4]  # list of indices of the features to apply cosine processing to (e.g., phi)
         self.fourier_num_frequencies = None  # list[int] of length 4, one per dimension [x, y, z, r]
-        self.dim_max = [400.0, 400.0, 2000.0, 500]
-        self.shift = [200, 200, 1000.0, 0.0]
+        self.dim_max = [500.0, 500.0, 1000.0, 500]
+        self.shift = [0, 0, 0.0, 0.0]
 
         # Floating-point precision
         self.dtype: torch.dtype = torch.float32  # Weight dtype for all model parameters

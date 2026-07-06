@@ -102,6 +102,20 @@ class TestParticleSelection:
 
 
 class TestBuildGoodPairsTensors:
+    def _make_base(self):
+        """Shared minimal setup: 3 hits in bin 0, particles 0 and 1."""
+        data_batch = pd.DataFrame({
+            "event_id": [0, 0, 0],
+            "particle_id": [0, 0, 1],
+        })
+        bins = pd.DataFrame({
+            "bin0": [0, 0, 0],
+            "bin1": [0, 0, 0],
+            "bin2": [0, 0, 0],
+        })
+        hit_to_particle = pd.Series([0, 0, 1])
+        return data_batch, bins, hit_to_particle
+
     def test_basic_pairs(self):
         # Create test data with 2 events
         data_batch = pd.DataFrame({
@@ -131,6 +145,138 @@ class TestBuildGoodPairsTensors:
         # Find non-zero pairs
         non_zero_pairs = event0_bin0[event0_bin0[:, 2] == 1]
         assert len(non_zero_pairs) > 0  # Should have at least one positive pair
+
+    def test_z0_weight_no_brackets_below_threshold(self):
+        """With z0_weight_bin=1000, int(|z0|/1000)=0 -> 2**0-1=0, so label = base(1) + 0 = 1."""
+        data_batch, bins, hit_to_particle = self._make_base()
+        particles_batch = pd.DataFrame({
+            "event_id": [0, 0],
+            "particle_id": [0, 1],
+            "z0": [30.0, 175.0],  # int(|z0|/1000)=0 -> 2**0-1=0 -> label 1+0=1
+        })
+        result = _build_good_pairs_tensors(
+            data_batch, bins, hit_to_particle, num_bins=1,
+            pv_weight=10,
+            particles_batch=particles_batch,
+            z0_weight_bin=1000,
+        )
+        labels = result[0, 0, :, 2]
+        non_zero = labels[labels > 0]
+        assert (non_zero == 1).all()
+
+    def test_z0_weight_first_bracket(self):
+        """Particles with 50 <= |z0| < 100: int(75/50)=1 -> 2**1-1=1, label = base(1) + 1 = 2."""
+        data_batch, bins, hit_to_particle = self._make_base()
+        particles_batch = pd.DataFrame({
+            "event_id": [0, 0],
+            "particle_id": [0, 1],
+            "z0": [75.0, 75.0],
+        })
+        result = _build_good_pairs_tensors(
+            data_batch, bins, hit_to_particle, num_bins=1,
+            pv_weight=10,
+            particles_batch=particles_batch,
+            z0_weight_bin=50,
+        )
+        labels = result[0, 0, :, 2]
+        non_zero = labels[labels > 0]
+        assert (non_zero == 2).all()
+
+    def test_z0_weight_second_bracket(self):
+        """Particles with 100 <= |z0| < 150: int(120/50)=2 -> 2**2-1=3, label = base(1) + 3 = 4."""
+        data_batch, bins, hit_to_particle = self._make_base()
+        particles_batch = pd.DataFrame({
+            "event_id": [0, 0],
+            "particle_id": [0, 1],
+            "z0": [120.0, 120.0],
+        })
+        result = _build_good_pairs_tensors(
+            data_batch, bins, hit_to_particle, num_bins=1,
+            pv_weight=10,
+            particles_batch=particles_batch,
+            z0_weight_bin=50,
+        )
+        labels = result[0, 0, :, 2]
+        non_zero = labels[labels > 0]
+        assert (non_zero == 4).all()
+
+    def test_z0_weight_third_bracket(self):
+        """Particles with 150 <= |z0| < 200: int(175/50)=3 -> 2**3-1=7, label = base(1) + 7 = 8."""
+        data_batch, bins, hit_to_particle = self._make_base()
+        particles_batch = pd.DataFrame({
+            "event_id": [0, 0],
+            "particle_id": [0, 1],
+            "z0": [175.0, 175.0],
+        })
+        result = _build_good_pairs_tensors(
+            data_batch, bins, hit_to_particle, num_bins=1,
+            pv_weight=10,
+            particles_batch=particles_batch,
+            z0_weight_bin=50,
+        )
+        labels = result[0, 0, :, 2]
+        non_zero = labels[labels > 0]
+        assert (non_zero == 8).all()
+
+    def test_z0_weight_pv_and_z0_are_summed(self):
+        """pv_label + z0_label = 10 + (2**int(120/50) - 1) = 10 + (2**2 - 1) = 10 + 3 = 13."""
+        data_batch = pd.DataFrame({
+            "event_id": [0, 0],
+            "particle_id": [0, 0],
+            "particle_id_pv": [1, 1],  # PV particle
+        })
+        bins = pd.DataFrame({"bin0": [0, 0], "bin1": [0, 0], "bin2": [0, 0]})
+        hit_to_particle = pd.Series([0, 0])
+        particles_batch = pd.DataFrame({
+            "event_id": [0],
+            "particle_id": [0],
+            "z0": [120.0],  # int(120/50)=2 -> 2**2-1=3: pv_weight(10) + 3 = 13
+        })
+        result = _build_good_pairs_tensors(
+            data_batch, bins, hit_to_particle, num_bins=1,
+            pv_weight=10,
+            particles_batch=particles_batch,
+            z0_weight_bin=50,
+        )
+        labels = result[0, 0, :, 2]
+        non_zero = labels[labels > 0]
+        assert (non_zero == 13).all()
+
+    def test_z0_weight_z0_added_to_non_pv(self):
+        """Non-PV: base(1) + (2**int(120/50) - 1) = 1 + (2**2 - 1) = 1 + 3 = 4."""
+        data_batch = pd.DataFrame({
+            "event_id": [0, 0],
+            "particle_id": [0, 0],
+            "particle_id_pv": [0, 0],  # not a PV particle
+        })
+        bins = pd.DataFrame({"bin0": [0, 0], "bin1": [0, 0], "bin2": [0, 0]})
+        hit_to_particle = pd.Series([0, 0])
+        particles_batch = pd.DataFrame({
+            "event_id": [0],
+            "particle_id": [0],
+            "z0": [120.0],  # int(120/50)=2 -> 2**2-1=3
+        })
+        result = _build_good_pairs_tensors(
+            data_batch, bins, hit_to_particle, num_bins=1,
+            pv_weight=10,
+            particles_batch=particles_batch,
+            z0_weight_bin=50,
+        )
+        labels = result[0, 0, :, 2]
+        non_zero = labels[labels > 0]
+        assert (non_zero == 4).all()
+
+    def test_z0_weight_none_is_backward_compatible(self):
+        """z0_weight_bin=0 explicitly disables z0 weighting; z0_weight_bin=1000 (default) also gives label 1 for typical z0."""
+        data_batch, bins, hit_to_particle = self._make_base()
+        for bin_size in [0, 1000]:
+            result = _build_good_pairs_tensors(
+                data_batch, bins, hit_to_particle, num_bins=1, pv_weight=10,
+                particles_batch=None, z0_weight_bin=bin_size,
+            )
+            labels = result[0, 0, :, 2]
+            non_zero = labels[labels > 0]
+            assert (non_zero == 1).all(), f"Expected label 1 with z0_weight_bin={bin_size}"
 
 
 class TestToTensor:

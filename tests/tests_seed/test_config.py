@@ -59,8 +59,8 @@ def test_to_from_dict_roundtrip():
     cfg.epoch_nb = 3
     cfg.preprocessing_config.input_path = "data/in"
     cfg.preprocessing_config.max_hit_input = 1500
-    cfg.loss_components = ["hit_BCE", "attention"]
-    cfg.loss_weights = [0.5, 2.0, 1.5]
+    cfg.loss_components = ["hit_BCE", "attention_next"]
+    cfg.loss_weights = [0.5, 2.0]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
 
     payload = cfg.to_dict()
@@ -76,8 +76,8 @@ def test_to_from_dict_roundtrip():
     assert new_cfg.epoch_nb == 3
     assert new_cfg.preprocessing_config.input_path == "data/in"
     assert new_cfg.preprocessing_config.max_hit_input == 1500
-    assert new_cfg.loss_components == ["hit_BCE", "attention"]
-    assert new_cfg.loss_weights == [0.5, 2.0, 1.5]
+    assert new_cfg.loss_components == ["hit_BCE", "attention_next"]
+    assert new_cfg.loss_weights == [0.5, 2.0]
     assert new_cfg.get_loss_weight("missing") == 0.0
 
 
@@ -102,14 +102,14 @@ def test_save_and_load_config(tmp_path):
 
 def test_parse_args_infers_default_weights(monkeypatch):
     # Provide components but no weights -> defaults to 1.0 each
-    argv = ["prog", "--loss_components", "hit_BCE", "attention", "--regression"]
+    argv = ["prog", "--loss_components", "hit_BCE", "attention_next", "--regression"]
     monkeypatch.setattr(sys, "argv", argv)
     cfg = SeedConfig()
     cfg.parse_args()
-    assert cfg.loss_components == ["hit_BCE", "attention"]
+    assert cfg.loss_components == ["hit_BCE", "attention_next"]
     assert cfg.loss_weights == [1.0, 1.0]
     assert cfg.get_loss_weight("hit_BCE") == 1.0
-    assert cfg.get_loss_weight("attention") == 1.0
+    assert cfg.get_loss_weight("attention_next") == 1.0
 
 
 def test_parse_args_mismatched_lengths_raises(monkeypatch):
@@ -117,7 +117,7 @@ def test_parse_args_mismatched_lengths_raises(monkeypatch):
         "prog",
         "--loss_components",
         "hit_BCE",
-        "attention",
+        "attention_next",
         "--loss_weights",
         "0.5",
     ]
@@ -137,20 +137,45 @@ def test_orphan_hit_fraction_validation(monkeypatch):
 
 def test_has_loss_component_and_get_weight_helpers():
     cfg = SeedConfig()
-    cfg.loss_components = ["hit_BCE", "attention"]
+    cfg.loss_components = ["hit_BCE", "attention_next"]
     cfg.loss_weights = [0.7, 1.3]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
     assert cfg.has_loss_component("hit_BCE")
-    assert not cfg.has_loss_component("full_attention")
-    assert cfg.get_loss_weight("attention") == 1.3
-    assert cfg.get_loss_weight("full_attention") == 0.0
+    assert not cfg.has_loss_component("attention_back")
+    assert cfg.get_loss_weight("attention_next") == 1.3
+    assert cfg.get_loss_weight("attention_back") == 0.0
+
+
+def test_reconstruction_method_valid_choices(monkeypatch):
+    """beam_search and beam_search_backward are the only accepted reconstruction methods."""
+    for method in ("beam_search", "beam_search_backward"):
+        argv = ["prog", "--reconstruction_method", method]
+        monkeypatch.setattr(sys, "argv", argv)
+        cfg = SeedConfig()
+        cfg.parse_args()
+        assert cfg.reconstruction_method == method
+
+
+def test_reconstruction_method_invalid_choice_rejected(monkeypatch):
+    """Old method names must be rejected by argparse."""
+    for bad in ("chained", "back_chained", "weighted_chained", "topk"):
+        argv = ["prog", "--reconstruction_method", bad]
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit):
+            SeedConfig().parse_args()
+
+
+def test_reconstruction_method_default_is_none():
+    """Default reconstruction_method must be None (auto-select from loss config)."""
+    cfg = SeedConfig()
+    assert cfg.reconstruction_method is None
 
 
 def test_print_config(capsys):
     """Test that print_config outputs all configuration sections."""
     cfg = SeedConfig()
     cfg.epoch_nb = 15
-    cfg.loss_components = ["hit_BCE", "attention"]
+    cfg.loss_components = ["hit_BCE", "attention_next"]
     cfg.loss_weights = [0.5, 1.0]
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
     cfg.model_path = "custom_model.pt"

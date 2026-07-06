@@ -1,4 +1,3 @@
-import math
 from typing import Tuple, Optional, Dict, Any
 import torch
 import torch.nn as nn
@@ -73,8 +72,8 @@ def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: O
     """
     d_k = q.size(-1)
     scores = torch.matmul(q, k.transpose(-2, -1))
-    scale = 1.0 / math.sqrt(d_k)
-    scores = scores * scale
+    scale = q.new_full((), d_k).sqrt()
+    scores = scores * scale.reciprocal()
 
     if mask is not None:
         scores = scores.masked_fill(mask, float("-inf"))

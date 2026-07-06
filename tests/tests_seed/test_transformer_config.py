@@ -15,8 +15,8 @@ def test_defaults_initialization():
     assert cfg.high_level_features == [4, 5]
     assert cfg.cosine_processing == [4]
     assert cfg.fourier_num_frequencies == [15, 15, 15, 15]
-    assert cfg.dim_max == [400.0, 400.0, 2000.0, 500]
-    assert cfg.shift == [200, 200, 1000.0, 0.0]
+    assert cfg.dim_max == [500.0, 500.0, 1000.0, 500]
+    assert cfg.shift == [0, 0, 0, 0]
     assert cfg.regression is False
 
 

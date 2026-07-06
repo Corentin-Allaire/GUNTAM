@@ -90,7 +90,7 @@ class TestSeedTransformerInitialization:
         mask = torch.zeros(2, 5, dtype=torch.bool)
         output, attn = model(hits, mask)
         assert output.shape == (2, 5, 64)
-        assert attn.shape == (2, 5, 5)
+        assert attn.shape == (2, 5, 5, 3)
 
 
 class TestSeedTransformerForward:
@@ -114,9 +114,9 @@ class TestSeedTransformerForward:
 
         # Output shape (B, S, dim_embedding)
         assert output.shape == (3, 7, 64)
-        # Attention weights from matching_attention single head -> (B, S, S)
+        # Attention edge triplets [B, N, width, 3] with default width=5
         assert attn_weights is not None
-        assert attn_weights.shape == (3, 7, 7)
+        assert attn_weights.shape == (3, 7, 5, 3)
         assert not torch.isnan(output).any(), "Output contains NaN values"
         assert not torch.isnan(attn_weights).any(), "Attention weights contain NaN values"
 
@@ -129,9 +129,13 @@ class TestSeedTransformerForward:
         output, attn_weights = model(hits, mask)
 
         assert output.shape == (2, 6, 32)
-        assert attn_weights.shape == (2, 6, 6)
-        # Masked rows in attn_weights should be -inf (matching manual attention behavior)
-        assert torch.isinf(attn_weights[:, :, -2:]).all(), "Masked query rows not set to -inf"
+        assert attn_weights.shape == (2, 6, 5, 3)
+        # Masked key positions (4, 5) get -inf logits -> softmax score ~0 in triplets
+        target_idx = attn_weights[..., 1].long()   # [B, N, width]
+        scores = attn_weights[..., 2]              # [B, N, width]
+        masked_edges = (target_idx == 4) | (target_idx == 5)
+        if masked_edges.any():
+            assert scores[masked_edges].abs().max() < 1e-5, "Masked targets have non-zero scores"
 
     def test_reproducibility(self):
         cfg = make_config(nb_layers_t=2, nb_heads=2, dim_embedding=48)
@@ -153,7 +157,7 @@ class TestSeedTransformerForward:
         model = SeedTransformer(transformer_config=cfg)
         hits, mask = self._make_inputs(batch_size=2, seq_len=4)
         hits.requires_grad_(True)
-        output, attn_weights = model(hits, mask)
+        output, attn_weights = model(hits, mask, width=4)
         loss = output.sum()
         loss.backward()
         assert hits.grad is not None

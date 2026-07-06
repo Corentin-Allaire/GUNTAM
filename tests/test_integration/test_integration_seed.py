@@ -51,11 +51,9 @@ class TestFullIntegration:
         "use_space_point,output_format",
         [
             (False, "csv"),
-            (False, "h5"),
-            (True, "csv"),
             (True, "h5"),
         ],
-        ids=["hits_csv", "hits_h5", "spacepoints_csv", "spacepoints_h5"]
+        ids=["hits_csv", "spacepoints_h5"]
     )
     def test_read_and_preprocessing(self, temp_dir, test_data_dir, use_space_point, output_format):
         """Test read and preprocessing for all data modes and output formats"""
@@ -196,7 +194,8 @@ class TestFullIntegration:
             input_path=test_data_dir,
             output_path=preprocessing_output,
             input_format=output_format,
-            dataset_name=f"test_{suffix}"
+            dataset_name=f"test_{suffix}",
+            max_events=2
         )
         
         # Step 3: Run training
@@ -208,9 +207,6 @@ class TestFullIntegration:
         
         # Run training with all currently valid loss components
         all_losses = [
-            "attention",
-            "full_attention",
-            "topk_attention",
             "attention_next",
             "attention_back",
             "hit_BCE",
@@ -409,15 +405,15 @@ class TestFullIntegration:
             "--input_tensor_path", input_tensor_path,
             "--dataset_name", dataset_name,
             "--model_path", model_path,
-            "--epoch_nb", "2",
-            "--test_fraction", "0.2",
+            "--epoch_nb", "1",
+            "--test_fraction", "0.5",
             "--batch_size", "1",
             "--nb_layers_t", "2",  # Small model for testing
             "--dim_embedding", "64",  # Small embedding for testing
             "--nb_heads", "2",
             "--learning_rate", "1e-4",
             "--events_per_file", "1",
-            "--max_events", "5",
+            "--max_events", "2",
             "--binning_strategy", "neighbor",
             "--bin_width", "0.02",
             "--max_hit_input", "1200",

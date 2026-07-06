@@ -43,7 +43,7 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
 
     # Seeds: one pure seed matching the particle hits
     seed_params = true_params.copy()
-    seeds_test = [[[(particle_hit_indices, seed_params)]]]  # nested [E][B]
+    seeds_test = [[[(particle_hit_indices, seed_params, 0.0)]]]  # nested [E][B]
 
     # Pair info and attention maps (not used unless detailed analysis enabled)
     pairs1 = np.arange(H, dtype=int)
@@ -100,7 +100,7 @@ def make_multi_event_multi_bin_setup():
             ID_test[e, b, hi] = pid
 
         # Pure seed over these hits
-        seeds_test[e][b].append((idxs, true_params.copy()))
+        seeds_test[e][b].append((idxs, true_params.copy(), 0.0))
 
     # Event 1: 5 particles appear in all 4 bins
     for pid in range(5):
