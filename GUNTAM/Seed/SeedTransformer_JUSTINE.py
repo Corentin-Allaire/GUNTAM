@@ -1,35 +1,16 @@
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
 from torch import Tensor
+import torch.nn.functional as F
 
-from GUNTAM.Seed.TransformerConfig import TransformerConfig
+from GUNTAM.Seed.TransformerConfig_JUSTINE import TransformerConfig
 from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
 from GUNTAM.Transformer.Transformer import load_state_dict_flex
 from GUNTAM.Transformer.Embeding import FourierPositionalEncoding
-
-
-def shuffle_features(enc_hits, min_features, max_features) :
-
-    #enc_hits = encoded_hits dans SeedTransformer
-    #max_features = 207 
-
-    for i in range(min_features, max_features + 1) :
-
-        idx = list(range(enc_hits.size(1))) #mélange par hit au sein d'un bin pour chaque bin
-        #[0,1,2]
-        random.shuffle(idx)
-        #[1,2,0]
-        idx = torch.tensor(idx)
-        #tensor([1,2,0])
-        enc_hits[:, :, i] = enc_hits[:, idx, i] #i-ième feature
-
-    return enc_hits
-
-#encoded_h = shuffle_features(données, 2, 2) #shuffle seulement la 3ème feature
-#encoded_h = shuffle_features(données, 2, 3) #shuffle la 3ème et la 4ème features
+from GUNTAM.Seed.shuffle_features import shuffle_features, shuffle_features_per_i
 
 
 class SeedTransformer(nn.Module):
@@ -57,7 +38,7 @@ class SeedTransformer(nn.Module):
         self,
         transformer_config: TransformerConfig = TransformerConfig(),
         device_acc: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32,
+        dtype: torch.dtype = torch.float32
     ) -> None:
         super(SeedTransformer, self).__init__()
 
@@ -74,13 +55,10 @@ class SeedTransformer(nn.Module):
         Initialize or rebuild all submodules with the provided hyperparameters.
         """
 
-        # Compute input dimensions for Fourier encoding based on selected features and cosine processing
         coord_dim = len(self.cfg.embedding_feature) + len(set(self.cfg.embedding_feature) & set(self.cfg.cosine_processing))
         high_level_dim = len(self.cfg.high_level_features) + len(
             set(self.cfg.high_level_features) & set(self.cfg.cosine_processing)
         )
-
-        # Fourier positional encoding for hit coordinates
         self.fourier_encoding = FourierPositionalEncoding(
             input_dim=coord_dim,
             num_frequencies=self.cfg.fourier_num_frequencies,  # type: ignore[arg-type]
@@ -90,7 +68,8 @@ class SeedTransformer(nn.Module):
             device_acc=self.device_acc,
         )
 
-        # Projection layer to map Fourier-encoded features to the desired embedding dimension
+        # Set input dimension for projection
+        # fourier_encoding.output_dim already accounts for variable frequencies
         embedding_input_dim = self.fourier_encoding.output_dim
         self.embedding_projection = nn.Linear(embedding_input_dim, self.cfg.dim_embedding, device=self.device_acc)
 
@@ -104,7 +83,6 @@ class SeedTransformer(nn.Module):
             device=self.device_acc,
         )
 
-        # Matching attention layer to produce attention matrice used in reconstruction
         self.matching_attention = MultiHeadAttention(
             input_dim=self.cfg.dim_embedding,
             model_dim=self.cfg.dim_embedding,
@@ -114,14 +92,31 @@ class SeedTransformer(nn.Module):
             use_pytorch=False,
         )
 
-    def embedding(self, hits: Tensor) -> Tensor:
+        if self.cfg.regression:
+
+            self.regression_MLP = nn.Sequential(
+                nn.Linear(self.cfg.dim_embedding, self.cfg.dim_embedding * 2, device=self.device_acc),
+                nn.ReLU(),
+                nn.Linear(self.cfg.dim_embedding * 2, self.cfg.dim_embedding * 2, device=self.device_acc),
+                nn.ReLU(),
+            )
+            self.hits_score_layer = nn.Sequential(nn.Linear(self.cfg.dim_embedding * 2, 1, device=self.device_acc), nn.Sigmoid())
+
+    def encodeSpacePoint(self, hits: Tensor, mask: Tensor, *, shuffle_v: Optional[int] = None, situation: Optional[str] = None) -> Tensor:
         """
-        Embed the input hit features using Fourier positional encoding and a projection layer.
+        Encode the input hit sequence.
         Args:
             - hits (Tensor): Input source sequence.
+            - mask (Tensor): Source mask.
+            - shuffle_v: Indice of the feature we shuffle. 
+            - situation: name of the situation corresponding to which features we want to shuffle together.
+
         Returns:
             - encoded (Tensor): Encoded memory.
         """
+
+        if situation is not None and shuffle_v is not None:
+            raise ValueError("`situation` or `shuffle_v` are not well defined")
 
         if any(i in self.cfg.embedding_feature for i in self.cfg.cosine_processing):
             embedding_cosine = [i for i in self.cfg.embedding_feature if i in self.cfg.cosine_processing]
@@ -156,49 +151,76 @@ class SeedTransformer(nn.Module):
 
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
-        encoded_hits = shuffle_features(encoded_hits, 2, 2) # on shuffle la 3ème variable
-        print("bloopbloop")
+
+        if situation is not None and shuffle_v is None:
+            encoded_hits = shuffle_features(encoded_hits, situation)
+        if situation is None and shuffle_v is not None:
+            encoded_hits = shuffle_features_per_i(encoded_hits, shuffle_v)
+        if situation is None and shuffle_v is None:
+            encoded_hits = encoded_hits
+
         # Apply generic projection if needed
-        encoded_hits = self.embedding_projection(encoded_hits)
 
-        #transformer_output = self.transformer(x=encoded_hits, mask=mask)
+        if self.cfg.embedding_mode == "MLP": 
 
-        return encoded_hits
+            encoded_hits = self.embedding_projection(encoded_hits)
+            
+
+        elif self.cfg.embedding_mode == "padding":
+
+            pad_size = self.cfg.dim_embedding - encoded_hits.shape[-1]
+            encoded_hits = F.pad(encoded_hits, (0, pad_size))
+        
+        else:
+
+            raise ValueError(f"Unknown embedding_mode: {self.cfg.embedding_mode}")
+
+
+        transformer_output = self.transformer(x=encoded_hits, mask=mask)
+
+        return transformer_output
 
     def forward(
         self,
         hits: Tensor,
         mask: Tensor,
-        width: int = 5,
+        *,
+        shuffle_v: Optional[int] = None,
+        situation: Optional[str] = None,
     ) -> Tuple[Tensor, Tensor]:
         """
         Forward pass of the transformer network.
         Args:
             - hits (Tensor): Input source sequence.
             - mask_hits (Tensor): Source mask.
+            - shuffle_v: Indice of the feature we shuffle. 
+            - situation: name of the situation corresponding to which features we want to shuffle together.
+
         Returns:
             - encoded (Tensor): Encoded memory.
             - attention_weights (Tensor): Attention weights from all layers.
         """
 
         # Encode the input hit sequence
-        encoded_hits = self.embedding(hits)
-        # Compute the adjacency matrix using the matching attention layer
-        transformer_output, attention_weights = self.compute_adjacency(encoded_hits, mask)
 
-        # Apply softmax to the attention weights to get the final adjacency matrix
-        att = torch.softmax(attention_weights, dim=-1)
+        if situation is not None and shuffle_v is None:
+            transformer_output = self.encodeSpacePoint(hits, mask, situation=situation)
+        if situation is None and shuffle_v is not None:
+            transformer_output = self.encodeSpacePoint(hits, mask, shuffle_v=shuffle_v)
+        if situation is None and shuffle_v is None:
+            transformer_output = self.encodeSpacePoint(hits, mask)
 
-        # For each source hit, keep only the top-k (source, target, score) triplets
-        topk_scores, topk_targets = att.topk(width, dim=-1)  # [B, N, width]
-        B, N, k = topk_scores.shape
-        source_indices = torch.arange(N, device=att.device).view(1, N, 1).expand(B, N, k)
-        triplets = torch.stack(
-            [source_indices.float(), topk_targets.float(), topk_scores],
-            dim=-1,
-        )  # [B, N, width, 3] columns: source, target, score
+        _, attn_weights = self.matching_attention(transformer_output, mask)
 
-        return transformer_output, triplets
+        # The number of heads is 1 for matching attention, so we can squeeze that dimension
+        attn_weights = attn_weights.squeeze(1)
+
+        if self.cfg.regression:
+            embedding = self.regression_MLP(transformer_output)
+            hits_score = self.hits_score_layer(embedding)
+            return hits_score, attn_weights
+
+        return transformer_output, attn_weights
 
     def print_model_info(self) -> None:
         """
@@ -235,60 +257,6 @@ class SeedTransformer(nn.Module):
             },
             path,
         )
-
-    def export_onnx(
-        self,
-        path: str,
-        example_hits: Tensor | None = None,
-        example_mask: Tensor | None = None,
-    ) -> None:
-        """
-        Export the model to an ONNX file.
-        Args:
-            - path (str): File path to save the ONNX model (.onnx).
-            - example_hits (Tensor | None): Representative hits tensor [1, seq_len, num_features].
-              If None, a zero tensor is built from the config as fallback.
-            - example_mask (Tensor | None): Corresponding padding mask [1, seq_len, 1].
-              If None, a zero tensor is built from the config as fallback.
-        """
-        if example_hits is None or example_mask is None:
-            num_features = max(self.cfg.embedding_feature + self.cfg.high_level_features) + 1
-            seq_len = 32
-            example_hits = torch.zeros(1, seq_len, num_features, dtype=torch.float32, device="cpu")
-            example_mask = torch.zeros(1, seq_len, 1, dtype=torch.bool, device="cpu")
-
-        example_hits = example_hits.float().cpu()
-        example_mask = example_mask.cpu()
-
-        was_training = self.training
-        original_device = next(self.parameters()).device
-        original_dtype = self.dtype
-
-        self.eval()
-        self.to(torch.float32)
-        self.to("cpu")
-
-        try:
-            torch.onnx.export(
-                self,
-                (example_hits, example_mask),
-                path,
-                input_names=["hits", "padding_mask"],
-                output_names=["output", "attention_weights"],
-                dynamic_axes={
-                    "hits": {0: "batch_size", 1: "seq_len"},
-                    "padding_mask": {0: "batch_size", 1: "seq_len"},
-                    "output": {0: "batch_size", 1: "seq_len"},
-                    "attention_weights": {0: "batch_size", 1: "seq_len", 2: "seq_len"},
-                },
-                opset_version=17,
-            )
-            print(f"Model exported to ONNX at {path}")
-        finally:
-            self.to(original_device)
-            self.to(original_dtype)
-            if was_training:
-                self.train()
 
     def load(
         self,
