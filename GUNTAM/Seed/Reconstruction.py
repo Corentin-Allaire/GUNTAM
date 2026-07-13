@@ -533,7 +533,10 @@ def batched_beam_search_seed_reconstruction(
         # Track best chain per (bin, starting hit): avg score, length >= 3 only
         chain_len = step + 1
         if chain_len >= 3:
-            avg_scores = chain_scores / chain_len  # [B, N, BW]
+            # A chain of `chain_len` hits has `chain_len - 1` edges; chain_scores is the sum of
+            # those edge scores, so the average edge score divides by the edge count, not the hit
+            # count. This matters now that chains of length 3/4/5 are ranked against each other.
+            avg_scores = chain_scores / (chain_len - 1)  # [B, N, BW]
             step_best, step_beam = avg_scores.max(dim=2)  # [B, N]
 
             improve = step_best > best_scores  # [B, N]
@@ -553,7 +556,7 @@ def batched_beam_search_seed_reconstruction(
 
 def apply_radial_separation_filter(
     chains: torch.Tensor,
-    rho: torch.Tensor,
+    r3d: torch.Tensor,
     min_delta_rho_mm: float,
     target_length: int = 3,
     check_bounds: bool = False,
@@ -563,45 +566,56 @@ def apply_radial_separation_filter(
 
     Greedily walks each raw chain left-to-right, always keeping index 0 as the initial anchor.
     A subsequent candidate hit is kept (and becomes the new anchor) iff it is a valid (non -1) slot,
-    fewer than `target_length` hits have been kept so far, and its 3D radial distance from the last
-    kept hit strictly exceeds `min_delta_rho_mm`. Otherwise it is skipped and the anchor is unchanged.
-    The instant `target_length` hits have been kept, no further candidate can be accepted.
+    fewer than `target_length` hits have been kept so far, and its 3D spherical-radius separation
+    from the last kept hit strictly exceeds `min_delta_rho_mm`. Otherwise it is skipped and the
+    anchor is unchanged. The instant `target_length` hits have been kept, no further candidate can
+    be accepted.
 
-    This does not special-case "beam search found fewer than target_length real hits": any raw slot
-    at or beyond the search's actual chain length is already `-1`, and `-1` never passes the "valid
-    slot" gate, so the same code path naturally produces the correct pass-through output.
+    NOTE on the metric: `r3d` is the 3D SPHERICAL radius sqrt(x^2 + y^2 + z^2), intentionally
+    including z, NOT the cylindrical detector radius sqrt(x^2 + y^2) (which is what "rho" usually
+    means in tracking). The spherical radius separates barrel hits (which progress in cylindrical R)
+    and endcap hits (which progress in |z|) with a single monotone coordinate. `min_delta_rho_mm`
+    keeps its historical public name.
+
+    A raw chain that yields fewer than `target_length` kept hits is returned as an entirely invalid
+    `[-1, ...]` row rather than a partially-filled one, so the filter only ever emits complete seeds
+    or nothing — downstream consumers can therefore treat "row has a valid slot 0" as "row is a
+    complete `target_length`-hit seed".
 
     Vectorized and statically unrolled over `raw_length` (and, for the write step, over
     `target_length`) so it stays ONNX-export safe (no data-dependent Python control flow — the
-    "stop once target_length is reached" behavior is expressed as a mask, not an early exit).
+    "stop once target_length is reached" and "drop incomplete rows" behaviors are expressed as
+    masks, not early exits).
 
     Args:
         chains: [B, N, raw_length] long, -1-padded — raw beam-search chains (e.g. from
             `batched_beam_search_seed_reconstruction` called with an over-generated `max_chain_length`).
-        rho: [B, N_coord] float — 3D radial distance (sqrt(x^2+y^2+z^2)) per hit slot, in the SAME
+        r3d: [B, N_coord] float — 3D spherical radius (sqrt(x^2+y^2+z^2)) per hit slot, in the SAME
             indexing space that `chains` values index into. Two such spaces exist in this codebase:
-            per-bin hit-slot space (`rho_bin_slot_space`) and global radial-rank space
-            (`rho_rank_space`) — callers must never mix them up.
-        min_delta_rho_mm: Minimum strict radial separation (mm) required between consecutive kept hits.
+            per-bin hit-slot space (`r3d_bin_slot_space`) and global radial-rank space
+            (`r3d_rank_space`) — callers must never mix them up.
+        min_delta_rho_mm: Minimum strict 3D spherical-radius separation (mm) required between
+            consecutive kept hits.
         target_length: Number of hits to keep per seed (default: 3).
         check_bounds: If True, run an eager, data-dependent value-level check that every valid chain
-            index is in range for `rho`. Off by default because it forces a Python-level graph break
+            index is in range for `r3d`. Off by default because it forces a Python-level graph break
             (unsafe for ONNX export); only enable in non-exported call sites (e.g. `Train.py`) or tests.
 
     Returns:
-        [B, N, target_length] long, -1-padded filtered chains.
+        [B, N, target_length] long, -1-padded filtered chains; rows with fewer than
+        `target_length` kept hits are all -1.
     """
-    assert chains.shape[0] == rho.shape[0], (
-        f"batch-dim mismatch: chains batch={chains.shape[0]} vs rho batch={rho.shape[0]} — "
-        "rho must be given in the same indexing space chains' values index into"
+    assert chains.shape[0] == r3d.shape[0], (
+        f"batch-dim mismatch: chains batch={chains.shape[0]} vs r3d batch={r3d.shape[0]} — "
+        "r3d must be given in the same indexing space chains' values index into"
     )
 
     if check_bounds:
         valid_targets = chains[chains >= 0]
         if valid_targets.numel() > 0:
-            assert int(valid_targets.max()) < rho.shape[1], (
-                "chain index out of range for the given rho tensor — likely an index-space mismatch "
-                "(bin-slot rho passed where rank-space rho was expected, or vice versa)"
+            assert int(valid_targets.max()) < r3d.shape[1], (
+                "chain index out of range for the given r3d tensor — likely an index-space mismatch "
+                "(bin-slot r3d passed where rank-space r3d was expected, or vice versa)"
             )
 
     B, N, raw_length = chains.shape
@@ -610,28 +624,32 @@ def apply_radial_separation_filter(
     valid_slot = chains >= 0  # [B, N, raw_length]
     chains_safe = chains.clamp(min=0)
     b_idx = torch.arange(B, device=device)[:, None, None].expand(B, N, raw_length)
-    cand_rho = rho[b_idx, chains_safe]  # [B, N, raw_length]
+    cand_r3d = r3d[b_idx, chains_safe]  # [B, N, raw_length]
 
     out = torch.full((B, N, target_length), -1, dtype=torch.long, device=device)
     out[:, :, 0] = chains[:, :, 0]  # anchor is always copied through as-is (kept if valid, -1 if not)
 
-    anchor_rho = cand_rho[:, :, 0]  # [B, N]
-    kept_count = torch.ones(B, N, dtype=torch.long, device=device)
+    anchor_r3d = cand_r3d[:, :, 0]  # [B, N]
+    kept_count = valid_slot[:, :, 0].long()  # anchor counts as kept only if it is a valid slot
     write_pos = torch.ones(B, N, dtype=torch.long, device=device)
 
     for step in range(1, raw_length):
         candidate = chains[:, :, step]
         cand_valid = valid_slot[:, :, step]
-        delta = (cand_rho[:, :, step] - anchor_rho).abs()
+        delta = (cand_r3d[:, :, step] - anchor_r3d).abs()
         passes = cand_valid & (delta > min_delta_rho_mm) & (kept_count < target_length)
 
         for col in range(target_length):
             col_match = passes & (write_pos == col)
             out[:, :, col] = torch.where(col_match, candidate, out[:, :, col])
 
-        anchor_rho = torch.where(passes, cand_rho[:, :, step], anchor_rho)
+        anchor_r3d = torch.where(passes, cand_r3d[:, :, step], anchor_r3d)
         write_pos = torch.where(passes, write_pos + 1, write_pos)
         kept_count = torch.where(passes, kept_count + 1, kept_count)
+
+    # Only complete seeds survive: a chain that kept fewer than target_length hits becomes all -1.
+    complete = (kept_count >= target_length).unsqueeze(-1)  # [B, N, 1]
+    out = torch.where(complete, out, torch.full_like(out, -1))
 
     return out
 

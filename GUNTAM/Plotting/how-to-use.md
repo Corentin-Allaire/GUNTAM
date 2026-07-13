@@ -87,15 +87,14 @@ Fields: `files`, `labels`, `compare` (ReportFigure only), `quantities`, `output_
   in every format listed in `--output_formats` (default `["png"]`).
 - `summary.csv` — one flat table: one row per quantity, one column per dataset. Meant for
   further processing, not restructured.
-- `summary.md` — two sections:
-  1. **`## Overall`** — one row per *metric* (e.g. `trackeff`, `purity`, `nHoles`), combining
-     every quantity sharing that metric prefix (`trackeff_vs_eta`, `trackeff_vs_pT`, ...) via an
-     inverse-variance-weighted average. Conditional slices (e.g. `trackeff_vs_eta_ptRange_0`,
-     restricted to one pT range) are excluded from this combination — a slice's pooled sample
-     size is checked against the group's largest re-binning, and anything below 90% of it is
-     treated as a slice rather than another estimate of the same overall number
-     (`SummaryTables._full_population_keys`).
-  2. **`## Full breakdown`** — every individual quantity, including the excluded slices.
+- `summary.md` — one flat table: one row per quantity, one column per dataset.
+
+  There is deliberately **no pooled "Overall" row**. The per-axis re-binnings (`trackeff_vs_eta`,
+  `trackeff_vs_pT`, `trackeff_vs_phi`, ...) are the *same* tracks re-histogrammed, so combining
+  them with inverse-variance weighting would treat one measurement as several independent ones and
+  understate the uncertainty (combining ~4 equivalent re-binnings roughly halves the displayed
+  error for no new data). If a single overall efficiency is needed, read one full-population
+  quantity's pooled Clopper-Pearson value directly (`RootIO.pooled_efficiency`).
 
 ## Statistics
 

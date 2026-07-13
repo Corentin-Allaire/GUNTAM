@@ -23,6 +23,8 @@ def resolve_dataset_paths(directories: list[str], filename: str) -> list[Path]:
 
 def build_report_figure(cfg: PlottingConfig):
     """Build the 2x2 report figure: rows = stage (compare-stage, Seeding), columns = cfg.quantities."""
+    if not cfg.files:
+        raise ValueError("No input datasets to plot: pass --files (or set 'files' in the config JSON).")
     if len(cfg.quantities) != 2:
         raise ValueError(f"ReportFigure requires exactly 2 --quantities, got {len(cfg.quantities)}: {cfg.quantities}")
 

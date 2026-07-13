@@ -56,6 +56,9 @@ def sweep_quantity(files: list[str], labels: list[str], key: str, classname: str
 
 
 def run_sweep(cfg: PlottingConfig) -> dict[str, list[Path]]:
+    if not cfg.files:
+        raise ValueError("No input files to sweep: pass --files (or set 'files' in the config JSON).")
+
     PlotStyle.apply_style()
 
     labels = resolve_labels(cfg)

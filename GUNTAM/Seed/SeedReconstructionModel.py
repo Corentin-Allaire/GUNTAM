@@ -48,11 +48,13 @@ class SeedReconstructionModel(nn.Module):
     ) -> None:
         super(SeedReconstructionModel, self).__init__()
 
-        if raw_chain_length < 3:
+        if raw_chain_length < max_seed_length:
             raise ValueError(
-                f"raw_chain_length must be >= 3, got {raw_chain_length}. "
-                "A shorter raw chain can never produce a valid 3-hit seed."
+                f"raw_chain_length ({raw_chain_length}) must be >= max_seed_length ({max_seed_length}). "
+                "A raw chain shorter than the target seed can never produce a full-length seed."
             )
+        if min_delta_rho_mm < 0:
+            raise ValueError(f"min_delta_rho_mm must be >= 0, got {min_delta_rho_mm}.")
 
         self.cfg = transformer_config
         self.device_acc = device_acc
@@ -220,7 +222,11 @@ class SeedReconstructionModel(nn.Module):
         Returns:
             - seed_triplets (Tensor): Shape [S, max_seed_length] — the S seeds that were
               successfully reconstructed, each row containing original hit IDs.
-            - scores (Tensor): Shape [S] — score for each reconstructed seed.
+            - scores (Tensor): Shape [S] — the *raw-chain* score for each reconstructed seed: the
+              average edge score of the pre-filter beam-search chain the seed was distilled from.
+              When radial filtering drops hits, this score still reflects the original (longer) raw
+              chain's edges, not the returned triple; treat it as a raw-chain quality proxy rather
+              than an exact score of the emitted seed.
         """
         binned_hits, padding_mask = self.bin_and_pad(hits)
         raw_len = self.raw_chain_length if self.radial_separation_constraint else self.max_seed_length
@@ -231,9 +237,11 @@ class SeedReconstructionModel(nn.Module):
         chains, _, scores = self.reconstruct_seed_triplets(triplets, valid_mask, max_chain_length=raw_len)  # [B, N_bin, SL]
 
         if self.radial_separation_constraint:
-            rho_bin_slot_space = torch.sqrt((binned_hits[..., :3] ** 2).sum(dim=-1))  # [B, N_bin]
+            # 3D spherical radius r3d = sqrt(x^2 + y^2 + z^2) per hit slot (intentionally includes z;
+            # see apply_radial_separation_filter for why this is not the cylindrical detector rho).
+            r3d_bin_slot_space = torch.sqrt((binned_hits[..., :3] ** 2).sum(dim=-1))  # [B, N_bin]
             chains = Reconstruction.apply_radial_separation_filter(
-                chains, rho_bin_slot_space, self.min_delta_rho_mm, self.max_seed_length
+                chains, r3d_bin_slot_space, self.min_delta_rho_mm, self.max_seed_length
             )
 
         # Map bin-local indices → original hit IDs
@@ -262,13 +270,17 @@ class SeedReconstructionModel(nn.Module):
 
         Args:
             - chains_flat (Tensor): [S, seed_nb] hit-ID rows (possibly containing duplicates and
-              -1-padded invalid rows).
-            - scores_flat (Tensor): [S] score per row, aligned with `chains_flat`.
+              -1-padded invalid/incomplete rows).
+            - scores_flat (Tensor): [S] raw-chain score per row, aligned with `chains_flat`. This is
+              the average edge score of the *pre-filter* beam-search chain, not a score recomputed
+              from the (possibly shorter) returned seed — see `forward`.
         Returns:
             - unique_chains (Tensor): [U, seed_nb] deduplicated hit-ID rows.
             - unique_scores (Tensor): [U] score kept for each unique row.
         """
-        has_seed = chains_flat[:, 0] >= 0
+        # A row is a valid seed only if EVERY slot is a real hit ID. Gating on the first slot alone
+        # would let a partial chain like [2, -1, -1] through as a bogus full-length seed.
+        has_seed = (chains_flat >= 0).all(dim=1)
         unique_chains, inverse = torch.unique(chains_flat[has_seed], return_inverse=True, dim=0)
         scores_flat = scores_flat[has_seed]
 

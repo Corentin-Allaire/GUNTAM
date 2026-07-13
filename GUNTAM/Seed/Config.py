@@ -198,7 +198,10 @@ class SeedConfig:
             "--min_delta_rho_mm",
             type=float,
             default=self.min_delta_rho_mm,
-            help="Minimum strict 3D radial separation (mm) required between consecutive kept hits.",
+            help=(
+                "Minimum strict 3D spherical-radius separation r3d=sqrt(x^2+y^2+z^2) (mm) required "
+                "between consecutive kept hits (intentionally includes z; not cylindrical rho)."
+            ),
         )
         parser.add_argument(
             "--raw_chain_length",
@@ -287,6 +290,8 @@ class SeedConfig:
                 f"--raw_chain_length must be >= 3, got {self.raw_chain_length}. "
                 "A shorter raw chain can never produce a valid 3-hit seed."
             )
+        if self.min_delta_rho_mm < 0:
+            raise ValueError(f"--min_delta_rho_mm must be >= 0, got {self.min_delta_rho_mm}.")
         self.device_acc = torch.device(args.device)
 
         # Parse loss configuration lists

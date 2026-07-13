@@ -103,6 +103,18 @@ class TestClopperPearson:
         assert eff == pytest.approx(1.0)
         assert err_hi == 0.0
         assert not np.isnan(err_hi)
+        # The lower error at the upper boundary must stay finite and positive.
+        assert err_lo > 0
+        assert not np.isnan(err_lo)
+
+    def test_zero_pass_lower_error_is_zero_not_nan(self):
+        eff, err_lo, err_hi = RootIO.clopper_pearson(0, 100)
+        assert eff == pytest.approx(0.0)
+        assert err_lo == 0.0
+        assert not np.isnan(err_lo)
+        # The upper error at zero efficiency must stay finite and positive.
+        assert err_hi > 0
+        assert not np.isnan(err_hi)
 
     def test_zero_total_is_nan(self):
         eff, err_lo, err_hi = RootIO.clopper_pearson(0, 0)

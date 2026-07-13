@@ -100,11 +100,20 @@ def clopper_pearson(n_pass, n_tot) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     n_tot = np.asarray(n_tot, dtype=float)
 
     eff = np.where(n_tot > 0, n_pass / n_tot, np.nan)
-    lo = np.where(n_tot > 0, beta_dist.ppf(0.1587, n_pass, n_tot - n_pass + 1), np.nan)
-    hi = np.where(n_tot > 0, beta_dist.ppf(0.8413, n_pass + 1, n_tot - n_pass), np.nan)
+
+    # Both Clopper-Pearson boundaries have a degenerate beta shape parameter at the extremes
+    # (a=0 at n_pass==0 for the lower edge, b=0 at n_pass==n_tot for the upper edge), which
+    # scipy returns as NaN. Pin those edges to their exact analytic values (0 and 1) explicitly
+    # so a 0/N efficiency does not get a NaN lower error and an N/N efficiency does not get a NaN
+    # upper error.
+    with np.errstate(invalid="ignore"):
+        lo = np.where(n_pass == 0, 0.0, beta_dist.ppf(0.1587, n_pass, n_tot - n_pass + 1))
+        hi = np.where(n_pass == n_tot, 1.0, beta_dist.ppf(0.8413, n_pass + 1, n_tot - n_pass))
+    lo = np.where(n_tot > 0, lo, np.nan)
+    hi = np.where(n_tot > 0, hi, np.nan)
 
     err_lo = eff - lo
-    err_hi = np.where(np.isnan(hi), 0.0, hi - eff)
+    err_hi = hi - eff
     return eff, err_lo, err_hi
 
 

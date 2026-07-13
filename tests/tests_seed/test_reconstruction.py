@@ -606,6 +606,26 @@ class TestBatchedBeamSearchSeedReconstruction:
         for a, b in zip(valid[:-1], valid[1:]):
             assert b < a
 
+    def test_score_uses_edge_count_denominator_not_hit_count(self):
+        """Ranking regression: a single forced path 0->1->2->3->4 with edge scores 6,6,5,5 has a
+        decreasing average-per-edge (6, 5.67, 5.5) but an increasing average-per-hit (4.0, 4.25,
+        4.4). The correct edge-count denominator therefore selects the compact triple [0,1,2] with
+        score 6.0; a (buggy) hit-count denominator would instead pick the full [0,1,2,3,4]."""
+        B, N = 1, 6
+        att = torch.full((B, N, N), -10.0)
+        att[0, 0, 1] = 6.0
+        att[0, 1, 2] = 6.0
+        att[0, 2, 3] = 5.0
+        att[0, 3, 4] = 5.0
+        mask = torch.ones(B, N, dtype=torch.bool)
+        edge = _to_edge_batched(att)
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(
+            edge, mask, max_chain_length=5, beam_width=5
+        )
+        chain = chains[0, 0, :]
+        assert chain[chain >= 0].tolist() == [0, 1, 2]
+        assert best_scores[0, 0].item() == pytest.approx(6.0)
+
     def test_valid_mask_excludes_padded_hits(self):
         """Hits where valid_mask=False are excluded as destinations and have no valid chain."""
         B, N = 1, 7
@@ -648,12 +668,20 @@ class TestBatchedBeamSearchSeedReconstruction:
 class TestApplyRadialSeparationFilter:
     """Tests for apply_radial_separation_filter (post-hoc greedy radial-separation filter)."""
 
-    def test_worked_example_one_pass_one_fail(self):
-        """Raw (A,B1,B2): Δρ(A,B1)>min passes, Δρ(B1,B2)<min fails -> [A,B1,-1]."""
+    def test_incomplete_result_dropped_to_all_minus_one(self):
+        """Raw (A,B1,B2): Δρ(A,B1)>min passes, Δρ(B1,B2)<min fails -> only 2 hits kept, which is
+        fewer than target_length=3, so the whole seed is dropped to [-1,-1,-1]."""
         chains = torch.tensor([[[0, 1, 2]]], dtype=torch.long)  # [B=1, N=1, raw_length=3]
         rho = torch.tensor([[0.0, 10.0, 12.0]])  # Δ(A,B1)=10>5, Δ(B1,B2)=2<5
         out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
-        assert out.tolist() == [[[0, 1, -1]]]
+        assert out.tolist() == [[[-1, -1, -1]]]
+
+    def test_two_kept_completes_when_target_length_is_two(self):
+        """Same one-pass-one-fail input with target_length=2: [A,B1] is now complete."""
+        chains = torch.tensor([[[0, 1, 2]]], dtype=torch.long)
+        rho = torch.tensor([[0.0, 10.0, 12.0]])
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=2)
+        assert out.tolist() == [[[0, 1]]]
 
     def test_worked_example_skip_then_pass_masks_further_candidates(self):
         """Raw (A,B1,B2,C,D): skip B2, accept C -> [A,B1,C]; D must never be inspected even
@@ -666,26 +694,27 @@ class TestApplyRadialSeparationFilter:
         assert out.tolist() == [[[0, 1, 3]]]
 
     def test_boundary_delta_equal_min_does_not_pass(self):
-        """Exact-equality Δρ == min_delta_rho_mm is rejected (strict '>')."""
+        """Exact-equality Δρ == min_delta_rho_mm is rejected (strict '>'): only the anchor is kept,
+        which is incomplete for target_length=2, so the seed is dropped to all -1."""
         chains = torch.tensor([[[0, 1]]], dtype=torch.long)
         rho = torch.tensor([[0.0, 5.0]])
-        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
-        assert out.tolist() == [[[0, -1, -1]]]
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=2)
+        assert out.tolist() == [[[-1, -1]]]
 
     def test_boundary_delta_just_above_min_passes(self):
-        """Δρ = min_delta_rho_mm + eps is accepted."""
+        """Δρ = min_delta_rho_mm + eps is accepted, completing a target_length=2 seed."""
         chains = torch.tensor([[[0, 1]]], dtype=torch.long)
         rho = torch.tensor([[0.0, 5.001]])
-        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
-        assert out.tolist() == [[[0, 1, -1]]]
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=2)
+        assert out.tolist() == [[[0, 1]]]
 
-    def test_short_raw_chain_passthrough(self):
-        """Raw [start,-1,-1,-1,-1] (beam search found no length>=3 chain) -> [start,-1,-1],
-        via the same unified code path (no special-casing needed)."""
+    def test_short_raw_chain_dropped(self):
+        """Raw [start,-1,-1,-1,-1] (beam search found no length>=3 chain) -> [-1,-1,-1]: the lone
+        anchor is fewer than target_length hits, so the incomplete seed is dropped to all -1."""
         chains = torch.tensor([[[0, -1, -1, -1, -1]]], dtype=torch.long)
         rho = torch.tensor([[42.0, 0.0, 0.0, 0.0, 0.0]])
         out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
-        assert out.tolist() == [[[0, -1, -1]]]
+        assert out.tolist() == [[[-1, -1, -1]]]
 
     def test_all_invalid_chain_including_anchor_returns_all_minus_one(self):
         """Raw [-1,-1,-1,-1,-1] (pathological/defensive case) -> [-1,-1,-1]; regression guard
@@ -713,7 +742,7 @@ class TestApplyRadialSeparationFilter:
         )
         out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
         assert out[0, 0].tolist() == [0, 1, 3]
-        assert out[0, 1].tolist() == [2, -1, -1]
+        assert out[0, 1].tolist() == [-1, -1, -1]  # lone anchor [2] is incomplete -> dropped
         assert out[1, 0].tolist() == [0, 2, 4]
         assert out[1, 1].tolist() == [-1, -1, -1]
 
@@ -738,9 +767,9 @@ class TestApplyRadialSeparationFilter:
     def test_check_bounds_defaults_to_off(self):
         """check_bounds is opt-in: omitting it (or passing False) never raises on valid input."""
         chains = torch.tensor([[[0, 1, 2]]], dtype=torch.long)
-        rho = torch.tensor([[0.0, 10.0, 12.0]])
+        rho = torch.tensor([[0.0, 10.0, 20.0]])  # both Δ's exceed min -> a complete [0,1,2] seed
         out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
-        assert out.tolist() == [[[0, 1, -1]]]
+        assert out.tolist() == [[[0, 1, 2]]]
 
     def test_batch_dim_mismatch_raises_immediately(self):
         """A static chains.shape[0] vs rho.shape[0] mismatch raises before any gather happens."""

@@ -93,6 +93,18 @@ class TestSeedReconstructionModelRadialSeparationConstraint:
         assert seeds.shape[1] == 3
         self._assert_respects_min_delta_rho(seeds, hits, min_delta)
 
+    def test_returned_seeds_are_always_complete(self):
+        """Regression guard for the incomplete-seed leak: every emitted row must be a full 3-hit
+        seed. Before the fix, an incomplete chain such as [hit, -1, -1] passed the first-slot-only
+        validity gate and was returned as a bogus 3-hit seed."""
+        for flag in (True, False):
+            model = _make_model(radial_separation_constraint=flag, raw_chain_length=5)
+            hits = _make_hits()
+            with torch.inference_mode():
+                seeds, scores = model(hits)
+            assert (seeds >= 0).all(), f"incomplete seed leaked with radial_separation_constraint={flag}: {seeds}"
+            assert scores.shape[0] == seeds.shape[0]
+
     def test_onnx_export_with_flag_on_does_not_raise(self, tmp_path):
         """Authoritative proof that the filter (and the flag-gated scatter_reduce dedup fix)
         introduce no data-dependent Python control flow: a real torch.onnx.export attempt with
@@ -148,5 +160,16 @@ class TestDedupSeeds:
         scores_flat = torch.tensor([0.9, 0.1])
         unique_chains, unique_scores = model._dedup_seeds(chains_flat, scores_flat)
         assert unique_chains.shape[0] == 1
+        assert unique_chains.tolist() == [[1, 2, 3]]
+        assert unique_scores.tolist() == pytest.approx([0.1])
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_incomplete_rows_excluded(self, flag):
+        """A partially-filled row (valid first slot, -1 tail) is not a 3-hit seed and must be
+        dropped. Gating on the first slot alone would emit [2,-1,-1] as a reconstructed seed."""
+        model = _make_model(radial_separation_constraint=flag)
+        chains_flat = torch.tensor([[2, -1, -1], [4, 5, -1], [1, 2, 3]], dtype=torch.long)
+        scores_flat = torch.tensor([0.9, 0.8, 0.1])
+        unique_chains, unique_scores = model._dedup_seeds(chains_flat, scores_flat)
         assert unique_chains.tolist() == [[1, 2, 3]]
         assert unique_scores.tolist() == pytest.approx([0.1])
