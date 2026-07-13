@@ -67,6 +67,12 @@ class SeedConfig:
         # Choices: None (auto), "beam_search", "beam_search_backward"
         self.reconstruction_method = None
 
+        # Post-hoc radial-separation greedy filter on raw beam-search chains (on by default:
+        # flat efficiency improvement, no extra inference cost)
+        self.radial_separation_constraint = True
+        self.min_delta_rho_mm = 5.0
+        self.raw_chain_length = 5
+
         # Boolean configurations
         self.no_test = False
         self.resume_training = False
@@ -180,6 +186,27 @@ class SeedConfig:
             ),
         )
         parser.add_argument(
+            "--radial_separation_constraint",
+            action=argparse.BooleanOptionalAction,
+            default=self.radial_separation_constraint,
+            help=(
+                "Post-hoc 3D radial-separation greedy filter on raw beam-search chains. "
+                "On by default; use --no-radial_separation_constraint to disable."
+            ),
+        )
+        parser.add_argument(
+            "--min_delta_rho_mm",
+            type=float,
+            default=self.min_delta_rho_mm,
+            help="Minimum strict 3D radial separation (mm) required between consecutive kept hits.",
+        )
+        parser.add_argument(
+            "--raw_chain_length",
+            type=int,
+            default=self.raw_chain_length,
+            help="max_chain_length used for the raw beam search when radial_separation_constraint is enabled (must be >= 3).",
+        )
+        parser.add_argument(
             "--device",
             type=str,
             default="cuda:0" if torch.cuda.is_available() else "cpu",
@@ -252,6 +279,14 @@ class SeedConfig:
         self.timing_enabled = args.timing_enabled
         self.write_seed_tensor = args.write_seed_tensor
         self.reconstruction_method = args.reconstruction_method
+        self.radial_separation_constraint = args.radial_separation_constraint
+        self.min_delta_rho_mm = args.min_delta_rho_mm
+        self.raw_chain_length = args.raw_chain_length
+        if self.raw_chain_length < 3:
+            raise ValueError(
+                f"--raw_chain_length must be >= 3, got {self.raw_chain_length}. "
+                "A shorter raw chain can never produce a valid 3-hit seed."
+            )
         self.device_acc = torch.device(args.device)
 
         # Parse loss configuration lists
@@ -461,6 +496,9 @@ class SeedConfig:
         print("Cuda available: ", torch.cuda.is_available())
         print("Timing enabled: ", self.timing_enabled)
         print("Reconstruction method: ", self.reconstruction_method if self.reconstruction_method else "auto (from loss config)")
+        print("Radial separation constraint: ", self.radial_separation_constraint)
+        print("Min delta rho (mm): ", self.min_delta_rho_mm)
+        print("Raw chain length: ", self.raw_chain_length)
 
         print("\nFile Settings:")
         print("Model path: ", self.model_path)

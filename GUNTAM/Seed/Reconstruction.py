@@ -551,6 +551,91 @@ def batched_beam_search_seed_reconstruction(
     return best_chains, params, best_scores
 
 
+def apply_radial_separation_filter(
+    chains: torch.Tensor,
+    rho: torch.Tensor,
+    min_delta_rho_mm: float,
+    target_length: int = 3,
+    check_bounds: bool = False,
+) -> torch.Tensor:
+    """
+    Post-hoc geometric filter applied to the raw output of `batched_beam_search_seed_reconstruction`.
+
+    Greedily walks each raw chain left-to-right, always keeping index 0 as the initial anchor.
+    A subsequent candidate hit is kept (and becomes the new anchor) iff it is a valid (non -1) slot,
+    fewer than `target_length` hits have been kept so far, and its 3D radial distance from the last
+    kept hit strictly exceeds `min_delta_rho_mm`. Otherwise it is skipped and the anchor is unchanged.
+    The instant `target_length` hits have been kept, no further candidate can be accepted.
+
+    This does not special-case "beam search found fewer than target_length real hits": any raw slot
+    at or beyond the search's actual chain length is already `-1`, and `-1` never passes the "valid
+    slot" gate, so the same code path naturally produces the correct pass-through output.
+
+    Vectorized and statically unrolled over `raw_length` (and, for the write step, over
+    `target_length`) so it stays ONNX-export safe (no data-dependent Python control flow — the
+    "stop once target_length is reached" behavior is expressed as a mask, not an early exit).
+
+    Args:
+        chains: [B, N, raw_length] long, -1-padded — raw beam-search chains (e.g. from
+            `batched_beam_search_seed_reconstruction` called with an over-generated `max_chain_length`).
+        rho: [B, N_coord] float — 3D radial distance (sqrt(x^2+y^2+z^2)) per hit slot, in the SAME
+            indexing space that `chains` values index into. Two such spaces exist in this codebase:
+            per-bin hit-slot space (`rho_bin_slot_space`) and global radial-rank space
+            (`rho_rank_space`) — callers must never mix them up.
+        min_delta_rho_mm: Minimum strict radial separation (mm) required between consecutive kept hits.
+        target_length: Number of hits to keep per seed (default: 3).
+        check_bounds: If True, run an eager, data-dependent value-level check that every valid chain
+            index is in range for `rho`. Off by default because it forces a Python-level graph break
+            (unsafe for ONNX export); only enable in non-exported call sites (e.g. `Train.py`) or tests.
+
+    Returns:
+        [B, N, target_length] long, -1-padded filtered chains.
+    """
+    assert chains.shape[0] == rho.shape[0], (
+        f"batch-dim mismatch: chains batch={chains.shape[0]} vs rho batch={rho.shape[0]} — "
+        "rho must be given in the same indexing space chains' values index into"
+    )
+
+    if check_bounds:
+        valid_targets = chains[chains >= 0]
+        if valid_targets.numel() > 0:
+            assert int(valid_targets.max()) < rho.shape[1], (
+                "chain index out of range for the given rho tensor — likely an index-space mismatch "
+                "(bin-slot rho passed where rank-space rho was expected, or vice versa)"
+            )
+
+    B, N, raw_length = chains.shape
+    device = chains.device
+
+    valid_slot = chains >= 0  # [B, N, raw_length]
+    chains_safe = chains.clamp(min=0)
+    b_idx = torch.arange(B, device=device)[:, None, None].expand(B, N, raw_length)
+    cand_rho = rho[b_idx, chains_safe]  # [B, N, raw_length]
+
+    out = torch.full((B, N, target_length), -1, dtype=torch.long, device=device)
+    out[:, :, 0] = chains[:, :, 0]  # anchor is always copied through as-is (kept if valid, -1 if not)
+
+    anchor_rho = cand_rho[:, :, 0]  # [B, N]
+    kept_count = torch.ones(B, N, dtype=torch.long, device=device)
+    write_pos = torch.ones(B, N, dtype=torch.long, device=device)
+
+    for step in range(1, raw_length):
+        candidate = chains[:, :, step]
+        cand_valid = valid_slot[:, :, step]
+        delta = (cand_rho[:, :, step] - anchor_rho).abs()
+        passes = cand_valid & (delta > min_delta_rho_mm) & (kept_count < target_length)
+
+        for col in range(target_length):
+            col_match = passes & (write_pos == col)
+            out[:, :, col] = torch.where(col_match, candidate, out[:, :, col])
+
+        anchor_rho = torch.where(passes, cand_rho[:, :, step], anchor_rho)
+        write_pos = torch.where(passes, write_pos + 1, write_pos)
+        kept_count = torch.where(passes, kept_count + 1, kept_count)
+
+    return out
+
+
 def build_seed_features_tensor(
     hits_tensor: torch.Tensor,
     seed_tensor: torch.Tensor,

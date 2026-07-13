@@ -42,14 +42,26 @@ class SeedReconstructionModel(nn.Module):
         device_acc: torch.device = torch.device("cpu"),
         width: int = 5,
         max_seed_length: int = 3,
+        radial_separation_constraint: bool = True,
+        min_delta_rho_mm: float = 5.0,
+        raw_chain_length: int = 5,
     ) -> None:
         super(SeedReconstructionModel, self).__init__()
+
+        if raw_chain_length < 3:
+            raise ValueError(
+                f"raw_chain_length must be >= 3, got {raw_chain_length}. "
+                "A shorter raw chain can never produce a valid 3-hit seed."
+            )
 
         self.cfg = transformer_config
         self.device_acc = device_acc
         self.transformer = transformer
         self.width = width
         self.max_seed_length = max_seed_length
+        self.radial_separation_constraint = radial_separation_constraint
+        self.min_delta_rho_mm = min_delta_rho_mm
+        self.raw_chain_length = raw_chain_length
 
     def bin_and_pad(self, hits: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -211,13 +223,18 @@ class SeedReconstructionModel(nn.Module):
             - scores (Tensor): Shape [S] — score for each reconstructed seed.
         """
         binned_hits, padding_mask = self.bin_and_pad(hits)
+        raw_len = self.raw_chain_length if self.radial_separation_constraint else self.max_seed_length
         # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
         _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
 
         valid_mask = (~padding_mask.bool()).squeeze(-1)  # [B, N_bin]
-        chains, _, scores = self.reconstruct_seed_triplets(
-            triplets, valid_mask, max_chain_length=self.max_seed_length
-        )  # [B, N_bin, SL]
+        chains, _, scores = self.reconstruct_seed_triplets(triplets, valid_mask, max_chain_length=raw_len)  # [B, N_bin, SL]
+
+        if self.radial_separation_constraint:
+            rho_bin_slot_space = torch.sqrt((binned_hits[..., :3] ** 2).sum(dim=-1))  # [B, N_bin]
+            chains = Reconstruction.apply_radial_separation_filter(
+                chains, rho_bin_slot_space, self.min_delta_rho_mm, self.max_seed_length
+            )
 
         # Map bin-local indices → original hit IDs
         bin_nb, nb_max_hit = valid_mask.shape
@@ -235,16 +252,41 @@ class SeedReconstructionModel(nn.Module):
         chains_orig = chains_orig.masked_fill(~mask, -1)
 
         # Keep only valid seeds (beam search already excluded padding) then deduplicate
-        chains_flat = chains_orig.reshape(-1, seed_nb)  # [bin_nb*N_bin, seed_nb]
-        scores_flat = scores.reshape(-1)  # [bin_nb*N_bin]
-        has_seed = chains_flat[:, 0] >= 0
-        unique_chains, inverse = torch.unique(chains_flat[has_seed], return_inverse=True, dim=0)  # [S, seed_nb]
-        scores_flat = scores_flat[has_seed]  # [num_valid_seeds]
-        perm = torch.arange(inverse.shape[0], device=inverse.device)
-        first = inverse.flip(0).new_empty(unique_chains.shape[0])
-        first[inverse.flip(0)] = perm.flip(0)
+        return self._dedup_seeds(chains_orig.reshape(-1, seed_nb), scores.reshape(-1))
 
-        unique_scores = scores_flat[first]
+    def _dedup_seeds(self, chains_flat: Tensor, scores_flat: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Collapse duplicate seed rows (identical hit-ID tuples) to a single row each, keeping one
+        associated score per unique seed. Split into its own method so the two tie-breaking
+        strategies below can be unit-tested without needing a full transformer/binning pipeline.
+
+        Args:
+            - chains_flat (Tensor): [S, seed_nb] hit-ID rows (possibly containing duplicates and
+              -1-padded invalid rows).
+            - scores_flat (Tensor): [S] score per row, aligned with `chains_flat`.
+        Returns:
+            - unique_chains (Tensor): [U, seed_nb] deduplicated hit-ID rows.
+            - unique_scores (Tensor): [U] score kept for each unique row.
+        """
+        has_seed = chains_flat[:, 0] >= 0
+        unique_chains, inverse = torch.unique(chains_flat[has_seed], return_inverse=True, dim=0)
+        scores_flat = scores_flat[has_seed]
+
+        if self.radial_separation_constraint:
+            # Duplicates can now arise from the same starting hit's raw chain filtering down to an
+            # identical triple across two bin instances (margin/neighbor binning overlap) with
+            # different raw scores per instance — keep the best one, not an arbitrary
+            # first-occurrence pick.
+            unique_scores = torch.full(
+                (unique_chains.shape[0],), float("-inf"), device=scores_flat.device, dtype=scores_flat.dtype
+            )
+            unique_scores = unique_scores.scatter_reduce(0, inverse, scores_flat, reduce="amax", include_self=True)
+        else:
+            # Pre-existing behavior (first occurrence wins) — untouched when the flag is off.
+            perm = torch.arange(inverse.shape[0], device=inverse.device)
+            first = inverse.flip(0).new_empty(unique_chains.shape[0])
+            first[inverse.flip(0)] = perm.flip(0)
+            unique_scores = scores_flat[first]
         return unique_chains, unique_scores
 
     def export_onnx(
