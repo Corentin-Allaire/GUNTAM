@@ -4,7 +4,7 @@
 
 import torch
 from typing import Optional
-from GUNTAM.Seed.SeedTransformer_JUSTINE import SeedTransformer
+from GUNTAM.Seed.SeedTransformer import SeedTransformer
 import GUNTAM.Seed.SeedLoss as Losses
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader

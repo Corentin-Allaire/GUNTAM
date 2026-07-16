@@ -4,7 +4,7 @@
 
 import torch
 from GUNTAM.Transformer.Classifier_architecture import MLP_CE, train_loop_CE, icing_on_the_cake_CE
-from GUNTAM.Seed.SeedTransformer_JUSTINE import SeedTransformer
+from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.IO.prepare_classifier import seed_features_file_adjustment
 
