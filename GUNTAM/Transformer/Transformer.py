@@ -456,7 +456,7 @@ class TransformerEncoder(nn.Module):
         Initialize weights of the transformer encoder.
         """
         for layer in self.layers:
-            layer._init_weights()
+            layer._init_weights()  # type: ignore[operator]
 
     def get_layers(self) -> nn.ModuleList:
         """Return the list of encoder layers.

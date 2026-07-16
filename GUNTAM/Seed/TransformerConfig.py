@@ -55,6 +55,7 @@ class TransformerConfig:
         self.fourier_num_frequencies = None  # list[int] of length 4, one per dimension [x, y, z, r]
         self.dim_max = [500.0, 500.0, 1000.0, 500]
         self.shift = [0, 0, 0.0, 0.0]
+        self.embedding_mode = "padding"  # by default
 
         # Floating-point precision
         self.dtype: torch.dtype = torch.float32  # Weight dtype for all model parameters
@@ -168,6 +169,12 @@ class TransformerConfig:
             choices=list(_DTYPE_MAP.keys()),
             help="Floating-point dtype for all model weights (float32, float16, bfloat16)",
         )
+        parser.add_argument(
+            "--embedding_mode",
+            type=str,
+            default=self.embedding_mode,
+            choices=["MLP", "padding"],
+        )
 
     def apply_args(self, args: argparse.Namespace) -> None:
         """
@@ -191,6 +198,7 @@ class TransformerConfig:
         self.shift = args.shift
         self.regression = args.regression
         self.dtype = _DTYPE_MAP[args.dtype]
+        self.embedding_mode = args.embedding_mode
 
         # Validation
         if self.nb_layers_t < 1:
@@ -222,6 +230,8 @@ class TransformerConfig:
                 f"cosine_processing contains indices {invalid} that are not in "
                 f"embedding_feature {self.embedding_feature} or high_level_features {self.high_level_features}"
             )
+        if self.embedding_mode not in ["MLP", "padding"]:
+            raise ValueError(f"embedding_mode must be 'MLP' or 'padding', got {self.embedding_mode}")
 
     def parse_args(self):
         """
