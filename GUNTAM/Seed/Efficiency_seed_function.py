@@ -10,6 +10,7 @@ from GUNTAM.IO.DataLoader import DataLoader
 from GUNTAM.Seed.Reconstruction_new import batched_beam_search_seed_reconstruction
 from GUNTAM.Seed.Monitoring import PerformanceMonitor
 
+
 def efficiency_reconstructed_seeds(
     model: SeedTransformer,
     file_indices: list,
@@ -24,7 +25,7 @@ def efficiency_reconstructed_seeds(
     We reconstruct the seeds once they've been through the transformer (we have the attention matrices)
 
     Args:
-        model: The transformer model to be validated. 
+        model: The transformer model to be validated.
         file_indices: List of indices indexing the files we use.
         dataset: The dataset object containing trained data.
         shuffle_v: Indice of the feature we shuffle. The signification test is done on this feature.
@@ -37,17 +38,17 @@ def efficiency_reconstructed_seeds(
 
     if situation is not None and shuffle_v is not None:
         raise ValueError("`situation` or `shuffle_v` are not well defined")
-    
+
     model.eval()
     model_dtype = model.dtype
 
     monitoring = PerformanceMonitor(
-                full_print=False,
-                save_plots=True,
-                min_common_hits=3,
-                min_truth_hits=3,
-                truth_r_tol=1e-3,
-            )
+        full_print=False,
+        save_plots=True,
+        min_common_hits=3,
+        min_truth_hits=3,
+        truth_r_tol=1e-3,
+    )
 
     with torch.no_grad():
 
@@ -62,52 +63,46 @@ def efficiency_reconstructed_seeds(
             particles_tensor = data["particles_tensor"].to(cfg.device_acc, dtype=model_dtype)
             hit_to_particle_tensor = data["hit_to_particle_tensor"].to(cfg.device_acc)
             padding_mask = data["padding_mask"].to(cfg.device_acc)
-            good_pairs = data["good_pairs"].to(cfg.device_acc)
-
 
             num_events = hits_tensor.shape[0]  # = 5 for odd_output_new_5
 
             # We work on each event at a time:
 
-            for event_idx in range(num_events): 
+            for event_idx in range(num_events):
 
                 # We define all the information above for one event:
-                
                 event_hits_tensor = hits_tensor[event_idx]
-                event_good_pairs = good_pairs[event_idx]
                 event_padding_mask = padding_mask[event_idx]
                 event_hit_to_particle_tensor = hit_to_particle_tensor[event_idx]
                 event_particle_tensor = particles_tensor[event_idx]
-
-                event_hit_to_particle_indices = event_hit_to_particle_tensor.squeeze(-1)
-                event_particles = event_particle_tensor[event_hit_to_particle_indices]
 
                 if situation is not None and shuffle_v is None:
                     encoded_space_points, attention_maps = model(event_hits_tensor, event_padding_mask, situation=situation)
                 if situation is None and shuffle_v is not None:
                     encoded_space_points, attention_maps = model(event_hits_tensor, event_padding_mask, shuffle_v=shuffle_v)
                 if situation is None and shuffle_v is None:
-                    encoded_space_points, attention_maps = model(event_hits_tensor, event_padding_mask) # seeding efficiency of reference
+                    encoded_space_points, attention_maps = model(
+                        event_hits_tensor, event_padding_mask
+                    )  # seeding efficiency of reference
 
-                if cfg.transformer_config.regression: 
+                if cfg.transformer_config.regression:
                     hits_score = encoded_space_points
 
                 else:
                     # Compute hit score as the row-wise max of the attention weights [bins, hits, 1]
                     hits_score = attention_maps.squeeze(1).max(dim=-1).values.unsqueeze(-1)
-            
 
                 # We reconstruct the hits:
 
                 chains, params, scores = batched_beam_search_seed_reconstruction(
-                    attention_map = attention_maps,
-                    hit_score = hits_score,
-                    valid_mask = ~event_padding_mask.bool(),
-                    score_threshold = 0.01,
-                    att_threshold = 0.0,
-                    max_chain_length = 5,
-                    beam_width = 3,
-                    backward = False
+                    attention_map=attention_maps,
+                    hit_score=hits_score,
+                    valid_mask=~event_padding_mask.bool(),
+                    score_threshold=0.01,
+                    att_threshold=0.0,
+                    max_chain_length=5,
+                    beam_width=3,
+                    backward=False,
                 )
 
                 event_seeds = []
@@ -141,22 +136,18 @@ def efficiency_reconstructed_seeds(
                     event_attention_maps.append(attention_softmax_cpu[bin_idx])
                     event_seeds.append(bin_seeds)
                     event_hit_scores.append(hit_score_all[bin_idx])
-                
 
                 monitoring.bin_seeding_performance(
                     event_idx=event_idx,
                     event_hits=event_hits_tensor.cpu().float().numpy(),
                     event_particles=event_particle_tensor.cpu().float().numpy(),
                     event_hit_to_particle=event_hit_to_particle_tensor.cpu().float().numpy(),
-                    event_seeds= event_seeds,
+                    event_seeds=event_seeds,
                     event_hit_scores=event_hit_scores,
                 )
 
-            
     performance_results = monitoring.performance_analysis()
 
     efficiency = performance_results["efficiency_metrics"]["seeding_efficiency"]
 
     return efficiency
-
-

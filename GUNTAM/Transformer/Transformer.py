@@ -78,6 +78,8 @@ def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: O
     if mask is not None:
         scores = scores.masked_fill(mask, float("-inf"))
 
+    # print(f"avant softmax: {scores.dtype}")
+
     score = F.softmax(scores, dim=-1)
     output = torch.matmul(score, v)
     return output, scores
@@ -163,8 +165,12 @@ class MultiHeadAttention(nn.Module):
             key_mask = None
 
         if self.use_pytorch:
+
+            print("Si use_pytorch:")
             # Use multi-head splitting for flash attention
+            # print(f"avant qkv_linear: {x.dtype}")
             qkv = self.qkv_linear(x)
+            # print(f"après qkv_linear: {qkv.dtype}")
             qkv = qkv.view(batch_size, -1, self.num_heads, 3 * self.head_dim)  # (batch_size, seq_len, num_heads, 3 * head_dim)
             q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)  # each: (batch_size, num_heads, seq_len, head_dim)
 
@@ -172,6 +178,7 @@ class MultiHeadAttention(nn.Module):
             key_mask = ~key_mask if key_mask is not None else None
 
             #  Use torch's flash attention (no attn weights returned!)
+            # print(f"avant scaled_dot_product_attention (q,k,v): {q.dtype}, {k.dtype}, {v.dtype}")
             attn_output = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -179,21 +186,31 @@ class MultiHeadAttention(nn.Module):
                 attn_mask=key_mask,
                 dropout_p=self.dropout.p if self.training else 0.0,
             )
+            # print(f"après scaled_dot_product_attention (q,k,v): {attn_output.dtype}")
             attn_weights = None  # no weights available
 
             # Concatenate heads: transpose back and reshape to combine heads
             output = (
                 attn_output.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
             )  # (batch_size, seq_len, model_dim)
+            # print(f"après concatenate: {output.dtype}")
         else:
+            print("Si ya pas use_pytorch")
             # Use manual multi-head attention with same q/k/v shapes as PyTorch path
+            # print(f"avant qkv_linear: {x.dtype}")
             qkv = self.qkv_linear(x)
+            # print(f"après qkv_linear: {qkv.dtype}")
             # (batch_size, seq_len, 3 * model_dim)
             qkv = qkv.view(batch_size, -1, self.num_heads, 3 * self.head_dim)
             # (batch_size, seq_len, num_heads, 3 * head_dim)
             q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)
 
+            # print(f"avant scaled_dot_product_attention (q,k,v): {q.dtype}, {k.dtype}, {v.dtype}")
+
             attn_output, attn_weights = manual_scaled_dot_product_attention(q, k, v, key_mask)
+
+            # print(f"après softmax et avant matmul: {attn_weights.dtype}")
+            # print(f"après matmul: {attn_output.dtype}")
 
             # If multiple heads, extracting the attention weights doesn't make sense
             if self.num_heads > 1:
@@ -201,9 +218,12 @@ class MultiHeadAttention(nn.Module):
 
             # Concatenate heads back: (batch_size, seq_len, model_dim)
             output = attn_output.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
+            # print(f"après concatenate: {output.dtype}")
 
         output = self.out_linear(output)
+        # print(f"après output_linear_layer: {output.dtype}")
         output = self.dropout(output)
+        # print(f"après output_dropout: {output.dtype}")
         return output, attn_weights
 
     def _init_weights(self) -> None:
@@ -255,10 +275,15 @@ class TransformerFeedForward(nn.Module):
         Returns:
             Output tensor of shape (batch_size, seq_len, d_model)
         """
+        print(f"avant 1ere couche FF: {x.dtype}")
         x_ff = self.linear1(x)
+        # print(f"après 1ere couche FF: {x_ff.dtype}")
         x_ff = self.gelu(x_ff)
+        # print(f"après gelu FF: {x_ff.dtype}")
         x_ff = self.dropout(x_ff)
+        # print(f"après dropout FF: {x_ff.dtype}")
         x_ff = self.linear2(x_ff)
+        # print(f"après 2eme couche FF: {x_ff.dtype}")
         return x_ff
 
     def _init_weights(self) -> None:
@@ -302,7 +327,6 @@ class EncoderLayer(nn.Module):
             attn_dropout, ff_dropout = dropout
         else:
             attn_dropout = ff_dropout = dropout
-
         self.self_attn = MultiHeadAttention(
             input_dim,
             model_dim,
@@ -341,13 +365,23 @@ class EncoderLayer(nn.Module):
                 - Output tensor after encoder layer (batch_size, seq_len, d_model).
                 - Attention weights (batch_size, num_heads, seq_len, seq_len).
         """
+        print(f"avant attention EncoderLayer: {x.dtype}")
         attn_output, attn_weights = self.self_attn(x, mask)
+        if attn_weights is None:
+            print(f"après attention EncoderLayer (output): {attn_output.dtype}")
+        else:
+            print(f"après attention EncoderLayer (output, weights): {attn_output.dtype}, {attn_weights.dtype}")
         x_attn = x + attn_output
+        print(f"après add, avant attention layer_norm EncoderLayer: {x_attn.dtype}")
         x_attn = self.layer_norm1(x_attn)
+        print(f"après attention layer_norm EncoderLayer, avant FF: {x_attn.dtype}")
 
         ff_output = self.feed_forward(x_attn)
+        print(f"après FF EncoderLayer: {ff_output.dtype}")
         x_ff = x_attn + ff_output
+        print(f"après add, avant attention layer_norm EncoderLayer: {x_attn.dtype}")
         x_ff = self.layer_norm2(x_ff)
+        print(f"après FF layer_norm EncoderLayer: {x_ff.dtype}")
         return x_ff, attn_weights
 
     def _init_weights(self) -> None:
@@ -448,6 +482,8 @@ class TransformerEncoder(nn.Module):
         x_layer = x
         for layer in self.layers:
             x_layer = layer(x_layer, mask)
+
+        print(f"après ModuleList: {x_layer.dtype}")
 
         return x_layer
 

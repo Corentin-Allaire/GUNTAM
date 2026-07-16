@@ -14,7 +14,7 @@ class Validation_class(nn.Module):
     built a class to call the validation function in order to speed up the process in the main part
 
     Args:
-        model: The transformer model to be validated. 
+        model: The transformer model to be validated.
         dataset: The dataset object containing trained data.
         cfg: Full architecture configuration.
 
@@ -35,6 +35,5 @@ class Validation_class(nn.Module):
             dataset=self.dataset,
             file_indices=list(range(len(self.dataset.file_paths))),
             cfg=self.cfg,
-            shuffle_v=i
-
+            shuffle_v=i,
         )

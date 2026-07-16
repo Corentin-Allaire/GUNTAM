@@ -1,12 +1,14 @@
 import torch
 import pytest
-from GUNTAM.Seed.SeedTransformer_JUSTINE import SeedTransformer
+from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader
 from GUNTAM.Seed.Validation_loss_function import validate_function
 
 
-def test_validation_function(path="/homeijclab/lesecq/stageM1/GUNTAM/tests/data/", dataset_name="event000000001-hits.csv", model_name="transformer.pt"):
+def test_validation_function(
+    path="/homeijclab/lesecq/stageM1/GUNTAM/tests/data/", dataset_name="event000000001-hits.csv", model_name="transformer.pt"
+):
 
     cfg = SeedConfig()
     cfg.parse_args(argv=[])
@@ -38,10 +40,11 @@ def test_validation_function(path="/homeijclab/lesecq/stageM1/GUNTAM/tests/data/
     model.to(cfg.device_acc)
     model.load(path=model_name, device=cfg.device_acc)
 
-    file_indices=list(range(len(dataset.file_paths)))
+    file_indices = list(range(len(dataset.file_paths)))
 
     with pytest.raises(ValueError):
         validate_function(model, file_indices, dataset, cfg, shuffle_v=4, situation="xyz")
 
-    assert round(validate_function(model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg)) == 50
+    result = validate_function(model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg)
 
+    assert round(result) == 50

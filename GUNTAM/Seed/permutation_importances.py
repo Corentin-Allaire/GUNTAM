@@ -15,7 +15,6 @@ from Efficiency_seed_class import Efficiency_class
 
 
 def config_model_dataset(path: str, dataset_name: str, model_name: str):
-
     """
     We load the dataset and the transformer.
     Args:
@@ -66,8 +65,8 @@ def config_model_dataset(path: str, dataset_name: str, model_name: str):
 
 # multiprocessing :
 
-def perm_imp_per_features_loss(enc_hits_shape: int, dataset, model, cfg):
 
+def perm_imp_per_features_loss(enc_hits_shape: int, dataset, model, cfg):
     """
     We use multiprocessing to speed up the process of computing each average loss for each feature we shuffle.
     Args:
@@ -78,7 +77,7 @@ def perm_imp_per_features_loss(enc_hits_shape: int, dataset, model, cfg):
     if method=="seed_eff", list of each efficiency for each feature we shuffle.
     """
     avg_loss_total = []
-    
+
     validation = Validation_class(model=model, dataset=dataset, cfg=cfg)
 
     args = []
@@ -91,11 +90,11 @@ def perm_imp_per_features_loss(enc_hits_shape: int, dataset, model, cfg):
         results = pool.map(validation.validate_class, args)
 
     avg_loss_total = results
-        
+
     return avg_loss_total
 
-def perm_imp_per_features_eff(enc_hits_shape: int, dataset, model, cfg):
 
+def perm_imp_per_features_eff(enc_hits_shape: int, dataset, model, cfg):
     """
     We use multiprocessing to speed up the process of computing each average loss for each feature we shuffle.
     Args:
@@ -106,7 +105,7 @@ def perm_imp_per_features_eff(enc_hits_shape: int, dataset, model, cfg):
     if method=="seed_eff", list of each efficiency for each feature we shuffle.
     """
     seed_eff_total = []
-    
+
     efficiency = Efficiency_class(model=model, dataset=dataset, cfg=cfg)
 
     args = []
@@ -119,17 +118,16 @@ def perm_imp_per_features_eff(enc_hits_shape: int, dataset, model, cfg):
         results = pool.map(efficiency.seed_eff_class, args)
 
     seed_eff_total = results
-    
+
     return seed_eff_total
- 
 
 
 # '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 # """""""""""""""""""""""""""""""""""""" SHUFFLE SITUATIONS """""""""""""""""""""""""""""""""""""""""""
 # '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-def perm_imp_situations(situation: str, method: str, dataset, model, cfg):
 
+def perm_imp_situations(situation: str, method: str, dataset, model, cfg):
     """
     We compute the average loss of the model for different situations where we shuffle multiple features.
     Args:
@@ -137,15 +135,20 @@ def perm_imp_situations(situation: str, method: str, dataset, model, cfg):
 
     Returns:
     if method=="loss", average loss of the situation.
-    if method=="seed_eff", efficiency of the situation. 
+    if method=="seed_eff", efficiency of the situation.
     """
-    
+
     if method == "loss":
-        result = validate_function(model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg, situation="xyz")
+        result = validate_function(
+            model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg, situation="xyz"
+        )
     if method == "seed_eff":
-        result = efficiency_reconstructed_seeds(model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg, situation="xyz")
+        result = efficiency_reconstructed_seeds(
+            model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg, situation="xyz"
+        )
 
     return result
+
 
 # ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 # """""""""""""""""""""""""""""""""""""" PLOTS """""""""""""""""""""""""""""""""""""""""""""""""""
@@ -153,26 +156,25 @@ def perm_imp_situations(situation: str, method: str, dataset, model, cfg):
 
 
 def plot_freq_loss(avg_loss_ref: int, avg_loss_total: list, feature: str):
-
     """
     We plot the average loss of each model in which we shuflle the frequencies of each embedded feature.
     Args:
     avg_loss_ref: average loss of reference (without any shuffling)
-    avg_loss_total: average loss of the situation 
+    avg_loss_total: average loss of the situation
 
     Returns:
-    Plots 
+    Plots
     """
 
-# Frequencies of the dataset (unique for each dataset)
-    
-    if feature == "z" :
+    # Frequencies of the dataset (unique for each dataset)
+
+    if feature == "z":
         avg_loss_total = avg_loss_total[120:160]
-    elif feature == "r" :
+    elif feature == "r":
         avg_loss_total = avg_loss_total[160:200]
-    elif feature == "x" :
+    elif feature == "x":
         avg_loss_total = avg_loss_total[40:80]
-    elif feature == "y" :
+    elif feature == "y":
         avg_loss_total = avg_loss_total[80:120]
     elif feature == "eta":
         avg_loss_total = avg_loss_total[200:240]
@@ -196,18 +198,17 @@ def plot_freq_loss(avg_loss_ref: int, avg_loss_total: list, feature: str):
     plt.close()
 
 
-def plot_all_loss(avg_loss_ref: int, avg_loss_total : list):
-
+def plot_all_loss(avg_loss_ref: int, avg_loss_total: list):
     """
     We plot the average loss of each model in which we shuffle one feature at a time.
     Args:
     avg_loss_ref: average loss of reference (without any shuffling)
-    avg_loss_total: average loss of the situation 
+    avg_loss_total: average loss of the situation
 
     Returns:
-    Plots 
+    Plots
     """
-    
+
     start = 0
     finish = len(avg_loss_total)
 
@@ -224,27 +225,27 @@ def plot_all_loss(avg_loss_ref: int, avg_loss_total : list):
 
     plt.close()
 
-def plot_freq_eff(seed_eff_total: list, feature : str):
 
+def plot_freq_eff(seed_eff_total: list, feature: str):
     """
     We plot the seeding efficiency of each model in which we shuflle the frequencies of each embedded feature.
     Args:
     avg_loss_ref: average loss of reference (without any shuffling)
-    avg_loss_total: average loss of the situation 
+    avg_loss_total: average loss of the situation
 
     Returns:
-    Plots 
+    Plots
     """
 
-# Frequencies of the dataset (unique for each dataset)
-    
-    if feature == "z" :
+    # Frequencies of the dataset (unique for each dataset)
+
+    if feature == "z":
         seed_eff_total = seed_eff_total[120:160]
-    elif feature == "r" :
+    elif feature == "r":
         seed_eff_total = seed_eff_total[160:200]
-    elif feature == "x" :
+    elif feature == "x":
         seed_eff_total = seed_eff_total[40:80]
-    elif feature == "y" :
+    elif feature == "y":
         seed_eff_total = seed_eff_total[80:120]
     elif feature == "phi":
         seed_eff_total = seed_eff_total[0:40]
@@ -269,16 +270,15 @@ def plot_freq_eff(seed_eff_total: list, feature : str):
     plt.close()
 
 
-def plot_all_eff(seed_eff_total : list):
-
+def plot_all_eff(seed_eff_total: list):
     """
     We plot the average loss of each model in which we shuffle one feature at a time.
     Args:
     avg_loss_ref: average loss of reference (without any shuffling)
-    avg_loss_total: average loss of the situation 
+    avg_loss_total: average loss of the situation
 
     Returns:
-    Plots 
+    Plots
     """
     start = 0
     finish = len(seed_eff_total)
@@ -296,24 +296,30 @@ def plot_all_eff(seed_eff_total : list):
 
     plt.close()
 
+
 # '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 # """""""""""""""""""""""""""""""""""""""" MAIN """""""""""""""""""""""""""""""""""""""""
 # '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
 if __name__ == "__main__":
 
-    cfg, dataset, model = config_model_dataset(path="/home/justine/Documents/GUNTAM/odd_output_new_5", dataset_name='odd_output_new_5', model_name="transformer_98_seed_eff.pt")
+    cfg, dataset, model = config_model_dataset(
+        path="/home/justine/Documents/GUNTAM/odd_output_new_5",
+        dataset_name="odd_output_new_5",
+        model_name="transformer_98_seed_eff.pt",
+    )
 
     # avg_loss_total = perm_imp_per_features_loss(enc_hits_shape=45, dataset=dataset, model=model, cfg=cfg)
     # seed_eff_total = perm_imp_per_features_eff(enc_hits_shape, dataset=dataset, model=model, cfg=cfg)
 
-    avg_loss_ref = validate_function(model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg) # shuffle_v=None and situation=None
+    avg_loss_ref = validate_function(
+        model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg
+    )  # shuffle_v=None and situation=None
     print("loss=", avg_loss_ref)
-    #avg_loss_ref = 75.48
-    
-    #plot_all_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total)
-    #plot_freq_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total, feature="x")
+    # avg_loss_ref = 75.48
 
-    #plot_all_eff(seed_eff_total=seed_eff_total)
-    #plot_freq_eff(seed_eff_total=seed_eff_total, feature="x")
+    # plot_all_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total)
+    # plot_freq_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total, feature="x")
 
+    # plot_all_eff(seed_eff_total=seed_eff_total)
+    # plot_freq_eff(seed_eff_total=seed_eff_total, feature="x")

@@ -15,7 +15,7 @@ class Efficiency_class(nn.Module):
     built a class to call the efficiency_reconstructed_seeds function to speed up the process in the main part
 
     Args:
-        model: The transformer model to be validated. 
+        model: The transformer model to be validated.
         dataset: The dataset object containing trained data.
         cfg: Full architecture configuration.
 

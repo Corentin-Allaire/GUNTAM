@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
 
-from GUNTAM.Seed.TransformerConfig_JUSTINE import TransformerConfig
+from GUNTAM.Seed.TransformerConfig import TransformerConfig
 from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
 from GUNTAM.Transformer.Transformer import load_state_dict_flex
@@ -38,7 +38,7 @@ class SeedTransformer(nn.Module):
         self,
         transformer_config: TransformerConfig = TransformerConfig(),
         device_acc: torch.device = torch.device("cpu"),
-        dtype: torch.dtype = torch.float32
+        dtype: torch.dtype = torch.float32,
     ) -> None:
         super(SeedTransformer, self).__init__()
 
@@ -102,13 +102,15 @@ class SeedTransformer(nn.Module):
             )
             self.hits_score_layer = nn.Sequential(nn.Linear(self.cfg.dim_embedding * 2, 1, device=self.device_acc), nn.Sigmoid())
 
-    def encodeSpacePoint(self, hits: Tensor, mask: Tensor, *, shuffle_v: Optional[int] = None, situation: Optional[str] = None) -> Tensor:
+    def encodeSpacePoint(
+        self, hits: Tensor, mask: Tensor, *, shuffle_v: Optional[int] = None, situation: Optional[str] = None
+    ) -> Tensor:
         """
         Encode the input hit sequence.
         Args:
             - hits (Tensor): Input source sequence.
             - mask (Tensor): Source mask.
-            - shuffle_v: Indice of the feature we shuffle. 
+            - shuffle_v: Indice of the feature we shuffle.
             - situation: name of the situation corresponding to which features we want to shuffle together.
 
         Returns:
@@ -161,20 +163,18 @@ class SeedTransformer(nn.Module):
 
         # Apply generic projection if needed
 
-        if self.cfg.embedding_mode == "MLP": 
+        if self.cfg.embedding_mode == "MLP":
 
             encoded_hits = self.embedding_projection(encoded_hits)
-            
 
         elif self.cfg.embedding_mode == "padding":
 
             pad_size = self.cfg.dim_embedding - encoded_hits.shape[-1]
             encoded_hits = F.pad(encoded_hits, (0, pad_size))
-        
+
         else:
 
             raise ValueError(f"Unknown embedding_mode: {self.cfg.embedding_mode}")
-
 
         transformer_output = self.transformer(x=encoded_hits, mask=mask)
 
@@ -193,7 +193,7 @@ class SeedTransformer(nn.Module):
         Args:
             - hits (Tensor): Input source sequence.
             - mask_hits (Tensor): Source mask.
-            - shuffle_v: Indice of the feature we shuffle. 
+            - shuffle_v: Indice of the feature we shuffle.
             - situation: name of the situation corresponding to which features we want to shuffle together.
 
         Returns:

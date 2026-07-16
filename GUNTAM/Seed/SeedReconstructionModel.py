@@ -12,8 +12,7 @@ from GUNTAM.IO.prepare_classifier import build_seed_features_tensor, seed_featur
 from GUNTAM.Transformer.Classifier_architecture import MLP_CE, running_classifier
 import GUNTAM.Seed.Reconstruction as Reconstruction
 
-
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class SeedReconstructionModel(nn.Module):
@@ -256,15 +255,24 @@ class SeedReconstructionModel(nn.Module):
         first = inverse.flip(0).new_empty(unique_chains.shape[0])
         first[inverse.flip(0)] = perm.flip(0)
 
-        unique_scores = scores_flat[first]
-
-        seed_features = build_seed_features_tensor(hits_tensor= hits, seed_tensor= unique_chains, feature_indices= [0, 1, 2, 3, 4, 5], cosine_feature_indices= [4])
+        seed_features = build_seed_features_tensor(
+            hits_tensor=hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
+        )
 
         torch.save(seed_features, "seed_features.pt")
 
-        seed_features = seed_features_file_adjustment(data = seed_features, batch_size = 1000)
+        seed_features = seed_features_file_adjustment(data=seed_features, batch_size=1000)
 
-        classifier = MLP_CE(input_shape=input_shape, hidden_1=hidden_1, hidden_2=hidden_2, hidden_3=hidden_3, hidden_4=hidden_4, output_shape=output_shape, p=p, activation=torch.nn.ReLU()).float()
+        classifier = MLP_CE(
+            input_shape=input_shape,
+            hidden_1=hidden_1,
+            hidden_2=hidden_2,
+            hidden_3=hidden_3,
+            hidden_4=hidden_4,
+            output_shape=output_shape,
+            p=p,
+            activation=torch.nn.ReLU(),
+        ).float()
 
         classifier.load_state_dict(torch.load("classifier.pt", map_location=device))
 

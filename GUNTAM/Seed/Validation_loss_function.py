@@ -62,11 +62,11 @@ def validate_function(
     Validation on all datas (no batch, no bin).
 
     Args:
-        model: The transformer model to be validated. 
+        model: The transformer model to be validated.
         file_indices: List of indices indexing the files we use.
         dataset: The dataset object containing trained data.
         cfg: Full architecture configuration.
-        shuffle_v: Indice of the feature we shuffle. 
+        shuffle_v: Indice of the feature we shuffle.
         situation: name of the situation corresponding to which features we want to shuffle together.
 
     Returns:
@@ -98,17 +98,17 @@ def validate_function(
             padding_mask = data["padding_mask"].to(cfg.device_acc)
             good_pairs = data["good_pairs"].to(cfg.device_acc)
 
-            num_events = hits_tensor.shape[0]  
+            num_events = hits_tensor.shape[0]
 
             nb_total_events = 0
             liste_event_file = []
 
             # We work on each event at a time:
 
-            for event_idx in range(num_events):  
+            for event_idx in range(num_events):
 
                 # We define all the information above for one event:
-                
+
                 event_hits_tensor = hits_tensor[event_idx]
                 event_good_pairs = good_pairs[event_idx]
                 event_padding_mask = padding_mask[event_idx]
@@ -118,7 +118,6 @@ def validate_function(
 
                 event_hits = event_hits_tensor[valid_bins]
                 event_masks = event_padding_mask[valid_bins]
-                event_pairs = event_good_pairs[valid_bins]
                 event_hit_to_particle_indices = event_hit_to_particle_tensor[valid_bins].squeeze(-1)
                 event_particles = event_particle_tensor[event_hit_to_particle_indices]
                 event_loss = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
@@ -127,8 +126,7 @@ def validate_function(
                 if situation is None and shuffle_v is not None:
                     encoded_space_points, attention_maps = model(event_hits, event_masks, shuffle_v=shuffle_v)
                 if situation is None and shuffle_v is None:
-                    encoded_space_points, attention_maps = model(event_hits, event_masks) # average loss of reference
-
+                    encoded_space_points, attention_maps = model(event_hits, event_masks)  # average loss of reference
 
                 # We define which loss type we want to use:
 
@@ -152,13 +150,13 @@ def validate_function(
                     event_loss["attention_next"] += Losses.attention_next_loss(attention_map_bin, pairs1, pairs2, target)
 
                 liste_event_file.append(event_loss["attention_next"].item())  # list of losses for one file
-                
+
                 nb_total_events += 1
 
             liste_all_files.append(liste_event_file)  # list of list : list of losses for all the files
 
         liste_all_files_flatten = [x for sous_liste in liste_all_files for x in sous_liste]
 
-    avg_loss = sum(liste_all_files_flatten) / len(liste_all_files_flatten) #average loss for all the files
+    avg_loss = sum(liste_all_files_flatten) / len(liste_all_files_flatten)  # average loss for all the files
 
     return avg_loss

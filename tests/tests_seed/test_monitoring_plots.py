@@ -8,6 +8,7 @@ from GUNTAM.Seed.MonitoringPlot import PlotUtility
 
 class TestPlotUtility:
     """Tests for the PlotUtility class."""
+
     matplotlib.use("Agg")
 
     def test_create_histogram_basic(self):
@@ -15,13 +16,7 @@ class TestPlotUtility:
         fig, ax = plt.subplots()
         data = np.random.randn(1000)
 
-        PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="Test Histogram",
-            xlabel="Value",
-            ylabel="Frequency"
-        )
+        PlotUtility.create_histogram(ax=ax, data=data, title="Test Histogram", xlabel="Value", ylabel="Frequency")
 
         # Check that plot was created
         assert ax.get_title() == "Test Histogram"
@@ -35,13 +30,7 @@ class TestPlotUtility:
         fig, ax = plt.subplots()
         data = np.array([])
 
-        PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="Empty Histogram",
-            xlabel="Value",
-            ylabel="Frequency"
-        )
+        PlotUtility.create_histogram(ax=ax, data=data, title="Empty Histogram", xlabel="Value", ylabel="Frequency")
 
         # Check that "No data available" message is displayed
         assert ax.get_title() == "Empty Histogram"
@@ -56,12 +45,7 @@ class TestPlotUtility:
         stats_text = "Mean: 0.5\nStd: 1.0"
 
         PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="Histogram with Stats",
-            xlabel="Value",
-            ylabel="Frequency",
-            stats_text=stats_text
+            ax=ax, data=data, title="Histogram with Stats", xlabel="Value", ylabel="Frequency", stats_text=stats_text
         )
 
         # Check that stats text is present
@@ -75,7 +59,7 @@ class TestPlotUtility:
         data = np.random.randn(100)
         reference_lines = [
             {"value": 0.0, "color": "red", "style": "--", "label": "Mean"},
-            {"value": 1.0, "color": "green", "style": "-.", "label": "Threshold"}
+            {"value": 1.0, "color": "green", "style": "-.", "label": "Threshold"},
         ]
 
         PlotUtility.create_histogram(
@@ -84,7 +68,7 @@ class TestPlotUtility:
             title="Histogram with References",
             xlabel="Value",
             ylabel="Frequency",
-            reference_lines=reference_lines
+            reference_lines=reference_lines,
         )
 
         # Check that reference lines were added
@@ -100,13 +84,7 @@ class TestPlotUtility:
         data = np.random.randn(1000)
 
         PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="Custom Bins",
-            xlabel="Value",
-            ylabel="Frequency",
-            bins=30,
-            color="red"
+            ax=ax, data=data, title="Custom Bins", xlabel="Value", ylabel="Frequency", bins=30, color="red"
         )
 
         # Check that histogram exists
@@ -118,14 +96,7 @@ class TestPlotUtility:
         fig, ax = plt.subplots()
         data = np.random.randn(1000)
 
-        PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="Density Histogram",
-            xlabel="Value",
-            ylabel="Density",
-            density=True
-        )
+        PlotUtility.create_histogram(ax=ax, data=data, title="Density Histogram", xlabel="Value", ylabel="Density", density=True)
 
         # Check that plot was created
         assert ax.get_ylabel() == "Density"
@@ -137,13 +108,7 @@ class TestPlotUtility:
         fig, ax = plt.subplots()
         data = np.array([1.0, 2.0, 3.0])
 
-        PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="Small Dataset",
-            xlabel="Value",
-            ylabel="Frequency"
-        )
+        PlotUtility.create_histogram(ax=ax, data=data, title="Small Dataset", xlabel="Value", ylabel="Frequency")
 
         # Should still create a plot
         assert ax.get_title() == "Small Dataset"
@@ -155,14 +120,7 @@ class TestPlotUtility:
         x = np.random.randn(100)
         y = np.random.randn(100)
 
-        PlotUtility.create_scatter_2d(
-            ax=ax,
-            x=x,
-            y=y,
-            title="Scatter Plot",
-            xlabel="X",
-            ylabel="Y"
-        )
+        PlotUtility.create_scatter_2d(ax=ax, x=x, y=y, title="Scatter Plot", xlabel="X", ylabel="Y")
 
         # Check that plot was created
         assert ax.get_title() == "Scatter Plot"
@@ -181,14 +139,7 @@ class TestPlotUtility:
         c = np.random.rand(100)
 
         PlotUtility.create_scatter_2d(
-            ax=ax,
-            x=x,
-            y=y,
-            c=c,
-            title="Colored Scatter",
-            xlabel="X",
-            ylabel="Y",
-            colorbar_label="Color Value"
+            ax=ax, x=x, y=y, c=c, title="Colored Scatter", xlabel="X", ylabel="Y", colorbar_label="Color Value"
         )
 
         # Check that scatter and colorbar exist
@@ -204,15 +155,7 @@ class TestPlotUtility:
         y = np.random.randn(50)
 
         PlotUtility.create_scatter_2d(
-            ax=ax,
-            x=x,
-            y=y,
-            title="Custom Scatter",
-            xlabel="X",
-            ylabel="Y",
-            s=50,
-            alpha=0.5,
-            cmap="plasma"
+            ax=ax, x=x, y=y, title="Custom Scatter", xlabel="X", ylabel="Y", s=50, alpha=0.5, cmap="plasma"
         )
 
         assert ax.get_title() == "Custom Scatter"
@@ -225,14 +168,7 @@ class TestPlotUtility:
         x = np.random.randn(200)
         y = np.random.randn(200)
 
-        PlotUtility.create_2d_histogram(
-            ax=ax,
-            x=x,
-            y=y,
-            title="2D Histogram",
-            xlabel="X",
-            ylabel="Y"
-        )
+        PlotUtility.create_2d_histogram(ax=ax, x=x, y=y, title="2D Histogram", xlabel="X", ylabel="Y")
 
         # Check that plot was created
         assert ax.get_title() == "2D Histogram"
@@ -248,15 +184,7 @@ class TestPlotUtility:
         x = np.random.randn(100)
         y = np.random.randn(100)
 
-        PlotUtility.create_2d_histogram(
-            ax=ax,
-            x=x,
-            y=y,
-            title="2D Hist + Scatter",
-            xlabel="X",
-            ylabel="Y",
-            overlay_scatter=True
-        )
+        PlotUtility.create_2d_histogram(ax=ax, x=x, y=y, title="2D Hist + Scatter", xlabel="X", ylabel="Y", overlay_scatter=True)
 
         # Check that both image and scatter exist
         assert len(ax.images) > 0  # Histogram image
@@ -269,15 +197,7 @@ class TestPlotUtility:
         x = np.random.randn(100)
         y = np.random.randn(100)
 
-        PlotUtility.create_2d_histogram(
-            ax=ax,
-            x=x,
-            y=y,
-            title="2D Hist Only",
-            xlabel="X",
-            ylabel="Y",
-            overlay_scatter=False
-        )
+        PlotUtility.create_2d_histogram(ax=ax, x=x, y=y, title="2D Hist Only", xlabel="X", ylabel="Y", overlay_scatter=False)
 
         # Check that only image exists, no scatter
         assert len(ax.images) > 0
@@ -290,15 +210,7 @@ class TestPlotUtility:
         x = np.random.randn(200)
         y = np.random.randn(200)
 
-        PlotUtility.create_2d_histogram(
-            ax=ax,
-            x=x,
-            y=y,
-            title="Custom Bins 2D",
-            xlabel="X",
-            ylabel="Y",
-            bins=(20, 25)
-        )
+        PlotUtility.create_2d_histogram(ax=ax, x=x, y=y, title="Custom Bins 2D", xlabel="X", ylabel="Y", bins=(20, 25))
 
         assert len(ax.images) > 0
         plt.close(fig)
@@ -309,15 +221,7 @@ class TestPlotUtility:
         x = np.random.randn(100)
         y = np.random.randn(100)
 
-        PlotUtility.create_2d_histogram(
-            ax=ax,
-            x=x,
-            y=y,
-            title="Custom Colormap",
-            xlabel="X",
-            ylabel="Y",
-            cmap="coolwarm"
-        )
+        PlotUtility.create_2d_histogram(ax=ax, x=x, y=y, title="Custom Colormap", xlabel="X", ylabel="Y", cmap="coolwarm")
 
         assert len(ax.images) > 0
         # Check colorbar exists
@@ -328,18 +232,9 @@ class TestPlotUtility:
         """Test that histogram uses 5th and 95th percentiles for xlim."""
         fig, ax = plt.subplots()
         # Create data with outliers
-        data = np.concatenate([
-            np.random.randn(90),  # Main distribution
-            np.array([-50, 50])   # Outliers
-        ])
+        data = np.concatenate([np.random.randn(90), np.array([-50, 50])])  # Main distribution  # Outliers
 
-        PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="With Outliers",
-            xlabel="Value",
-            ylabel="Frequency"
-        )
+        PlotUtility.create_histogram(ax=ax, data=data, title="With Outliers", xlabel="Value", ylabel="Frequency")
 
         # Check that xlim excludes extreme outliers
         xlim = ax.get_xlim()
@@ -373,16 +268,11 @@ class TestPlotUtility:
         reference_lines = [
             {"value": -1.0, "color": "blue", "style": "-", "label": "Lower"},
             {"value": 0.0, "color": "red", "style": "--", "label": "Middle"},
-            {"value": 1.0, "color": "green", "style": ":", "label": "Upper"}
+            {"value": 1.0, "color": "green", "style": ":", "label": "Upper"},
         ]
 
         PlotUtility.create_histogram(
-            ax=ax,
-            data=data,
-            title="Multiple References",
-            xlabel="Value",
-            ylabel="Frequency",
-            reference_lines=reference_lines
+            ax=ax, data=data, title="Multiple References", xlabel="Value", ylabel="Frequency", reference_lines=reference_lines
         )
 
         # Check that all reference lines are present

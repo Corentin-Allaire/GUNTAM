@@ -5,7 +5,7 @@
 import torch.nn as nn
 import torch
 
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class MLP_CE(nn.Module):
@@ -15,7 +15,7 @@ class MLP_CE(nn.Module):
     This MLP can classify if a seed is true or false (one seed at a time).
 
     Args:
-        input_shape: number of features for 3 hits (one seed) 
+        input_shape: number of features for 3 hits (one seed)
         hidden_1: number of neurons for the first hidden layer
         hidden_2: number of neurons for the second hidden layer
         hidden_3: number of neurons for the third hidden layer
@@ -26,18 +26,28 @@ class MLP_CE(nn.Module):
     Returns:
         Weither the seed is true (1) or false (0).
 
-    
+
     """
-    
-    def __init__(self, input_shape: int, hidden_1: int, hidden_2: int, hidden_3: int, hidden_4: int, output_shape: int, p: float, activation=torch.nn.ReLU()):
+
+    def __init__(
+        self,
+        input_shape: int,
+        hidden_1: int,
+        hidden_2: int,
+        hidden_3: int,
+        hidden_4: int,
+        output_shape: int,
+        p: float,
+        activation=torch.nn.ReLU(),
+    ):
         super(MLP_CE, self).__init__()
-        self.W1 = torch.nn.Linear(input_shape, hidden_1) 
+        self.W1 = torch.nn.Linear(input_shape, hidden_1)
         self.activation = activation
         self.W2 = torch.nn.Linear(hidden_1, hidden_2)
         self.W3 = torch.nn.Linear(hidden_2, hidden_3)
         self.W4 = torch.nn.Linear(hidden_3, hidden_4)
         self.dropout = torch.nn.Dropout(p)
-        self.output_layer = torch.nn.Linear(hidden_4, output_shape) 
+        self.output_layer = torch.nn.Linear(hidden_4, output_shape)
 
     def forward(self, x):
         out = self.W1(x)
@@ -68,8 +78,8 @@ def train_loop_CE(trainloader, model: MLP_CE, n_epochs: int, optimizer, criterio
 
     for epoch in range(n_epochs):
 
-        print("epoch:",epoch)
-        
+        print("epoch:", epoch)
+
         for i, (X, y) in enumerate(trainloader):
             inputs = X.to(device)
             labels = y.to(device).float().unsqueeze(1)
@@ -103,7 +113,7 @@ def extract_features_CE(dataloader, model: MLP_CE, device=device):
         out = model.activation(out)
         out = model.W4(out)
         out = model.activation(out)
-        yield out, y  
+        yield out, y
 
 
 def icing_on_the_cake_CE(trainloader, model: MLP_CE, n_epochs: int, lr: float, device=device):
@@ -131,13 +141,12 @@ def icing_on_the_cake_CE(trainloader, model: MLP_CE, n_epochs: int, lr: float, d
 
 
 def running_classifier(testloader, model, device=device):
-
     """
     returns signal = true seeds found by the classifier
     """
-    
+
     model.eval()
-    
+
     scores = []
     labels_list = []
 
@@ -149,16 +158,14 @@ def running_classifier(testloader, model, device=device):
             pred = model(X)
 
             proba = torch.softmax(pred, dim=1)
-            score = proba[:, 1] 
-            
+            score = proba[:, 1]
+
             scores.append(score)
             labels_list.append(y)
 
     scores = torch.cat(scores).numpy().flatten()
     labels = torch.cat(labels_list).numpy().flatten()
     # separation signal/background
-    signal = scores[labels == 1] # true positive
-    background = scores[labels == 0] # false positive
+    signal = scores[labels == 1]  # true positive
 
     return signal
-
