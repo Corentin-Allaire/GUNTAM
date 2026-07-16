@@ -38,11 +38,7 @@ class TestDataLoader:
 
             # Create tensors with [E, B, ...] shape where B=3
             x = torch.arange(start * 3, end * 3, dtype=torch.float32).reshape(n, 3)  # [E, B]
-            y = (
-                torch.arange(start, end, dtype=torch.long)
-                .unsqueeze(1)
-                .expand(-1, 3)
-            )  # [E, B]
+            y = torch.arange(start, end, dtype=torch.long).unsqueeze(1).expand(-1, 3)  # [E, B]
 
             torch.save(
                 {

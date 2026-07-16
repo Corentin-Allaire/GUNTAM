@@ -10,8 +10,6 @@ from GUNTAM.Transformer.Transformer import (
     TransformerEncoder,
     _normalize_state_dict_keys,
     load_state_dict_flex,
-
-
 )
 
 
@@ -156,9 +154,7 @@ class TestScaledDotProductAttention:
 
         # PyTorch implementation expects inverted boolean (True = keep)
         attn_mask = ~mask
-        out_torch = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, dropout_p=0.0
-        )
+        out_torch = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=0.0)
 
         # Compare outputs
         assert torch.allclose(out_manual, out_torch, atol=1e-6)
@@ -582,9 +578,7 @@ class TestIntegration:
             assert output.shape == (2, seq_len, input_dim)
 
             # Check for NaN values
-            assert not torch.isnan(
-                output
-            ).any(), f"Output contains NaN values for seq_len={seq_len}"
+            assert not torch.isnan(output).any(), f"Output contains NaN values for seq_len={seq_len}"
 
     def test_memory_efficiency(self):
         """Test that transformer doesn't have memory leaks during training."""

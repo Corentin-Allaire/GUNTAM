@@ -10,9 +10,7 @@ class TestFourierPositionalEncodingInitialization:
     def test_valid_initialization_default(self):
         """Test proper initialization with default high_level_dim."""
         input_dim, num_frequencies, high_level_dim = 3, [6, 6, 6], 3
-        fpe = FourierPositionalEncoding(
-            input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=high_level_dim
-        )
+        fpe = FourierPositionalEncoding(input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=high_level_dim)
 
         assert fpe.input_dim == input_dim
         assert fpe.num_frequencies == num_frequencies
@@ -28,18 +26,14 @@ class TestFourierPositionalEncodingInitialization:
         """Changing high_level_dim should update output_dim accordingly."""
         input_dim, num_frequencies = 3, [4, 4, 4]
         for h in [1, 5, 7]:
-            fpe = FourierPositionalEncoding(
-                input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=h
-            )
+            fpe = FourierPositionalEncoding(input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=h)
             assert fpe.output_dim == sum(fpe.num_frequencies) * 2 + h
 
     def test_valid_initialization_with_list(self):
         """Test proper initialization with list of num_frequencies."""
         input_dim, high_level_dim = 3, 3
         num_frequencies_list = [4, 6, 8]
-        fpe = FourierPositionalEncoding(
-            input_dim=input_dim, num_frequencies=num_frequencies_list, high_level_dim=high_level_dim
-        )
+        fpe = FourierPositionalEncoding(input_dim=input_dim, num_frequencies=num_frequencies_list, high_level_dim=high_level_dim)
 
         assert fpe.input_dim == input_dim
         assert fpe.num_frequencies == num_frequencies_list
@@ -74,9 +68,7 @@ class TestFourierPositionalEncodingForward:
         """Test output shape and value ranges with a single high_level_dim."""
         batch_size, seq_len = 2, 5
         input_dim, num_frequencies, high_level_dim = 3, [4, 4, 4], 3
-        fpe = FourierPositionalEncoding(
-            input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=high_level_dim
-        )
+        fpe = FourierPositionalEncoding(input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=high_level_dim)
 
         x_sampled = torch.randn(batch_size, seq_len, input_dim)
         x_high_level = torch.randn(batch_size, seq_len, high_level_dim)
@@ -100,9 +92,7 @@ class TestFourierPositionalEncodingForward:
         batch_size, seq_len = 1, 3
         input_dim, num_frequencies = 3, [2, 2, 2]
         for h in [1, 4, 6]:
-            fpe = FourierPositionalEncoding(
-                input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=h
-            )
+            fpe = FourierPositionalEncoding(input_dim=input_dim, num_frequencies=num_frequencies, high_level_dim=h)
             x_sampled = torch.randn(batch_size, seq_len, input_dim)
             x_high_level = torch.randn(batch_size, seq_len, h)
             out = fpe(x_sampled, x_high_level)

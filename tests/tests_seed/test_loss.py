@@ -19,12 +19,14 @@ class TestAttentionLoss:
         assert empty.device == attention.device
 
         # Construct small example with symmetric positive/negative pairs
-        attention_logits = torch.tensor([
-            [0.0, 1.0, -1.0, 0.5],
-            [1.2, 0.0, -0.3, 0.7],
-            [-0.4, 0.9, 0.0, -0.2],
-            [0.6, -0.8, 0.3, 0.0],
-        ])
+        attention_logits = torch.tensor(
+            [
+                [0.0, 1.0, -1.0, 0.5],
+                [1.2, 0.0, -0.3, 0.7],
+                [-0.4, 0.9, 0.0, -0.2],
+                [0.6, -0.8, 0.3, 0.0],
+            ]
+        )
         # Pairs (exclude diagonal) - symmetric
         pairs1 = torch.tensor([0, 1, 0, 2])  # (0,1) (1,0) (0,2) (2,0)
         pairs2 = torch.tensor([1, 0, 2, 0])
@@ -144,7 +146,7 @@ class TestAttentionNextLoss:
         num_valid_hits = 5
         expected_loss = torch.log(torch.tensor(float(num_valid_hits)))  # mean of identical entries
         expected_loss_0 = torch.log(torch.tensor(float(num_valid_hits - 1)))  # target 2 is excluded from loss
-        expected_loss = (expected_loss * 3 + expected_loss_0)
+        expected_loss = expected_loss * 3 + expected_loss_0
         assert torch.isclose(loss, expected_loss, atol=1e-6)
 
         zero_res = attention_next_loss(attention_logits, pairs1, pairs2, torch.tensor([-1, -1, -1, -1, -1]))
@@ -164,7 +166,7 @@ class TestReconstructionLoss:
                 [
                     [1.0, 0.5, sin_phi[0].item(), cos_phi[0].item(), 10.0],
                     [2.0, 1.5, sin_phi[1].item(), cos_phi[1].item(), 20.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0]
+                    [0.0, 0.0, 0.0, 0.0, 0.0],
                 ]
             ]
         )
@@ -218,7 +220,7 @@ class TestReconstructionLoss:
 
         padded_mask = torch.tensor([[False, False, False, False]])
         losses = reconstruction_loss(reconstructed, particles, padded_mask, loss_type="MSE")
-        
+
         # Perfect reconstruction should yield near-zero losses
         assert torch.isclose(losses["phi"], torch.tensor(0.0), atol=1e-6), f"Phi loss not close to 0: {losses['phi']}"
 
@@ -235,7 +237,7 @@ class TestReconstructionLoss:
 
         padded_mask = torch.tensor([[False, False]])
         losses = reconstruction_loss(reconstructed, particles, padded_mask, loss_type="MSE")
-        
+
         # Perfect pT match -> loss should be 0
         assert torch.isclose(losses["pt"], torch.tensor(0.0), atol=1e-6), f"pT loss not close to 0: {losses['pt']}"
 
@@ -243,7 +245,7 @@ class TestReconstructionLoss:
         reconstructed_mismatch = reconstructed.clone()
         reconstructed_mismatch[0, 0, 4] = 15.0  # Change pT from 10 to 15
         losses_mismatch = reconstruction_loss(reconstructed_mismatch, particles, padded_mask, loss_type="MSE")
-        
+
         # Loss should be non-zero due to mismatch
         assert losses_mismatch["pt"] > 0, "pT loss should be positive for mismatched predictions"
 
@@ -251,12 +253,16 @@ class TestReconstructionLoss:
 class TestHitClassificationLoss:
     def test_balanced_and_edge(self):
         seed_scores = torch.tensor([[0.9, 0.1, 0.8, 0.2]])  # batch=1, hits=4
-        particles = torch.tensor([[
-            [0.0, 0.0, 0.0, 0.0, 5.0],   # particle (pT>0)
-            [0.0, 0.0, 0.0, 0.0, 0.0],   # orphan
-            [0.0, 0.0, 0.0, 0.0, 3.0],   # particle
-            [0.0, 0.0, 0.0, 0.0, 0.0],   # orphan
-        ]])
+        particles = torch.tensor(
+            [
+                [
+                    [0.0, 0.0, 0.0, 0.0, 5.0],  # particle (pT>0)
+                    [0.0, 0.0, 0.0, 0.0, 0.0],  # orphan
+                    [0.0, 0.0, 0.0, 0.0, 3.0],  # particle
+                    [0.0, 0.0, 0.0, 0.0, 0.0],  # orphan
+                ]
+            ]
+        )
         padded_mask = torch.tensor([[False, False, False, False]])
         loss_val = hit_classification_loss(seed_scores, particles, padded_mask)
         assert loss_val > 0

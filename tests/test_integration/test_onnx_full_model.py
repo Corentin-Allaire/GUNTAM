@@ -64,8 +64,8 @@ def _load_space_points() -> tuple[pd.DataFrame, pd.DataFrame]:
     # hits index → hit_id used by the measurement map
     hits["hit_id"] = hits.index.astype(int)
 
-    meas_map = pd.read_csv(MEAS_FILE)   # columns: measurement_id, hit_id
-    sp = pd.read_csv(SP_FILE)            # columns: measurement_id_1, measurement_id_2, x, y, z, …
+    meas_map = pd.read_csv(MEAS_FILE)  # columns: measurement_id, hit_id
+    sp = pd.read_csv(SP_FILE)  # columns: measurement_id_1, measurement_id_2, x, y, z, …
 
     # Join measurement_id_1 → hit_id → particle_id
     sp = sp.merge(
@@ -175,9 +175,7 @@ class TestOnnxFullModel:
         seeds, _ = inference_results
 
         valid_indices = seeds[seeds >= 0]
-        assert valid_indices.max() < len(sp), (
-            f"Seed index {valid_indices.max()} out of range for {len(sp)} space points"
-        )
+        assert valid_indices.max() < len(sp), f"Seed index {valid_indices.max()} out of range for {len(sp)} space points"
 
     def test_seeding_efficiency(self, event0, inference_results):
         """Compute efficiency and assert a non-trivial lower bound."""
@@ -272,4 +270,4 @@ class TestOnnxFullModel:
 
         assert total_particles > 0, "No particles found in event 0"
         assert efficiency >= 0.0  # Tighten once a baseline is established.
-        assert fake_rate <= 1.0   # Tighten once a baseline is established.
+        assert fake_rate <= 1.0  # Tighten once a baseline is established.
