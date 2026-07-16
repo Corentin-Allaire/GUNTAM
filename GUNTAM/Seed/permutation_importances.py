@@ -5,7 +5,7 @@
 import multiprocessing as mp
 import torch
 import matplotlib.pyplot as plt
-from GUNTAM.Seed.SeedTransformer_JUSTINE import SeedTransformer
+from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader
 from Validation_loss_function import validate_function
