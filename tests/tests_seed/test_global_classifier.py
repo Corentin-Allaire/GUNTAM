@@ -11,7 +11,7 @@ from GUNTAM.IO.prepare_classifier import (
 
 
 def test_transformer_seed_reconstruction(
-    path="/homeijclab/lesecq/stageM1/GUNTAM/tests/data/", dataset_name="event000000001-hits.csv", model_name="transformer.pt"
+    path="/tests/data/", dataset_name="event000000001-hits.csv", model_name="transformer.pt"
 ):
     """
     Testing if the transformer is built with the transformer class

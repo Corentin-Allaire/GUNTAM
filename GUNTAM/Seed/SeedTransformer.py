@@ -10,7 +10,7 @@ from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
 from GUNTAM.Transformer.Transformer import load_state_dict_flex
 from GUNTAM.Transformer.Embeding import FourierPositionalEncoding
-from stageM1.GUNTAM.GUNTAM.Seed.shuffle_features import shuffle_features, shuffle_features_per_i
+from GUNTAM.Seed.shuffle_features import shuffle_features, shuffle_features_per_i
 
 
 class SeedTransformer(nn.Module):

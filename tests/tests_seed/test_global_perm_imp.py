@@ -7,7 +7,7 @@ from GUNTAM.Seed.Validation_loss_function import validate_function
 
 
 def test_validation_function(
-    path="/homeijclab/lesecq/stageM1/GUNTAM/tests/data/", dataset_name="event000000001-hits.csv", model_name="transformer.pt"
+    path="/tests/data/", dataset_name="event000000001-hits.csv", model_name="transformer.pt"
 ):
 
     cfg = SeedConfig()
