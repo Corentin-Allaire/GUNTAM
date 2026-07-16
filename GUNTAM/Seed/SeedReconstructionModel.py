@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from GUNTAM.Seed.SeedTransformer_JUSTINE import SeedTransformer
+from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Transformer.BinTensor import global_bin_torch, neighbor_bin_torch, no_bin_torch, margin_bin_torch
 from GUNTAM.IO.prepare_classifier import build_seed_features_tensor, seed_features_file_adjustment
