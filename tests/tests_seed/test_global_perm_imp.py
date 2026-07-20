@@ -11,7 +11,7 @@ def test_validation_function(
 ):
 
     cfg = SeedConfig()
-    cfg.parse_args(argv=[])
+    cfg.parse_args()
     cfg.epoch_nb = 1
     cfg.transformer_config.embedding_mode = "MLP"
 
