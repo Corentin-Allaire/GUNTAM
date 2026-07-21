@@ -4,6 +4,7 @@
 
 import torch
 from typing import Optional
+import torch.nn as nn
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 import GUNTAM.Seed.SeedLoss as Losses
 from GUNTAM.Seed.Config import SeedConfig
@@ -165,3 +166,33 @@ def validate_function(
     avg_loss = sum(liste_all_files_flatten) / len(liste_all_files_flatten)  # average loss for all the files
 
     return avg_loss
+
+
+class Validation_class(nn.Module):
+    """
+    built a class to call the validation function in order to speed up the process in the main part
+
+    Args:
+        model: The transformer model to be validated.
+        dataset: The dataset object containing trained data.
+        cfg: Full architecture configuration.
+
+    Returns:
+        average loss for the dataset with the feature i that has been shuffle.
+
+    """
+
+    def __init__(self, model: SeedTransformer, dataset: DataLoader, cfg=SeedConfig):
+        super().__init__()
+        self.model = model
+        self.dataset = dataset
+        self.cfg = cfg
+
+    def validate_class(self, i: int):
+        return validate_function(
+            model=self.model,
+            dataset=self.dataset,
+            file_indices=list(range(len(self.dataset.file_paths))),
+            cfg=self.cfg,
+            shuffle_v=i,
+        )

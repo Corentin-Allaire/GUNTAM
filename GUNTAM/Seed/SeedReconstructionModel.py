@@ -8,7 +8,7 @@ from torch import Tensor
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Transformer.BinTensor import global_bin_torch, neighbor_bin_torch, no_bin_torch, margin_bin_torch
-from GUNTAM.IO.prepare_classifier import build_seed_features_tensor, seed_features_file_adjustment
+from GUNTAM.IO.prepare_classifier import build_seed_features_tensor, seed_features_file_adjustment, parse_args_classifier
 from GUNTAM.Transformer.Classifier_architecture import MLP_CE, running_classifier
 import GUNTAM.Seed.Reconstruction as Reconstruction
 
@@ -201,17 +201,7 @@ class SeedReconstructionModel(nn.Module):
             backward=backward,
         )
 
-    def forward(
-        self,
-        hits: Tensor,
-        input_shape: int,
-        output_shape: int,
-        hidden_1: int,
-        hidden_2: int,
-        hidden_3: int,
-        hidden_4: int,
-        p: int,
-    ) -> tuple[Tensor, Tensor]:
+    def forward(self, hits: Tensor) -> tuple[Tensor, Tensor]:
         """
         Forward pass of the full seed-reconstruction model.
         Args:
@@ -263,14 +253,16 @@ class SeedReconstructionModel(nn.Module):
 
         seed_features = seed_features_file_adjustment(data=seed_features, batch_size=1000)
 
+        args = parse_args_classifier()
+
         classifier = MLP_CE(
-            input_shape=input_shape,
-            hidden_1=hidden_1,
-            hidden_2=hidden_2,
-            hidden_3=hidden_3,
-            hidden_4=hidden_4,
-            output_shape=output_shape,
-            p=p,
+            input_shape=args.input_shape,
+            hidden_1=args.hidden_1,
+            hidden_2=args.hidden_2,
+            hidden_3=args.hidden_3,
+            hidden_4=args.hidden_4,
+            output_shape=args.output_shape,
+            p=args.p,
             activation=torch.nn.ReLU(),
         ).float()
 

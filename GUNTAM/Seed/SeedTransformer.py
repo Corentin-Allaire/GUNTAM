@@ -73,7 +73,9 @@ class SeedTransformer(nn.Module):
 
         # Projection layer to map Fourier-encoded features to the desired embedding dimension
         embedding_input_dim = self.fourier_encoding.output_dim
-        self.embedding_projection = nn.Linear(embedding_input_dim, self.cfg.dim_embedding, device=self.device_acc)
+
+        if self.cfg.embedding_mode == "MLP":
+            self.embedding_projection = nn.Linear(embedding_input_dim, self.cfg.dim_embedding, device=self.device_acc)
 
         # Transformer model
         self.transformer = TransformerEncoder(

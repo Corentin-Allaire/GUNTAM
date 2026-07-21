@@ -4,7 +4,7 @@
 
 import torch.nn as nn
 from GUNTAM.Seed.Config import SeedConfig
-from Validation_loss_function import validate_function
+from GUNTAM.Seed.Validation_loss_function import validate_function
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.IO.DataLoader import DataLoader
 

@@ -1,20 +1,21 @@
 import torch
+import argparse
 import numpy as np
 from typing import List
+from torch.utils.data import Dataset
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Seed.Reconstruction import batched_beam_search_seed_reconstruction
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
+from GUNTAM.IO.DataLoader import DataLoader
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 
 # """"""""""""""" TRANSFORMER LOADING """"""""""""""""
 
 
 def transformer_loading(transformer_name):
     """
+    This function is able to load the trained transformer saved as "transformer_name.pt"
     Args:
     transformer_name: name of the trained transformer
 
@@ -24,7 +25,7 @@ def transformer_loading(transformer_name):
     """
 
     cfg = SeedConfig()
-    cfg.parse_args()
+    # cfg.parse_args()
     cfg.epoch_nb = 1
 
     transformer = SeedTransformer(transformer_config=cfg.transformer_config, device_acc=cfg.device_acc, dtype=torch.float32)
@@ -44,7 +45,7 @@ def transformer_seed_reconstruction(
     cfg: SeedConfig,
 ):
     """
-    We reconstruct the seeds once they've been through the transformer
+    We reconstruct the seeds once they've been through the transformer thanks to batched_beam_search_seed_reconstruction
 
     Args:
         model: The transformer model to be validated.
@@ -132,8 +133,8 @@ def build_seed_features_tensor(
     cosine_feature_indices: List[int] = [4],
 ) -> torch.Tensor:
     """
-    Build a feature tensor for each seed by gathering hit coordinates.
-    This can then be passed to NN for parameter regression and good/fake classification.
+    This function builds a feature tensor for each seed by gathering hit coordinates.
+    This tensor can then be passed to a NN for parameter regression and good/fake classification.
 
     Args:
         hits_tensor: Float tensor of shape [N, num_features] containing the hit
@@ -173,8 +174,9 @@ def build_seed_features_tensor(
     return result
 
 
-def seed_features_file(input_tensor_path, dataset_name, transformer_name):
+def create_seed_features_file(input_tensor_path, dataset_name, transformer_name):
     """
+    This function creates a file made of the reconstructed seeds, their features and labels
     Args:
     input_tensor_path: where is the dataset used to train the transformer
     dataset_name: name of the dataset used to train the transformer
@@ -223,69 +225,74 @@ def seed_features_file(input_tensor_path, dataset_name, transformer_name):
 # """""""""""""""""""""""""""""""""""""""""""""""""""" PREPARING THIS FILE TO BE USED """"""""""""""""""""""""""""""""""""
 
 
-def balance_dataset(X, y):
+def balance_dataset(features, labels):
     """
+    We balance the dataset in order to have the same number of fake and true seeds in the dataset
     Args:
-    X: features of each seed
-    y: labels of each seeds
+    features: features of each seed
+    labels: labels of each seeds
 
     Returns:
     A balanced dataset
 
     """
 
-    values, counts = torch.unique(y, return_counts=True)  # proportion of true and fake seeds
+    values, counts = torch.unique(labels, return_counts=True)  # proportion of true and fake seeds
 
     # Separating the true and fake seeds
-    idx_true = (y == 0).nonzero(as_tuple=True)[0]
-    idx_fake = (y == 1).nonzero(as_tuple=True)[0]
+    idx_true = (labels == 0).nonzero(as_tuple=True)[0]
+    idx_fake = (labels == 1).nonzero(as_tuple=True)[0]
 
     n_min = min(len(idx_true), len(idx_fake))
 
     idx_balanced = torch.cat([idx_true[:n_min], idx_fake[:n_min]])
 
-    X = X[idx_balanced]
-    y = y[idx_balanced]
+    features = features[idx_balanced]
+    labels = labels[idx_balanced]
 
     # Shuffle
-    perm = torch.randperm(len(y))
-    X = X[perm]
-    y = y[perm]
+    perm = torch.randperm(len(labels))
+    features = features[perm]
+    labels = labels[perm]
 
-    return X, y
+    return features, labels
 
 
-def circle_3_points_batch(X_np):
+def circle_3_points_batch(features_np):
     """
+    We add 7 new features for each seed. These features are the parameters of the circle made of the three points in each seed
     Args:
-    X_np: X as a numpy object
+    features_np: features tensor as a numpy object
 
     Returns:
-    - coordonitates of the center of the circle
+    - coordinates of the center of the circle
     - radius of the circle
     - coordinates of the normal of the circle
 
     """
-    X_np = X_np.astype(np.float64)
+    features_np = features_np.astype(np.float64)
 
-    P1 = X_np[:, 0:3]
-    P2 = X_np[:, 7:10]
-    P3 = X_np[:, 14:17]
+    P1 = features_np[:, 0:3]  # positional features of the first point of the seed : x1, y1, z1
+    P2 = features_np[:, 7:10]  # x2, y2, z2
+    P3 = features_np[:, 14:17]  # x3, y3, z3
 
     print("P1 shape:", P1.shape)  # should be (N, 3)
     print("P1 dtype:", P1.dtype)  # should be float64
 
+    # Computing the normal vector to the plane formed by the 3 points : P1, P2, P3
     a = P2 - P1
     b = P3 - P1
     normal = np.cross(a, b)
 
     print("normal shape:", normal.shape)  # should be (N, 3)
 
+    # Handling degenerate cases:
     norm_val = np.linalg.norm(normal, axis=1, keepdims=True)
     degenerate = norm_val[:, 0] < 1e-10
     norm_val = np.where(norm_val < 1e-10, 1.0, norm_val)
     normal /= norm_val
 
+    # Building a linear system to find the center:
     row1 = 2 * (P2 - P1)
     row2 = 2 * (P3 - P1)
     row3 = normal
@@ -294,6 +301,7 @@ def circle_3_points_batch(X_np):
     print("row2 shape:", row2.shape)
     print("row3 shape:", row3.shape)
 
+    # Solving the system:
     A = np.stack([row1, row2, row3], axis=1)
     b_vec = np.stack(
         [
@@ -309,8 +317,11 @@ def circle_3_points_batch(X_np):
 
     A_inv = np.linalg.pinv(A)  # (N, 3, 3)
     center = np.einsum("nij,nj->ni", A_inv, b_vec)  # (N, 3)
+
+    # Computing the radius:
     radius = np.linalg.norm(center - P1, axis=1, keepdims=True)
 
+    # Cleaning up degenerate cases:
     center[degenerate] = 0.0
     radius[degenerate] = 0.0
     normal[degenerate] = 0.0
@@ -349,10 +360,13 @@ class SeedDataset(Dataset):
 def seed_features_file_adjustment(data, batch_size=1000):
     """
 
-    Adjusting the datas of seed features to give it to the Classifier
+    preparing the dataset of reconstructed seeds (features + labels) we give to the Classifier by :
+        - balancing the dataset
+        - adding new features
+        - turning it into a Dataloader
 
     Args:
-    data: seed_features created by seed_features_file
+    data: seed_features created by create_seed_features_file
 
     Returns:
     Adjusted seed_features
@@ -364,13 +378,13 @@ def seed_features_file_adjustment(data, batch_size=1000):
 
     X, y = balance_dataset(X, y)
 
-    X_np = X.numpy().astype(np.float64)
+    features_np = X.numpy().astype(np.float64)
 
-    if X_np.ndim == 1:
-        X_np = X_np.reshape(-1, 21)
-        print("Shape après reshape :", X_np.shape)  # should be (N, 21)
+    if features_np.ndim == 1:
+        features_np = features_np.reshape(-1, 21)
+        print("Shape after reshape :", features_np.shape)  # should be (N, 21)
 
-    extra = circle_3_points_batch(X_np)
+    extra = circle_3_points_batch(features_np)
 
     extra_tensor = torch.tensor(extra, dtype=torch.float32)
     X = torch.cat([X, extra_tensor], dim=1)  # (11884838, 28)
@@ -380,3 +394,29 @@ def seed_features_file_adjustment(data, batch_size=1000):
     Seed_dataloader = DataLoader(dataset=Seed_Dataset, batch_size=batch_size)
 
     return Seed_dataloader
+
+
+# """""""""""""""""""""""""""""""""""""""""""""""""""" HYPERPARAMETERS OF THE CLASSIFIER """"""""""""""""""""""""""""""""""""
+
+
+def parse_args_classifier():
+    """
+    We define arguments to choose the path of the dataset, his name and the transformer model name
+    input_shape: input shape of the classifier
+    output_shape: output shape of the classifier
+    hidden_1: number of neurons in the first layer
+    hidden_2: number of neurons in the second layer
+    hidden_3: number of neurons in the third layer
+    hidden_4: number of neurons in the fourth layer
+    p: dropout rate
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_shape", type=int, default=28)
+    parser.add_argument("--output_shape", type=int, default=2)
+    parser.add_argument("--hidden_1", type=int, default=64)
+    parser.add_argument("--hidden_2", type=int, default=32)
+    parser.add_argument("--hidden_3", type=int, default=16)
+    parser.add_argument("--hidden_4", type=int, default=8)
+    parser.add_argument("--p", type=int, default=0)
+
+    return parser.parse_args()

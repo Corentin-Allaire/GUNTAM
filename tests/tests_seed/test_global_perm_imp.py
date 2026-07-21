@@ -1,50 +1,30 @@
-import torch
 import pytest
-from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
-from GUNTAM.IO.DataLoader import DataLoader
 from GUNTAM.Seed.Validation_loss_function import validate_function
+from GUNTAM.Seed.permutation_importances import config_model_dataset
 
 
-def test_validation_function(
-    path="/tests/data/", dataset_name="event000000001-hits.csv", model_name="transformer.pt"
-):
+import pathlib
+
+data_path = pathlib.Path(__file__).parents[1] / "data" / "odd_output_new_5"
+model_path = pathlib.Path(__file__).parents[1] / "data" / "transformer.pt"
+
+
+def test_validation_function(data_path=data_path, dataset_name="odd_output_new_5", model_path=model_path):
 
     cfg = SeedConfig()
-    cfg.parse_args()
-    cfg.epoch_nb = 1
-    cfg.transformer_config.embedding_mode = "MLP"
 
-    cfg.input_tensor_path = path
-
-    tensor_list = {
-        "hits_tensor",
-        "particles_tensor",
-        "hit_to_particle_tensor",
-        "padding_mask",
-        "good_pairs",
-    }
-
-    dataset = DataLoader(
-        dataset_dir=cfg.input_tensor_path,
+    dataset, transformer = config_model_dataset(
+        path=data_path,
         dataset_name=dataset_name,
-        tensor_names=list(tensor_list),
-        device=cfg.device_acc,
+        model_name=model_path,
     )
-
-    model = SeedTransformer(
-        transformer_config=cfg.transformer_config,
-        device_acc=cfg.device_acc,
-        dtype=torch.float32,
-    )
-    model.to(cfg.device_acc)
-    model.load(path=model_name, device=cfg.device_acc)
-
+    
     file_indices = list(range(len(dataset.file_paths)))
 
     with pytest.raises(ValueError):
-        validate_function(model, file_indices, dataset, cfg, shuffle_v=4, situation="xyz")
+        validate_function(transformer, file_indices, dataset, cfg, shuffle_v=4, situation="xyz")
 
-    result = validate_function(model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg)
+    result = validate_function(model=transformer, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg)
 
-    assert round(result) == 50
+    assert round(result) == 53

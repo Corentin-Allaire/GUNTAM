@@ -5,7 +5,7 @@
 import torch.nn as nn
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Transformer.Utils import ts_print
-from Efficiency_seed_function import efficiency_reconstructed_seeds
+from GUNTAM.Seed.Efficiency_seed_function import efficiency_reconstructed_seeds
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.IO.DataLoader import DataLoader
 

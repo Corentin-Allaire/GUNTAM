@@ -2,16 +2,28 @@
 # """""""""""""""""""""""""""" PERMUTATION IMPORTANCES """"""""""""""""""""""""""""""""""""
 # '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-import multiprocessing as mp
 import torch
+import argparse
+import multiprocessing as mp
 import matplotlib.pyplot as plt
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader
-from Validation_loss_function import validate_function
-from Validation_loss_class import Validation_class
-from Efficiency_seed_function import efficiency_reconstructed_seeds
-from Efficiency_seed_class import Efficiency_class
+from GUNTAM.Seed.Validation_loss_function import validate_function
+from GUNTAM.Seed.Validation_loss_function import Validation_class
+from GUNTAM.Seed.Efficiency_seed_function import efficiency_reconstructed_seeds
+from GUNTAM.Seed.Efficiency_seed_function import Efficiency_class
+
+
+def parse_args():
+    """
+    We define arguments to choose the path of the dataset, his name and the transformer model name
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path", type=str, default="/home/justine/Documents/GUNTAM/odd_output_new_5")
+    parser.add_argument("--dataset_name", type=str, default="odd_output_new_5")
+    parser.add_argument("--model_name", type=str, default="transformer_98_seed_eff.pt")
+    return parser.parse_args()
 
 
 def config_model_dataset(path: str, dataset_name: str, model_name: str):
@@ -27,7 +39,8 @@ def config_model_dataset(path: str, dataset_name: str, model_name: str):
     """
 
     cfg = SeedConfig()
-    cfg.parse_args()
+    # cfg.parse_args()
+    cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
     cfg.epoch_nb = 1
     cfg.transformer_config.embedding_mode = "MLP"
 
@@ -56,7 +69,7 @@ def config_model_dataset(path: str, dataset_name: str, model_name: str):
     model.to(cfg.device_acc)
     model.load(path=model_name, device=cfg.device_acc)
 
-    return cfg, dataset, model
+    return dataset, model
 
 
 # ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -71,6 +84,9 @@ def perm_imp_per_features_loss(enc_hits_shape: int, dataset, model, cfg):
     We use multiprocessing to speed up the process of computing each average loss for each feature we shuffle.
     Args:
     enc_hits_shape: number of features in the dataset after the Fourier encoding
+    dataset: The dataset object containing events
+    model: The trained transformer model
+    cfg: Configuration object with training parameters
 
     Returns:
     if method=="loss", list of each average loss for each feature we shuffle.
@@ -155,7 +171,7 @@ def perm_imp_situations(situation: str, method: str, dataset, model, cfg):
 # ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
 
-def plot_freq_loss(avg_loss_ref: int, avg_loss_total: list, feature: str):
+def plot_freq_loss(avg_loss_ref: float, avg_loss_total: list, feature: str):
     """
     We plot the average loss of each model in which we shuflle the frequencies of each embedded feature.
     Args:
@@ -198,7 +214,7 @@ def plot_freq_loss(avg_loss_ref: int, avg_loss_total: list, feature: str):
     plt.close()
 
 
-def plot_all_loss(avg_loss_ref: int, avg_loss_total: list):
+def plot_all_loss(avg_loss_ref: float, avg_loss_total: list):
     """
     We plot the average loss of each model in which we shuffle one feature at a time.
     Args:
@@ -303,23 +319,30 @@ def plot_all_eff(seed_eff_total: list):
 
 if __name__ == "__main__":
 
+    args = parse_args()
+
     cfg, dataset, model = config_model_dataset(
-        path="/home/justine/Documents/GUNTAM/odd_output_new_5",
-        dataset_name="odd_output_new_5",
-        model_name="transformer_98_seed_eff.pt",
+        path=args.path,
+        dataset_name=args.dataset_name,
+        model_name=args.model_name,
     )
 
-    # avg_loss_total = perm_imp_per_features_loss(enc_hits_shape=45, dataset=dataset, model=model, cfg=cfg)
-    # seed_eff_total = perm_imp_per_features_eff(enc_hits_shape, dataset=dataset, model=model, cfg=cfg)
+    # Computing the average loss and the seeding efficiency for every feature we shuffle:
+    avg_loss_total = perm_imp_per_features_loss(enc_hits_shape=45, dataset=dataset, model=model, cfg=cfg)
+    seed_eff_total = perm_imp_per_features_eff(enc_hits_shape=45, dataset=dataset, model=model, cfg=cfg)
 
+    # Computing the average loss without shuffling any feature (average loss of reference):
     avg_loss_ref = validate_function(
         model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg
     )  # shuffle_v=None and situation=None
     print("loss=", avg_loss_ref)
-    # avg_loss_ref = 75.48
 
-    # plot_all_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total)
-    # plot_freq_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total, feature="x")
+    # Plotting every average loss for each feature we shuffle:
+    plot_all_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total)
+    # Plotting the average loss for each feature of Emb(x) we shuffle:
+    plot_freq_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total, feature="x")
 
-    # plot_all_eff(seed_eff_total=seed_eff_total)
-    # plot_freq_eff(seed_eff_total=seed_eff_total, feature="x")
+    # Plotting every seeding efficiency for each feature we shuffle:
+    plot_all_eff(seed_eff_total=seed_eff_total)
+    # Plotting the seeding efficiency for each feature of Emb(x) we shuffle:
+    plot_freq_eff(seed_eff_total=seed_eff_total, feature="x")
