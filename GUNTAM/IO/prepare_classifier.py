@@ -244,7 +244,7 @@ def circle_3_points_batch(features: torch.Tensor) -> torch.Tensor:
     norm_val = torch.where(norm_val < 1e-10, torch.ones_like(norm_val), norm_val)
     normal = normal / norm_val
  
-    # Building a linear system to find the center:
+    # Building a linear system A @ center = b_vec to find the center:
     row1 = 2 * (P2 - P1)
     row2 = 2 * (P3 - P1)
     row3 = normal
@@ -253,8 +253,6 @@ def circle_3_points_batch(features: torch.Tensor) -> torch.Tensor:
     print("row2 shape:", row2.shape)
     print("row3 shape:", row3.shape)
  
-    # Solving the system:
-    A = torch.stack([row1, row2, row3], dim=1)
     b_vec = torch.stack(
         [
             (P2**2).sum(dim=1) - (P1**2).sum(dim=1),
@@ -264,13 +262,32 @@ def circle_3_points_batch(features: torch.Tensor) -> torch.Tensor:
         dim=1,
     )
  
-    print("A shape:", A.shape)  # should be (N, 3, 3)
     print("b_vec shape:", b_vec.shape)  # should be (N, 3)
-
-    torch._check(features.shape[0] != 0)
-
-    A_inv = torch.linalg.pinv(A)  # (N, 3, 3)
-    center = torch.einsum("nij,nj->ni", A_inv, b_vec)  # (N, 3)
+ 
+    # Solving the 3x3 system in closed form (Cramer's rule via cross products) instead of
+    # torch.linalg.pinv/torch.linalg.solve: those LAPACK-backed ops have no registered ONNX
+    # export function (aten.linalg_pinv / aten.linalg_solve are not convertible), whereas this
+    # closed-form solution only uses elementary tensor ops (cross product, sums, division),
+    # which are exportable.
+    #
+    # For a 3x3 system with rows R0, R1, R2 (here row1, row2, row3) and right-hand side b_vec,
+    # the solution is:
+    #   det   = R0 . (R1 x R2)
+    #   center = (b0 * (R1 x R2) + b1 * (R2 x R0) + b2 * (R0 x R1)) / det
+    R0, R1, R2 = row1, row2, row3
+ 
+    cross_R1_R2 = torch.linalg.cross(R1, R2, dim=1)  # (N, 3)
+    cross_R2_R0 = torch.linalg.cross(R2, R0, dim=1)  # (N, 3)
+    cross_R0_R1 = torch.linalg.cross(R0, R1, dim=1)  # (N, 3)
+ 
+    det = (R0 * cross_R1_R2).sum(dim=1, keepdim=True)  # (N, 1)
+    det_safe = torch.where(det.abs() < 1e-12, torch.ones_like(det), det)
+ 
+    b0 = b_vec[:, 0:1]
+    b1 = b_vec[:, 1:2]
+    b2 = b_vec[:, 2:3]
+ 
+    center = (b0 * cross_R1_R2 + b1 * cross_R2_R0 + b2 * cross_R0_R1) / det_safe  # (N, 3)
  
     # Computing the radius:
     radius = torch.linalg.norm(center - P1, dim=1, keepdim=True)
