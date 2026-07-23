@@ -8,7 +8,7 @@ from typing import Tuple
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Transformer.BinTensor import global_bin_torch, neighbor_bin_torch, no_bin_torch, margin_bin_torch
-from GUNTAM.IO.prepare_classifier import seed_features_inference_adjustment
+from GUNTAM.IO.prepare_classifier import build_inference_seed_features
 from GUNTAM.Transformer.Classifier_architecture import MLP_CE, running_classifier
 from GUNTAM.Seed.Reconstruction import build_seed_features_tensor
 import GUNTAM.Seed.Reconstruction as Reconstruction
@@ -285,11 +285,12 @@ class SeedReconstructionModel(nn.Module):
         classifier = self.classifier
 
         keep_mask, scores = running_classifier(
-            dataloader=seed_features,
+            X=X,
             model=classifier,
             threshold=0.5,
             device=device,
         )
+
 
         signal = unique_chains[keep_mask] 
         signal_scores = scores[keep_mask]
