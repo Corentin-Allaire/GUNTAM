@@ -137,32 +137,29 @@ def icing_on_the_cake_CE(trainloader, model: MLP_CE, n_epochs: int, lr: float, d
     return model
 
 
-def running_classifier(testloader, model, device=device):
+def running_classifier(X: torch.Tensor, model, threshold: float, device=device):
     """
-    returns signal = true seeds found by the classifier
+    Used to run the Classifier on reconstructed seeds, at inference time (no ground-truth labels).
+    Args:
+        X: Float tensor [N, F] of seed features (already including the circle-fit features).
+        model: trained classifier
+        threshold: Minimum probability required for a seed to be classified as a true seed. Default is 0.5
+        device: Device on which the classifier is executed
+    Returns:
+        keep_mask: Boolean tensor. A value of ``True`` indicates that the corresponding candidate seed is predicted to be a true seed by the classifier.
+        scores: Float tensor containing the predicted probability that each candidate seed belongs to the signal class.
     """
 
+ 
     model.eval()
-
-    scores = []
-    labels_list = []
-
+ 
     with torch.no_grad():
-        for X, y in testloader:
-            X = X.to(device)
-            y = y.to(device)
+        X = X.to(device)
+        pred = model(X)
+        proba = torch.softmax(pred, dim=1)
+        scores = proba[:, 1]
+ 
+    keep_mask = scores >= threshold
+ 
+    return keep_mask, scores
 
-            pred = model(X)
-
-            proba = torch.softmax(pred, dim=1)
-            score = proba[:, 1]
-
-            scores.append(score)
-            labels_list.append(y)
-
-    scores = torch.cat(scores).numpy().flatten()
-    labels = torch.cat(labels_list).numpy().flatten()
-    # separation signal/background
-    signal = scores[labels == 1]  # true positive
-
-    return signal

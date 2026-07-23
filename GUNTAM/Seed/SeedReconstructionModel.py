@@ -1,19 +1,21 @@
 import math
-from typing import Tuple
-
 import torch
+import pathlib
 import torch.nn as nn
 from torch import Tensor
+from typing import Tuple
 
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Transformer.BinTensor import global_bin_torch, neighbor_bin_torch, no_bin_torch, margin_bin_torch
-from GUNTAM.IO.prepare_classifier import build_seed_features_tensor, seed_features_file_adjustment, parse_args_classifier
+from GUNTAM.IO.prepare_classifier import seed_features_inference_adjustment
 from GUNTAM.Transformer.Classifier_architecture import MLP_CE, running_classifier
+from GUNTAM.Seed.Reconstruction import build_seed_features_tensor
 import GUNTAM.Seed.Reconstruction as Reconstruction
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+classifier_path = pathlib.Path(__file__).parents[2] / "tests" / "data" / "classifier.pt"
 
 class SeedReconstructionModel(nn.Module):
     """
@@ -46,6 +48,8 @@ class SeedReconstructionModel(nn.Module):
         device_acc: torch.device = torch.device("cpu"),
         width: int = 5,
         max_seed_length: int = 3,
+        classifier_path = classifier_path,
+        classifier_threshold: float = 0.5,
     ) -> None:
         super(SeedReconstructionModel, self).__init__()
 
@@ -54,6 +58,28 @@ class SeedReconstructionModel(nn.Module):
         self.transformer = transformer
         self.width = width
         self.max_seed_length = max_seed_length
+
+        self.classifier_threshold = classifier_threshold
+
+        self.classifier = MLP_CE(
+            input_shape=28,
+            hidden_1=512,
+            hidden_2=256,
+            hidden_3=128,
+            hidden_4=64,
+            output_shape=2,
+            p=0.0,
+            activation=torch.nn.ReLU(),
+        ).float()
+
+        state_dict = torch.load(
+            classifier_path,
+            map_location=device_acc,
+            weights_only=True,
+        )
+
+        self.classifier.load_state_dict(state_dict)
+        self.classifier.to(device_acc)
 
     def bin_and_pad(self, hits: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -81,6 +107,7 @@ class SeedReconstructionModel(nn.Module):
         orig_idx = torch.arange(N, device=device, dtype=dtype)
         # Build augmented hit matrix with columns (x, y, z, r, phi, eta, orig_idx)
         hits_matrix = torch.stack([x, y, z, R, phi, eta, orig_idx], dim=1)  # [N, 7]
+        flat_hits = hits_matrix.clone()
 
         # Sort hits by R+rho ascending so that hits within each bin are radially ordered
         sort_order = torch.argsort(R + rho)
@@ -161,7 +188,7 @@ class SeedReconstructionModel(nn.Module):
         binned[bins_v, offset_v] = hits_matrix[hit_pos_v]
         mask[bins_v, offset_v, 0] = False
 
-        return binned, mask
+        return binned, mask, flat_hits
 
     def reconstruct_seed_triplets(
         self,
@@ -207,11 +234,12 @@ class SeedReconstructionModel(nn.Module):
         Args:
             - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
         Returns:
-            - seed_triplets (Tensor): Shape [S, max_seed_length] — the S seeds that were
-              successfully reconstructed, each row containing original hit IDs.
-            - scores (Tensor): Shape [S] — score for each reconstructed seed.
+            - signal: Long tensor of shape [number of classified true seeds, 3] containing the original input hit indices of all candidate seeds
+            predicted as true seeds by the classifier. Each row corresponds to one reconstructed seed.
+            - signal_scores: Float tensor of shape [number of classified true seeds] containing the classifier confidence score associated with each reconstructed seed. The i-th
+            score corresponds to the i-th seed in `signal` and represents the predicted probability that this seed is a true seed.
         """
-        binned_hits, padding_mask = self.bin_and_pad(hits)
+        binned_hits, padding_mask, flat_hits = self.bin_and_pad(hits)
         # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
         _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
 
@@ -246,35 +274,27 @@ class SeedReconstructionModel(nn.Module):
         first[inverse.flip(0)] = perm.flip(0)
 
         seed_features = build_seed_features_tensor(
-            hits_tensor=hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
+            hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
         )
 
-        torch.save(seed_features, "seed_features.pt")
+        features_tensor = seed_features.flatten(start_dim=1)  # [num_seeds, max_seed_length*F]
+        seed_features_dict = {"features": features_tensor}
+ 
+        X = build_inference_seed_features(data=seed_features_dict)
 
-        seed_features = seed_features_file_adjustment(data=seed_features, batch_size=1000)
+        classifier = self.classifier
 
-        args = parse_args_classifier()
+        keep_mask, scores = running_classifier(
+            dataloader=seed_features,
+            model=classifier,
+            threshold=0.5,
+            device=device,
+        )
 
-        classifier = MLP_CE(
-            input_shape=args.input_shape,
-            hidden_1=args.hidden_1,
-            hidden_2=args.hidden_2,
-            hidden_3=args.hidden_3,
-            hidden_4=args.hidden_4,
-            output_shape=args.output_shape,
-            p=args.p,
-            activation=torch.nn.ReLU(),
-        ).float()
+        signal = unique_chains[keep_mask] 
+        signal_scores = scores[keep_mask]
 
-        classifier.load_state_dict(torch.load("classifier.pt", map_location=device))
-
-        classifier = classifier.to(device)
-
-        signal = running_classifier(testloader=seed_features, model=classifier, device=device)
-
-        torch.save(signal, "Classifier_true_seeds.pt")
-
-        return signal
+        return signal, signal_scores
 
     def export_onnx(
         self,

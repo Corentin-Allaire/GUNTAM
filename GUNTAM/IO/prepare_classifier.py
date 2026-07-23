@@ -1,12 +1,14 @@
 import torch
-import argparse
 import numpy as np
 from typing import List
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader as TorchDataLoader
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Seed.Reconstruction import batched_beam_search_seed_reconstruction
-from GUNTAM.IO.DataLoader import DataLoader
+from GUNTAM.IO.DataLoader import DataLoader as GUNTAMDataLoader
+from GUNTAM.Seed.Reconstruction import build_seed_features_tensor
+
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -125,55 +127,6 @@ def transformer_seed_reconstruction(
 
 # """""""""""""""""""""""""""""""""""" PUTTING THESE SEEDS IN A FILE """"""""""""""""""""""""""""""""""""
 
-
-def build_seed_features_tensor(
-    hits_tensor: torch.Tensor,
-    seed_tensor: torch.Tensor,
-    feature_indices: List[int] = [0, 1, 2, 3, 4, 5],
-    cosine_feature_indices: List[int] = [4],
-) -> torch.Tensor:
-    """
-    This function builds a feature tensor for each seed by gathering hit coordinates.
-    This tensor can then be passed to a NN for parameter regression and good/fake classification.
-
-    Args:
-        hits_tensor: Float tensor of shape [N, num_features] containing the hit
-            features for all hits in a single bin.
-        seed_tensor: Long tensor of shape [num_seeds, max_seed_size] containing the
-            per-seed hit indices.  A value of -1 indicates a padding slot.
-        feature_indices: Ordered list of column indices from `hits_tensor` to
-            include in the output.  Mirrors `cfg.embedding_feature` /
-            `cfg.high_level_features`.  Default: [0, 1, 2, 3, 4, 5].
-        cosine_feature_indices: Subset of `feature_indices` for which cos/sin
-            decomposition is applied.  Mirrors `cfg.cosine_processing`.
-            Default: [4] (phi).
-
-    Returns:
-        Float tensor of shape [num_seeds, max_seed_size, F] where F is
-        len(feature_indices) + len(cosine_feature_indices) (each cosine-processed
-        feature adds one extra column for sin).  Padding slots contain all zeros.
-    """
-    pad_mask = seed_tensor == -1  # [num_seeds, max_seed_size]
-    ids = seed_tensor.clamp(min=0)  # replace -1 with 0 to avoid out-of-bounds indexing
-
-    feats = hits_tensor[ids]  # [num_seeds, max_seed_size, num_features]
-
-    cosine_set = set(cosine_feature_indices)
-    parts: List[torch.Tensor] = []
-    for idx in feature_indices:
-        if idx in cosine_set:
-            parts.append(torch.cos(feats[..., idx]))
-            parts.append(torch.sin(feats[..., idx]))
-        else:
-            parts.append(feats[..., idx])
-
-    result = torch.stack(parts, dim=-1)  # [num_seeds, max_seed_size, F]
-
-    result[pad_mask] = 0.0
-
-    return result
-
-
 def create_seed_features_file(input_tensor_path, dataset_name, transformer_name):
     """
     This function creates a file made of the reconstructed seeds, their features and labels
@@ -200,7 +153,7 @@ def create_seed_features_file(input_tensor_path, dataset_name, transformer_name)
     }
 
     # données pour le modèle :
-    dataset = DataLoader(
+    dataset = GUNTAMDataLoader(
         dataset_dir=cfg.input_tensor_path,
         dataset_name=dataset_name,
         tensor_names=list(tensor_list),
@@ -216,8 +169,6 @@ def create_seed_features_file(input_tensor_path, dataset_name, transformer_name)
     seed_features = build_seed_features_tensor(
         hits_tensor=hits_tensor, seed_tensor=seed_tensor, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
     )
-
-    torch.save(seed_features, "seed_features.pt")
 
     return seed_features
 
@@ -258,75 +209,79 @@ def balance_dataset(features, labels):
     return features, labels
 
 
-def circle_3_points_batch(features_np):
+def circle_3_points_batch(features: torch.Tensor) -> torch.Tensor:
     """
     We add 7 new features for each seed. These features are the parameters of the circle made of the three points in each seed
     Args:
-    features_np: features tensor as a numpy object
-
+    features: features tensor as a PyTorch tensor, shape [N, >=17]
+ 
     Returns:
-    - coordinates of the center of the circle
-    - radius of the circle
-    - coordinates of the normal of the circle
-
+    Float64 tensor of shape [N, 7]: concatenation of
+    - coordinates of the center of the circle (3)
+    - radius of the circle (1)
+    - coordinates of the normal of the circle (3)
+ 
     """
-    features_np = features_np.astype(np.float64)
-
-    P1 = features_np[:, 0:3]  # positional features of the first point of the seed : x1, y1, z1
-    P2 = features_np[:, 7:10]  # x2, y2, z2
-    P3 = features_np[:, 14:17]  # x3, y3, z3
-
+    features = features.double()
+ 
+    P1 = features[:, 0:3]  # positional features of the first point of the seed : x1, y1, z1
+    P2 = features[:, 7:10]  # x2, y2, z2
+    P3 = features[:, 14:17]  # x3, y3, z3
+ 
     print("P1 shape:", P1.shape)  # should be (N, 3)
     print("P1 dtype:", P1.dtype)  # should be float64
-
+ 
     # Computing the normal vector to the plane formed by the 3 points : P1, P2, P3
     a = P2 - P1
     b = P3 - P1
-    normal = np.cross(a, b)
-
+    normal = torch.linalg.cross(a, b, dim=1)
+ 
     print("normal shape:", normal.shape)  # should be (N, 3)
-
+ 
     # Handling degenerate cases:
-    norm_val = np.linalg.norm(normal, axis=1, keepdims=True)
+    norm_val = torch.linalg.norm(normal, dim=1, keepdim=True)
     degenerate = norm_val[:, 0] < 1e-10
-    norm_val = np.where(norm_val < 1e-10, 1.0, norm_val)
-    normal /= norm_val
-
+    norm_val = torch.where(norm_val < 1e-10, torch.ones_like(norm_val), norm_val)
+    normal = normal / norm_val
+ 
     # Building a linear system to find the center:
     row1 = 2 * (P2 - P1)
     row2 = 2 * (P3 - P1)
     row3 = normal
-
+ 
     print("row1 shape:", row1.shape)  # should be (N, 3)
     print("row2 shape:", row2.shape)
     print("row3 shape:", row3.shape)
-
+ 
     # Solving the system:
-    A = np.stack([row1, row2, row3], axis=1)
-    b_vec = np.stack(
+    A = torch.stack([row1, row2, row3], dim=1)
+    b_vec = torch.stack(
         [
-            np.sum(P2**2, axis=1) - np.sum(P1**2, axis=1),
-            np.sum(P3**2, axis=1) - np.sum(P1**2, axis=1),
-            np.sum(normal * P1, axis=1),
+            (P2**2).sum(dim=1) - (P1**2).sum(dim=1),
+            (P3**2).sum(dim=1) - (P1**2).sum(dim=1),
+            (normal * P1).sum(dim=1),
         ],
-        axis=1,
+        dim=1,
     )
-
+ 
     print("A shape:", A.shape)  # should be (N, 3, 3)
     print("b_vec shape:", b_vec.shape)  # should be (N, 3)
 
-    A_inv = np.linalg.pinv(A)  # (N, 3, 3)
-    center = np.einsum("nij,nj->ni", A_inv, b_vec)  # (N, 3)
+    torch._check(features.shape[0] != 0)
 
+    A_inv = torch.linalg.pinv(A)  # (N, 3, 3)
+    center = torch.einsum("nij,nj->ni", A_inv, b_vec)  # (N, 3)
+ 
     # Computing the radius:
-    radius = np.linalg.norm(center - P1, axis=1, keepdims=True)
-
+    radius = torch.linalg.norm(center - P1, dim=1, keepdim=True)
+ 
     # Cleaning up degenerate cases:
-    center[degenerate] = 0.0
-    radius[degenerate] = 0.0
-    normal[degenerate] = 0.0
-
-    return np.concatenate([center, radius, normal], axis=1)
+    degenerate_col = degenerate.unsqueeze(-1)
+    center = torch.where(degenerate_col, torch.zeros_like(center), center)
+    radius = torch.where(degenerate_col, torch.zeros_like(radius), radius)
+    normal = torch.where(degenerate_col, torch.zeros_like(normal), normal)
+ 
+    return torch.cat([center, radius, normal], dim=1)
 
 
 class SeedDataset(Dataset):
@@ -356,17 +311,37 @@ class SeedDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
+class InferenceSeedDataset(Dataset):
+    """
+    Same as SeedDataset but WITHOUT labels, for use at inference time when no ground truth is
+    available (e.g. inside SeedReconstructionModel.forward()).
+ 
+    Args:
+        X: Float tensor of seed features, shape [num_seeds, num_features]
+ 
+    Returns:
+        A dataset yielding only the feature vector for each seed (no label).
+    """
+ 
+    def __init__(self, X):
+        self.X = X.float()
+ 
+    def __len__(self):
+        return len(self.X)
+ 
+    def __getitem__(self, idx):
+        return self.X[idx]
 
 def seed_features_file_adjustment(data, batch_size=1000):
     """
-
+    Used for TRAINING the Classifier
     preparing the dataset of reconstructed seeds (features + labels) we give to the Classifier by :
         - balancing the dataset
         - adding new features
         - turning it into a Dataloader
 
     Args:
-    data: seed_features created by create_seed_features_file
+    data: seed_features created by create_seed_features_file (must be a dict)
 
     Returns:
     Adjusted seed_features
@@ -378,45 +353,49 @@ def seed_features_file_adjustment(data, batch_size=1000):
 
     X, y = balance_dataset(X, y)
 
-    features_np = X.numpy().astype(np.float64)
-
-    if features_np.ndim == 1:
-        features_np = features_np.reshape(-1, 21)
-        print("Shape after reshape :", features_np.shape)  # should be (N, 21)
-
-    extra = circle_3_points_batch(features_np)
-
-    extra_tensor = torch.tensor(extra, dtype=torch.float32)
-    X = torch.cat([X, extra_tensor], dim=1)  # (11884838, 28)
+    if X.dim() == 1:
+        X = X.reshape(-1, 21)
+        print("Shape after reshape :", X.shape)  # should be (N, 21)
+ 
+    extra_tensor = circle_3_points_batch(X).float()
+    X = torch.cat([X, extra_tensor], dim=1)  # (N, 28)
 
     Seed_Dataset = SeedDataset(X, y)
 
-    Seed_dataloader = DataLoader(dataset=Seed_Dataset, batch_size=batch_size)
+    Seed_dataloader = TorchDataLoader(dataset=Seed_Dataset, batch_size=batch_size, shuffle=False)
 
     return Seed_dataloader
 
-
-# """""""""""""""""""""""""""""""""""""""""""""""""""" HYPERPARAMETERS OF THE CLASSIFIER """"""""""""""""""""""""""""""""""""
-
-
-def parse_args_classifier():
+def build_inference_seed_features(data):
     """
-    We define arguments to choose the path of the dataset, his name and the transformer model name
-    input_shape: input shape of the classifier
-    output_shape: output shape of the classifier
-    hidden_1: number of neurons in the first layer
-    hidden_2: number of neurons in the second layer
-    hidden_3: number of neurons in the third layer
-    hidden_4: number of neurons in the fourth layer
-    p: dropout rate
+    Preparing the reconstructed seed features for the Classifier at INFERENCE time,
+    when there is no ground-truth label available (e.g. inside SeedReconstructionModel.forward()).
+ 
+    Unlike seed_features_file_adjustment / seed_features_inference_adjustment, this function does
+    NOT use torch.utils.data.Dataset/DataLoader. The number of seeds N is a data-dependent/dynamic
+    size at export time (it depends on how many valid seeds the beam search found at runtime), and
+    Dataset/DataLoader rely on Python-level operations (len(), per-element indexing, batching loops)
+    that require N to be a concrete, known integer. This breaks torch.export/ONNX export
+    (GuardOnDataDependentSymNode / "Could not extract specialized integer from ... u_"). This
+    function stays purely tensor-based so it can be traced.
+ 
+    Args:
+    data: dict with a single key "features", a Float tensor of shape
+        [num_seeds, max_seed_size * num_base_features], e.g. built in forward() via
+        build_seed_features_tensor(...).flatten(start_dim=1)
+ 
+    Returns:
+    X: Float tensor [num_seeds, 28], ready to be fed directly to the classifier MLP (see
+    Classifier_architecture.run_classifier_tensor), in the same order as the input seeds.
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input_shape", type=int, default=28)
-    parser.add_argument("--output_shape", type=int, default=2)
-    parser.add_argument("--hidden_1", type=int, default=64)
-    parser.add_argument("--hidden_2", type=int, default=32)
-    parser.add_argument("--hidden_3", type=int, default=16)
-    parser.add_argument("--hidden_4", type=int, default=8)
-    parser.add_argument("--p", type=int, default=0)
-
-    return parser.parse_args()
+ 
+    X = data["features"]
+ 
+    if X.dim() == 1:
+        X = X.reshape(-1, 21)
+        print("Shape after reshape :", X.shape)  # should be (N, 21)
+ 
+    extra_tensor = circle_3_points_batch(X).float()
+    X = torch.cat([X, extra_tensor], dim=1)  # [num_seeds, 28]
+ 
+    return X

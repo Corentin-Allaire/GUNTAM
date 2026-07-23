@@ -27,7 +27,7 @@ HITS_FILE = DATA_DIR / "event000000002-hits.csv"
 MEAS_FILE = DATA_DIR / "event000000002-measurement-simhit-map.csv"
 PARTICLES_FILE = DATA_DIR / "event000000002-particles_selected.csv"
 
-# Particle-ID columns shared between hits and particles CSVs.
+# Particle-ID columns shared between hits and particles CSVs
 _ID_COLUMNS = [
     "particle_id_pv",
     "particle_id_sv",

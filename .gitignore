@@ -163,3 +163,13 @@ cython_debug/
 
 attention_map_event_0_bin_0.png
 training_config.sh
+attention_map_event_0_bin_55.png
+bin_complexity_analysis.png
+duplicate_rate_vs_truth_params.png
+efficiency_2d_heatmaps.png
+fake_rate_vs_truth_params.png
+particle_reconstruction_comparison.png
+seeding_efficiency_vs_truth_params.png
+seeding_performance_analysis.png
+odd_output_new_5/event000000001-hits.csv
+training_seeding/
