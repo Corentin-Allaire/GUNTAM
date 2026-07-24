@@ -55,7 +55,7 @@ class TransformerConfig:
         self.fourier_num_frequencies = None  # list[int] of length 4, one per dimension [x, y, z, r]
         self.dim_max = [500.0, 500.0, 1000.0, 500]
         self.shift = [0, 0, 0.0, 0.0]
-        self.embedding_mode = "padding"  # by default
+        self.embedding_mode = "MLP"  # by default
 
         # Floating-point precision
         self.dtype: torch.dtype = torch.float32  # Weight dtype for all model parameters

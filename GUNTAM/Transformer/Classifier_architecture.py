@@ -146,20 +146,19 @@ def running_classifier(X: torch.Tensor, model, threshold: float, device=device):
         threshold: Minimum probability required for a seed to be classified as a true seed. Default is 0.5
         device: Device on which the classifier is executed
     Returns:
-        keep_mask: Boolean tensor. A value of ``True`` indicates that the corresponding candidate seed is predicted to be a true seed by the classifier.
+        keep_mask: Boolean tensor. A value of ``True`` indicates that the corresponding candidate seed
+        is predicted to be a true seed by the classifier.
         scores: Float tensor containing the predicted probability that each candidate seed belongs to the signal class.
     """
 
- 
     model.eval()
- 
+
     with torch.no_grad():
         X = X.to(device)
         pred = model(X)
         proba = torch.softmax(pred, dim=1)
         scores = proba[:, 1]
- 
-    keep_mask = scores >= threshold
- 
-    return keep_mask, scores
 
+    keep_mask = scores >= threshold
+
+    return keep_mask, scores

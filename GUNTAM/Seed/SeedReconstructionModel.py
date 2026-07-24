@@ -17,6 +17,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 classifier_path = pathlib.Path(__file__).parents[2] / "tests" / "data" / "classifier.pt"
 
+
 class SeedReconstructionModel(nn.Module):
     """
     Full model for seed reconstruction from a list of hits, using a transformer architecture.
@@ -48,12 +49,14 @@ class SeedReconstructionModel(nn.Module):
         device_acc: torch.device = torch.device("cpu"),
         width: int = 5,
         max_seed_length: int = 3,
-        classifier_path = classifier_path,
+        classifier_path=classifier_path,
         classifier_threshold: float = 0.5,
     ) -> None:
         super(SeedReconstructionModel, self).__init__()
 
         self.cfg = transformer_config
+        self.cfg.epoch_nb = 1
+        self.cfg.transformer_config.embedding_mode = "MLP"
         self.device_acc = device_acc
         self.transformer = transformer
         self.width = width
@@ -234,9 +237,11 @@ class SeedReconstructionModel(nn.Module):
         Args:
             - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
         Returns:
-            - signal: Long tensor of shape [number of classified true seeds, 3] containing the original input hit indices of all candidate seeds
+            - signal: Long tensor of shape [number of classified true seeds, 3] containing the original
+            input hit indices of all candidate seeds
             predicted as true seeds by the classifier. Each row corresponds to one reconstructed seed.
-            - signal_scores: Float tensor of shape [number of classified true seeds] containing the classifier confidence score associated with each reconstructed seed. The i-th
+            - signal_scores: Float tensor of shape [number of classified true seeds] containing the classifier confidence score
+            associated with each reconstructed seed. The i-th
             score corresponds to the i-th seed in `signal` and represents the predicted probability that this seed is a true seed.
         """
         binned_hits, padding_mask, flat_hits = self.bin_and_pad(hits)
@@ -277,10 +282,16 @@ class SeedReconstructionModel(nn.Module):
             hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
         )
 
+        print("test 1", seed_features.shape)
+
         features_tensor = seed_features.flatten(start_dim=1)  # [num_seeds, max_seed_length*F]
+        print("test 2", features_tensor.shape)
         seed_features_dict = {"features": features_tensor}
- 
+        print("test 3", seed_features_dict.values())
+
         X = build_inference_seed_features(data=seed_features_dict)
+
+        print("test 4", X.shape)
 
         classifier = self.classifier
 
@@ -291,9 +302,18 @@ class SeedReconstructionModel(nn.Module):
             device=device,
         )
 
+        print("test 5", keep_mask.shape)
+        print("test KEEP MASK :", keep_mask)
+        n_true = keep_mask.sum().item()
+        n_false = (~keep_mask).sum().item()
+        print(f"True: {n_true}, False: {n_false}, total: {keep_mask.numel()}")
+        print("test 6", scores.shape)
 
-        signal = unique_chains[keep_mask] 
+        signal = unique_chains[keep_mask]
         signal_scores = scores[keep_mask]
+
+        print("test 7", signal.shape)
+        print("test 8", signal_scores.shape)
 
         return signal, signal_scores
 

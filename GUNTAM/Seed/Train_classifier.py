@@ -15,6 +15,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 cfg = SeedConfig()
 cfg.parse_args()
 cfg.epoch_nb = 1
+cfg.transformer_config.embedding_mode = "MLP"
 
 transformer = SeedTransformer(transformer_config=cfg.transformer_config, device_acc=cfg.device_acc, dtype=torch.float32)
 transformer.to(cfg.device_acc)
@@ -63,10 +64,10 @@ def train_classifier(
 
 if __name__ == "__main__":
 
-    train_dataloader, test_dataloader = seed_features_file_adjustment(data=seed_features, batch_size=1000)
+    Seed_dataloader = seed_features_file_adjustment(data=seed_features, batch_size=1000)
 
     train_classifier(
-        train_dataloader=train_dataloader,
+        train_dataloader=Seed_dataloader,
         input_shape=28,
         hidden_1=512,
         hidden_2=256,
@@ -76,6 +77,6 @@ if __name__ == "__main__":
         p=0,
         n_epochs=10,
         lr=1e-3,
-        criterion="CE",
         model_save="classifier",
+        criterion=torch.nn.CrossEntropyLoss().to(device),
     )

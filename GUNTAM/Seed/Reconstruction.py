@@ -537,7 +537,7 @@ def batched_beam_search_seed_reconstruction(
             step_best, step_beam = avg_scores.max(dim=2)  # [B, N]
 
             improve = step_best > best_scores  # [B, N]
-            #if improve.any():
+            # if improve.any():
             best_scores = torch.where(improve, step_best, best_scores)
             best_lens = torch.where(improve, torch.full_like(best_lens, chain_len), best_lens)
 
