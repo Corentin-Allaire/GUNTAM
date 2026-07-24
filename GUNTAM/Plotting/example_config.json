@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "labels": [],
+  "compare": "seeding-vs-ckf",
+  "quantities": [
+    "all"
+  ],
+  "output_dir": "plots",
+  "output_formats": [
+    "png"
+  ],
+  "dpi": 150
+}

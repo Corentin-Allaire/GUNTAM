@@ -8,6 +8,7 @@ from GUNTAM.Seed.Reconstruction import (topk_seed_reconstruction,
                                         weighted_chained_seed_reconstruction,
                                         beam_search_seed_reconstruction,
                                         batched_beam_search_seed_reconstruction,
+                                        apply_radial_separation_filter,
                                         build_seed_features_tensor)
 
 
@@ -605,6 +606,26 @@ class TestBatchedBeamSearchSeedReconstruction:
         for a, b in zip(valid[:-1], valid[1:]):
             assert b < a
 
+    def test_score_uses_edge_count_denominator_not_hit_count(self):
+        """Ranking regression: a single forced path 0->1->2->3->4 with edge scores 6,6,5,5 has a
+        decreasing average-per-edge (6, 5.67, 5.5) but an increasing average-per-hit (4.0, 4.25,
+        4.4). The correct edge-count denominator therefore selects the compact triple [0,1,2] with
+        score 6.0; a (buggy) hit-count denominator would instead pick the full [0,1,2,3,4]."""
+        B, N = 1, 6
+        att = torch.full((B, N, N), -10.0)
+        att[0, 0, 1] = 6.0
+        att[0, 1, 2] = 6.0
+        att[0, 2, 3] = 5.0
+        att[0, 3, 4] = 5.0
+        mask = torch.ones(B, N, dtype=torch.bool)
+        edge = _to_edge_batched(att)
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(
+            edge, mask, max_chain_length=5, beam_width=5
+        )
+        chain = chains[0, 0, :]
+        assert chain[chain >= 0].tolist() == [0, 1, 2]
+        assert best_scores[0, 0].item() == pytest.approx(6.0)
+
     def test_valid_mask_excludes_padded_hits(self):
         """Hits where valid_mask=False are excluded as destinations and have no valid chain."""
         B, N = 1, 7
@@ -642,6 +663,155 @@ class TestBatchedBeamSearchSeedReconstruction:
         _, _, best_scores = batched_beam_search_seed_reconstruction(edge, mask, backward=False)
         assert best_scores[0, 0] > float("-inf")
         assert (best_scores[1] == float("-inf")).all()
+
+
+class TestApplyRadialSeparationFilter:
+    """Tests for apply_radial_separation_filter (post-hoc greedy radial-separation filter)."""
+
+    def test_incomplete_result_dropped_to_all_minus_one(self):
+        """Raw (A,B1,B2): Δρ(A,B1)>min passes, Δρ(B1,B2)<min fails -> only 2 hits kept, which is
+        fewer than target_length=3, so the whole seed is dropped to [-1,-1,-1]."""
+        chains = torch.tensor([[[0, 1, 2]]], dtype=torch.long)  # [B=1, N=1, raw_length=3]
+        rho = torch.tensor([[0.0, 10.0, 12.0]])  # Δ(A,B1)=10>5, Δ(B1,B2)=2<5
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+        assert out.tolist() == [[[-1, -1, -1]]]
+
+    def test_two_kept_completes_when_target_length_is_two(self):
+        """Same one-pass-one-fail input with target_length=2: [A,B1] is now complete."""
+        chains = torch.tensor([[[0, 1, 2]]], dtype=torch.long)
+        rho = torch.tensor([[0.0, 10.0, 12.0]])
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=2)
+        assert out.tolist() == [[[0, 1]]]
+
+    def test_worked_example_skip_then_pass_masks_further_candidates(self):
+        """Raw (A,B1,B2,C,D): skip B2, accept C -> [A,B1,C]; D must never be inspected even
+        though its Δρ from C would also pass if it were (would flip the 3rd slot if buggy)."""
+        chains = torch.tensor([[[0, 1, 2, 3, 4]]], dtype=torch.long)
+        rho = torch.tensor([[0.0, 10.0, 12.0, 20.0, 100.0]])
+        # Δ(A,B1)=10>5 pass, Δ(B1,B2)=2<5 fail, Δ(B1,C)=10>5 pass -> done after C.
+        # Δ(C,D)=80>5 would ALSO pass if D were wrongly inspected.
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+        assert out.tolist() == [[[0, 1, 3]]]
+
+    def test_boundary_delta_equal_min_does_not_pass(self):
+        """Exact-equality Δρ == min_delta_rho_mm is rejected (strict '>'): only the anchor is kept,
+        which is incomplete for target_length=2, so the seed is dropped to all -1."""
+        chains = torch.tensor([[[0, 1]]], dtype=torch.long)
+        rho = torch.tensor([[0.0, 5.0]])
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=2)
+        assert out.tolist() == [[[-1, -1]]]
+
+    def test_boundary_delta_just_above_min_passes(self):
+        """Δρ = min_delta_rho_mm + eps is accepted, completing a target_length=2 seed."""
+        chains = torch.tensor([[[0, 1]]], dtype=torch.long)
+        rho = torch.tensor([[0.0, 5.001]])
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=2)
+        assert out.tolist() == [[[0, 1]]]
+
+    def test_short_raw_chain_dropped(self):
+        """Raw [start,-1,-1,-1,-1] (beam search found no length>=3 chain) -> [-1,-1,-1]: the lone
+        anchor is fewer than target_length hits, so the incomplete seed is dropped to all -1."""
+        chains = torch.tensor([[[0, -1, -1, -1, -1]]], dtype=torch.long)
+        rho = torch.tensor([[42.0, 0.0, 0.0, 0.0, 0.0]])
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+        assert out.tolist() == [[[-1, -1, -1]]]
+
+    def test_all_invalid_chain_including_anchor_returns_all_minus_one(self):
+        """Raw [-1,-1,-1,-1,-1] (pathological/defensive case) -> [-1,-1,-1]; regression guard
+        against leakage from the .clamp(min=0) dummy-index gather trick."""
+        chains = torch.tensor([[[-1, -1, -1, -1, -1]]], dtype=torch.long)
+        rho = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0]])
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+        assert out.tolist() == [[[-1, -1, -1]]]
+
+    def test_multi_row_multi_batch_shapes_no_cross_talk(self):
+        """B=2, N=2 with distinct per-row scenarios (including a [0,2,4] skip-keep pattern) —
+        confirms no cross-talk between batch entries or rows."""
+        chains = torch.tensor(
+            [
+                [[0, 1, 2, 3, 4], [2, -1, -1, -1, -1]],
+                [[0, 1, 2, 3, 4], [-1, -1, -1, -1, -1]],
+            ],
+            dtype=torch.long,
+        )
+        rho = torch.tensor(
+            [
+                [0.0, 10.0, 12.0, 20.0, 100.0],  # batch 0: same as worked example 2
+                [0.0, 2.0, 10.0, 11.0, 25.0],  # batch 1: skip-keep -> [0,2,4]
+            ]
+        )
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+        assert out[0, 0].tolist() == [0, 1, 3]
+        assert out[0, 1].tolist() == [-1, -1, -1]  # lone anchor [2] is incomplete -> dropped
+        assert out[1, 0].tolist() == [0, 2, 4]
+        assert out[1, 1].tolist() == [-1, -1, -1]
+
+    def test_global_rank_space_gather_uses_value_not_position(self):
+        """Dedicated coordinate-lookup test mimicking a global-rank scope: chain
+        values are ranks in non-identity order, and rho must be gathered by VALUE (rank), not by
+        position — a position-based gather bug would see a different (wrong) delta sequence."""
+        chains = torch.tensor([[[2, 5, 3, 0, 4]]], dtype=torch.long)  # [1, 1, 5], values = ranks
+        rho_rank_space = torch.tensor([[100.0, 0.0, 50.0, 10.0, 80.0, 30.0]])  # [1, N_hits=6]
+        # anchor=rank2(rho=50); rank5(rho=30): Δ=20>5 pass; rank3(rho=10): Δ=20>5 pass -> done.
+        # rank0(rho=100) and rank4(rho=80) must never be inspected.
+        out = apply_radial_separation_filter(chains, rho_rank_space, min_delta_rho_mm=5.0, target_length=3)
+        assert out.tolist() == [[[2, 5, 3]]]
+
+    def test_check_bounds_true_raises_on_out_of_range_index(self):
+        """check_bounds=True eagerly catches an index-space mismatch (index out of range for rho)."""
+        chains = torch.tensor([[[0, 5, -1]]], dtype=torch.long)  # index 5 out of range for rho below
+        rho = torch.zeros(1, 3)  # only indices 0,1,2 are valid
+        with pytest.raises(AssertionError):
+            apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3, check_bounds=True)
+
+    def test_check_bounds_defaults_to_off(self):
+        """check_bounds is opt-in: omitting it (or passing False) never raises on valid input."""
+        chains = torch.tensor([[[0, 1, 2]]], dtype=torch.long)
+        rho = torch.tensor([[0.0, 10.0, 20.0]])  # both Δ's exceed min -> a complete [0,1,2] seed
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+        assert out.tolist() == [[[0, 1, 2]]]
+
+    def test_batch_dim_mismatch_raises_immediately(self):
+        """A static chains.shape[0] vs rho.shape[0] mismatch raises before any gather happens."""
+        chains = torch.zeros(2, 1, 3, dtype=torch.long)
+        rho = torch.zeros(1, 3)
+        with pytest.raises(AssertionError):
+            apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+
+    def test_dtype_and_device_preserved(self):
+        """Output is torch.long and stays on the same device as the input chains."""
+        chains = torch.tensor([[[0, 1, 2]]], dtype=torch.long)
+        rho = torch.tensor([[0.0, 10.0, 12.0]])
+        out = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+        assert out.dtype == torch.long
+        assert out.device == chains.device
+
+    def test_integration_with_real_beam_search_score_never_recomputed(self):
+        """End-to-end: real batched_beam_search_seed_reconstruction (over-generated to length 5)
+        feeding into the filter; the returned best_scores must be carried forward unchanged,
+        never recomputed from the filtered (shorter) chain's edges."""
+        B, N = 1, 5
+        att = torch.full((B, N, N), -10.0)
+        att[0, 0, 1] = 1.0
+        att[0, 1, 2] = 5.0
+        att[0, 2, 3] = 9.0
+        att[0, 3, 4] = 13.0
+        mask = torch.ones(B, N, dtype=torch.bool)
+        edge = _to_edge_batched(att)
+
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(
+            edge, mask, max_chain_length=5, beam_width=5
+        )
+        raw_chain = chains[0, 0, :].tolist()
+        assert raw_chain == [0, 1, 2, 3, 4]  # increasing edge scores favor the full-length chain
+        raw_score = best_scores.clone()
+
+        rho = torch.tensor([[0.0, 10.0, 12.0, 20.0, 100.0]])
+        filtered = apply_radial_separation_filter(chains, rho, min_delta_rho_mm=5.0, target_length=3)
+
+        assert filtered[0, 0, :].tolist() == [0, 1, 3]
+        # Score is exactly the raw (pre-filter) score — never touched, never recomputed.
+        assert torch.equal(best_scores, raw_score)
 
 
 class TestBuildSeedFeaturesTensor:
