@@ -396,7 +396,7 @@ class TransformerEncoder(nn.Module):
         if n_layers <= 0:
             raise ValueError("Number of layers must be greater than 0")
 
-        self.layers = nn.ModuleList()
+        self.layers: nn.ModuleList[EncoderLayer] = nn.ModuleList()
 
         # Normalize num_heads to a per-layer list
         if isinstance(num_heads, list):
