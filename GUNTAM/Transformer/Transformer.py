@@ -456,11 +456,7 @@ class TransformerEncoder(nn.Module):
         Initialize weights of the transformer encoder.
         """
         for layer in self.layers:
-<<<<<<< HEAD
-            layer._init_weights()  # type: ignore[operator]
-=======
             layer._init_weights() # type: ignore[operator]
->>>>>>> cf6398696905d29c2640b759b73d4e9de2d35f53
 
     def get_layers(self) -> nn.ModuleList:
         """Return the list of encoder layers.
