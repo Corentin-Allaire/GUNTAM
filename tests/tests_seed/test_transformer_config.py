@@ -76,18 +76,37 @@ def test_parse_args_defaults(monkeypatch):
 
 
 def test_parse_args_custom(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--nb_layers_t", "2",
-        "--nb_heads", "4",
-        "--dim_embedding", "64",
-        "--dropout", "0.05",
-        "--embedding_feature", "0", "1", "2",
-        "--high_level_features", "3",
-        "--cosine_processing", "3",
-        "--dim_max", "400.0", "400.0", "2000.0",
-        "--shift", "200.0", "200.0", "1000.0",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--nb_layers_t",
+            "2",
+            "--nb_heads",
+            "4",
+            "--dim_embedding",
+            "64",
+            "--dropout",
+            "0.05",
+            "--embedding_feature",
+            "0",
+            "1",
+            "2",
+            "--high_level_features",
+            "3",
+            "--cosine_processing",
+            "3",
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "2000.0",
+            "--shift",
+            "200.0",
+            "200.0",
+            "1000.0",
+        ],
+    )
     cfg = TransformerConfig()
     cfg.parse_args()
     assert cfg.nb_layers_t == 2
@@ -100,15 +119,36 @@ def test_parse_args_custom(monkeypatch):
 
 
 def test_parse_args_fourier_explicit(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1", "2", "3",
-        "--high_level_features", "4",
-        "--cosine_processing",
-        "--dim_max", "400.0", "400.0", "2000.0", "500.0",
-        "--shift", "200.0", "200.0", "1000.0", "0.0",
-        "--fourier_num_frequencies", "8", "8", "16", "4",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "2",
+            "3",
+            "--high_level_features",
+            "4",
+            "--cosine_processing",
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "2000.0",
+            "500.0",
+            "--shift",
+            "200.0",
+            "200.0",
+            "1000.0",
+            "0.0",
+            "--fourier_num_frequencies",
+            "8",
+            "8",
+            "16",
+            "4",
+        ],
+    )
     cfg = TransformerConfig()
     cfg.parse_args()
     assert cfg.fourier_num_frequencies == [8, 8, 16, 4]
@@ -121,48 +161,96 @@ def test_validation_dropout_out_of_range(monkeypatch):
 
 
 def test_validation_cosine_not_in_features(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1",
-        "--high_level_features", "2",
-        "--cosine_processing", "9",   # 9 not in {0,1,2}
-        "--dim_max", "400.0", "400.0",
-        "--shift", "0.0", "0.0",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "--high_level_features",
+            "2",
+            "--cosine_processing",
+            "9",  # 9 not in {0,1,2}
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "--shift",
+            "0.0",
+            "0.0",
+        ],
+    )
     with pytest.raises(ValueError, match="cosine_processing"):
         TransformerConfig().parse_args()
 
 
 def test_validation_fourier_length_mismatch(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1", "2", "3",
-        "--fourier_num_frequencies", "8", "8",   # length 2 != 4
-        "--dim_max", "400.0", "400.0", "2000.0", "500.0",
-        "--shift", "200.0", "200.0", "1000.0", "0.0",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "2",
+            "3",
+            "--fourier_num_frequencies",
+            "8",
+            "8",  # length 2 != 4
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "2000.0",
+            "500.0",
+            "--shift",
+            "200.0",
+            "200.0",
+            "1000.0",
+            "0.0",
+        ],
+    )
     with pytest.raises(ValueError, match="fourier_num_frequencies"):
         TransformerConfig().parse_args()
 
 
 def test_validation_dim_max_length_mismatch(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1",
-        "--dim_max", "400.0",          # length 1 != 2
-        "--shift", "0.0", "0.0",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "--dim_max",
+            "400.0",  # length 1 != 2
+            "--shift",
+            "0.0",
+            "0.0",
+        ],
+    )
     with pytest.raises(ValueError, match="dim_max"):
         TransformerConfig().parse_args()
 
 
 def test_validation_shift_length_mismatch(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1",
-        "--dim_max", "400.0", "400.0",
-        "--shift", "0.0",              # length 1 != 2
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "--shift",
+            "0.0",  # length 1 != 2
+        ],
+    )
     with pytest.raises(ValueError, match="shift"):
         TransformerConfig().parse_args()
 
@@ -175,15 +263,33 @@ def test_validation_nb_layers_less_than_one(monkeypatch):
 
 def test_fourier_auto_derivation(monkeypatch):
     """fourier_num_frequencies should be auto-derived when not supplied."""
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--dim_embedding", "64",
-        "--embedding_feature", "0", "1", "2", "3",
-        "--high_level_features", "4",
-        "--cosine_processing",
-        "--dim_max", "400.0", "400.0", "2000.0", "500.0",
-        "--shift", "200.0", "200.0", "1000.0", "0.0",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--dim_embedding",
+            "64",
+            "--embedding_feature",
+            "0",
+            "1",
+            "2",
+            "3",
+            "--high_level_features",
+            "4",
+            "--cosine_processing",
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "2000.0",
+            "500.0",
+            "--shift",
+            "200.0",
+            "200.0",
+            "1000.0",
+            "0.0",
+        ],
+    )
     cfg = TransformerConfig()
     cfg.parse_args()
     expected = max(1, (64 - 1) // (2 * 4))
@@ -191,14 +297,24 @@ def test_fourier_auto_derivation(monkeypatch):
 
 
 def test_high_level_features_can_be_empty(monkeypatch):
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1",
-        "--high_level_features",        # empty
-        "--cosine_processing",          # empty
-        "--dim_max", "400.0", "400.0",
-        "--shift", "0.0", "0.0",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "--high_level_features",  # empty
+            "--cosine_processing",  # empty
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "--shift",
+            "0.0",
+            "0.0",
+        ],
+    )
     cfg = TransformerConfig()
     cfg.parse_args()
     assert cfg.high_level_features == []
@@ -231,15 +347,35 @@ def test_dim_max_shift_match_coord_dim_with_cosine_in_embedding(monkeypatch):
     dim_max and shift must have coord_dim length, not n_embed length."""
     # embedding_feature = [0, 1, 2], cosine_processing = [0]
     # intersection = {0} → coord_dim = 3 + 1 = 4, n_embed = 3
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1", "2",
-        "--high_level_features",
-        "--cosine_processing", "0",
-        "--dim_max", "400.0", "400.0", "2000.0", "400.0",  # length 4 == coord_dim
-        "--shift", "200.0", "200.0", "1000.0", "200.0",    # length 4 == coord_dim
-        "--fourier_num_frequencies", "4", "4", "4", "4",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "2",
+            "--high_level_features",
+            "--cosine_processing",
+            "0",
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "2000.0",
+            "400.0",  # length 4 == coord_dim
+            "--shift",
+            "200.0",
+            "200.0",
+            "1000.0",
+            "200.0",  # length 4 == coord_dim
+            "--fourier_num_frequencies",
+            "4",
+            "4",
+            "4",
+            "4",
+        ],
+    )
     cfg = TransformerConfig()
     cfg.parse_args()
     assert len(cfg.dim_max) == 4
@@ -251,14 +387,29 @@ def test_validation_dim_max_must_match_coord_dim_not_n_embed(monkeypatch):
     when cosine_processing overlaps embedding_feature."""
     # embedding_feature = [0, 1, 2], cosine_processing = [0]
     # coord_dim = 4, n_embed = 3 → dim_max length 3 should raise
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1", "2",
-        "--high_level_features",
-        "--cosine_processing", "0",
-        "--dim_max", "400.0", "400.0", "2000.0",   # length 3 == n_embed, but coord_dim == 4
-        "--shift", "200.0", "200.0", "1000.0", "200.0",
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "2",
+            "--high_level_features",
+            "--cosine_processing",
+            "0",
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "2000.0",  # length 3 == n_embed, but coord_dim == 4
+            "--shift",
+            "200.0",
+            "200.0",
+            "1000.0",
+            "200.0",
+        ],
+    )
     with pytest.raises(ValueError, match="dim_max"):
         TransformerConfig().parse_args()
 
@@ -268,13 +419,28 @@ def test_validation_shift_must_match_coord_dim_not_n_embed(monkeypatch):
     when cosine_processing overlaps embedding_feature."""
     # embedding_feature = [0, 1, 2], cosine_processing = [0]
     # coord_dim = 4, n_embed = 3 → shift length 3 should raise
-    monkeypatch.setattr(sys, "argv", [
-        "prog",
-        "--embedding_feature", "0", "1", "2",
-        "--high_level_features",
-        "--cosine_processing", "0",
-        "--dim_max", "400.0", "400.0", "2000.0", "400.0",
-        "--shift", "200.0", "200.0", "1000.0",             # length 3 == n_embed, but coord_dim == 4
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--embedding_feature",
+            "0",
+            "1",
+            "2",
+            "--high_level_features",
+            "--cosine_processing",
+            "0",
+            "--dim_max",
+            "400.0",
+            "400.0",
+            "2000.0",
+            "400.0",
+            "--shift",
+            "200.0",
+            "200.0",
+            "1000.0",  # length 3 == n_embed, but coord_dim == 4
+        ],
+    )
     with pytest.raises(ValueError, match="shift"):
         TransformerConfig().parse_args()

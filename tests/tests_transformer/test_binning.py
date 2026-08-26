@@ -41,7 +41,7 @@ class TestGlobalBin:
     def test_global_bin_proper_number_of_bins(self):
         """Test that global_bin creates the correct number of bins."""
         values = pd.DataFrame({"value": [0.0, 5.0, 10.0]})
-        
+
         # Test case 1: Range 0-10 with bin_width 2 should give 5 bins
         _, num_bins = global_bin(values, bin_width=2.0, value_range=(0.0, 10.0))
         assert num_bins == 5
@@ -74,7 +74,7 @@ class TestGlobalBin:
     def test_global_bin_invalid_range(self):
         """Test that global_bin raises error for invalid value range."""
         values = pd.DataFrame({"value": [1.0, 2.0, 3.0]})
-        
+
         with pytest.raises(ValueError, match="max_value must be greater than min_value"):
             global_bin(values, bin_width=1.0, value_range=(5.0, 5.0))
 
@@ -84,7 +84,7 @@ class TestGlobalBin:
     def test_global_bin_invalid_bin_width(self):
         """Test that global_bin raises error for invalid bin width."""
         values = pd.DataFrame({"value": [1.0, 2.0, 3.0]})
-        
+
         with pytest.raises(ValueError, match="bin_width must be greater than 0"):
             global_bin(values, bin_width=0.0, value_range=(0.0, 5.0))
 
@@ -111,7 +111,7 @@ class TestNeighborBin:
 
         assert num_bins == 3
         assert bins_df.shape == (3, 3)
-        
+
         # Check that bin0 < bin1 < bin2 (modulo wrapping)
         for _, row in bins_df.iterrows():
             assert row["bin0"] == (row["bin1"] - 1) % num_bins
@@ -123,7 +123,7 @@ class TestNeighborBin:
         bins_df, num_bins = neighbor_bin(values, bin_width=2.0, value_range=(0.0, 10.0))
 
         assert num_bins == 5
-        
+
         # For value 0.5 (bin 0), neighbors should be 4 (wraps) and 1
         first_bin = bins_df.iloc[0]
         assert first_bin["bin1"] == 0
@@ -203,14 +203,14 @@ class TestMarginBin:
     def test_margin_bin_proper_number_of_bins(self):
         """Test that margin_bin creates the correct number of bins."""
         values = pd.DataFrame({"value": [0.0, 5.0, 10.0]})
-        
+
         _, num_bins = margin_bin(values, bin_width=2.0, margin=0.5, value_range=(0.0, 10.0))
         assert num_bins == 5
 
     def test_margin_bin_invalid_margin(self):
         """Test that margin_bin raises error for invalid margin values."""
         values = pd.DataFrame({"value": [1.0, 2.0, 3.0]})
-        
+
         # Margin cannot be negative
         with pytest.raises(ValueError, match="Margin must be non-negative"):
             margin_bin(values, bin_width=2.0, margin=-0.5, value_range=(0.0, 10.0))

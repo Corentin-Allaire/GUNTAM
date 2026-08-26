@@ -2,13 +2,15 @@ import pytest
 import torch
 import numpy as np
 
-from GUNTAM.Seed.Reconstruction import (topk_seed_reconstruction,
-                                        chained_seed_reconstruction,
-                                        back_chained_seed_reconstruction,
-                                        weighted_chained_seed_reconstruction,
-                                        beam_search_seed_reconstruction,
-                                        batched_beam_search_seed_reconstruction,
-                                        build_seed_features_tensor)
+from GUNTAM.Seed.Reconstruction import (
+    topk_seed_reconstruction,
+    chained_seed_reconstruction,
+    back_chained_seed_reconstruction,
+    weighted_chained_seed_reconstruction,
+    beam_search_seed_reconstruction,
+    batched_beam_search_seed_reconstruction,
+    build_seed_features_tensor,
+)
 
 
 def _to_edge(att: torch.Tensor, width: int = None) -> torch.Tensor:
@@ -70,7 +72,7 @@ class TestTopKSeedReconstruction:
         seeds = topk_seed_reconstruction(edge, max_selection=4)
         assert len(seeds) == edge.shape[0]
         all_indices = set(range(edge.shape[0]))
-        for (idxs, _, _seed_score) in seeds:
+        for idxs, _, _seed_score in seeds:
             assert set(idxs.tolist()).issubset(all_indices)
 
     def test_empty_input(self):
@@ -347,8 +349,8 @@ class TestWeightedChainedSeedReconstruction:
         """With pairs_per_hit=1 only the single strongest neighbor is considered per hit."""
         n = 6
         att = torch.zeros(n, n)
-        att[0, 1] = 0.95   # stronger
-        att[0, 2] = 0.90   # weaker – should be ignored with pairs_per_hit=1
+        att[0, 1] = 0.95  # stronger
+        att[0, 2] = 0.90  # weaker – should be ignored with pairs_per_hit=1
         att[2, 5] = 0.93
         att[1, 3] = 0.88
         att[1, 4] = 0.85
@@ -455,9 +457,7 @@ class TestBeamSearchSeedReconstruction:
             att[i, i + 1] = 0.9
         edge = _to_edge(att)
         max_len = 4
-        seeds = beam_search_seed_reconstruction(
-            edge, self._make_starting_mask(n), max_chain_length=max_len
-        )
+        seeds = beam_search_seed_reconstruction(edge, self._make_starting_mask(n), max_chain_length=max_len)
         for idxs, _, _ in seeds:
             assert len(idxs) <= max_len
 
@@ -502,9 +502,7 @@ class TestBeamSearchSeedReconstruction:
         att[0, 1] = 0.8
         att[1, 2] = 0.6
         edge = _to_edge(att)
-        seeds = beam_search_seed_reconstruction(
-            edge, self._make_starting_mask(n), max_chain_length=3
-        )
+        seeds = beam_search_seed_reconstruction(edge, self._make_starting_mask(n), max_chain_length=3)
         assert len(seeds) >= 1
         idxs, _, seed_score = seeds[0]
         assert idxs.tolist()[:3] == [0, 1, 2]
@@ -524,9 +522,7 @@ class TestBatchedBeamSearchSeedReconstruction:
         """All three output tensors have the expected shapes."""
         B, N, CL = 2, 8, 5
         edge, mask = self._make_inputs(B, N)
-        chains, params, best_scores = batched_beam_search_seed_reconstruction(
-            edge, mask, max_chain_length=CL
-        )
+        chains, params, best_scores = batched_beam_search_seed_reconstruction(edge, mask, max_chain_length=CL)
         assert chains.shape == (B, N, CL)
         assert params.shape == (B, N, 5)
         assert best_scores.shape == (B, N)
@@ -562,9 +558,7 @@ class TestBatchedBeamSearchSeedReconstruction:
         att[0, 1, 2] = 10.0
         mask = torch.ones(B, N, dtype=torch.bool)
         edge = _to_edge_batched(att)
-        chains, _, _ = batched_beam_search_seed_reconstruction(
-            edge, mask, max_chain_length=5, beam_width=2
-        )
+        chains, _, _ = batched_beam_search_seed_reconstruction(edge, mask, max_chain_length=5, beam_width=2)
         chain = chains[0, 0, :]
         assert chain[3].item() == -1
         assert chain[4].item() == -1
@@ -577,9 +571,7 @@ class TestBatchedBeamSearchSeedReconstruction:
             att[0, i, i + 1] = 10.0
         mask = torch.ones(B, N, dtype=torch.bool)
         edge = _to_edge_batched(att)
-        chains, _, best_scores = batched_beam_search_seed_reconstruction(
-            edge, mask, max_chain_length=5, backward=False
-        )
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(edge, mask, max_chain_length=5, backward=False)
         assert best_scores[0, 0] > float("-inf")
         chain = chains[0, 0, :]
         valid = chain[chain >= 0].tolist()
@@ -595,9 +587,7 @@ class TestBatchedBeamSearchSeedReconstruction:
             att[0, i, i - 1] = 10.0
         mask = torch.ones(B, N, dtype=torch.bool)
         edge = _to_edge_batched(att)
-        chains, _, best_scores = batched_beam_search_seed_reconstruction(
-            edge, mask, max_chain_length=5, backward=True
-        )
+        chains, _, best_scores = batched_beam_search_seed_reconstruction(edge, mask, max_chain_length=5, backward=True)
         assert best_scores[0, N - 1] > float("-inf")
         chain = chains[0, N - 1, :]
         valid = chain[chain >= 0].tolist()
@@ -625,9 +615,7 @@ class TestBatchedBeamSearchSeedReconstruction:
         B, N = 1, 6
         edge, mask = self._make_inputs(B, N)
         # All attention scores are 0.0; threshold of 1.0 masks everything
-        _, _, best_scores = batched_beam_search_seed_reconstruction(
-            edge, mask, att_threshold=1.0
-        )
+        _, _, best_scores = batched_beam_search_seed_reconstruction(edge, mask, att_threshold=1.0)
         assert (best_scores == float("-inf")).all()
 
     def test_batch_bins_processed_independently(self):
@@ -729,10 +717,10 @@ class TestBuildSeedFeaturesTensor:
         seeds = torch.tensor([[0]])
         out = build_seed_features_tensor(hits, seeds, feature_indices=[0, 4, 2], cosine_feature_indices=[4])
         assert out.shape == (1, 1, 4)
-        assert out[0, 0, 0].item() == pytest.approx(1.0)               # direct f0
+        assert out[0, 0, 0].item() == pytest.approx(1.0)  # direct f0
         assert out[0, 0, 1].item() == pytest.approx(torch.cos(torch.tensor(0.5)).item(), rel=1e-5)  # cos(f4)
         assert out[0, 0, 2].item() == pytest.approx(torch.sin(torch.tensor(0.5)).item(), rel=1e-5)  # sin(f4)
-        assert out[0, 0, 3].item() == pytest.approx(3.0)               # direct f2
+        assert out[0, 0, 3].item() == pytest.approx(3.0)  # direct f2
 
     def test_multiple_seeds_independent(self):
         """Each seed row gathers its own hits independently."""
