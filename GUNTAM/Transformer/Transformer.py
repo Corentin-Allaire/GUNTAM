@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+
 def load_state_dict_flex(model: torch.nn.Module, raw_state_dict: Dict[str, Any], desc: str = "model") -> None:
     """
     Attempt to load a raw state_dict handling compile / DP prefixes.
@@ -58,7 +59,7 @@ def _normalize_state_dict_keys(state_dict: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def manual_attention(q: Tensor, k: Tensor, mask: Optional[Tensor] = None) -> Tensor:
-    """Compute the attention matrix manually 
+    """Compute the attention matrix manually
 
     Args:
           q: Query tensor of shape (batch_size, num_heads, seq_len, d_k)
@@ -75,8 +76,10 @@ def manual_attention(q: Tensor, k: Tensor, mask: Optional[Tensor] = None) -> Ten
 
     if mask is not None:
         scores = scores.masked_fill(mask, float("-inf"))
+    score = F.softmax(scores, dim=-1)
 
-    return scores
+    return score
+
 
 def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
     """Scaled dot-product attention mechanism.
@@ -91,8 +94,7 @@ def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: O
         Tuple of (output tensor, attention weights matrix on the last attention layer (after softmax))
     """
 
-    scores = manual_attention(q, k, mask)
-    score = F.softmax(scores, dim=-1)
+    score = manual_attention(q, k, mask)
     output = torch.matmul(score, v)
     return output, score
 
@@ -141,7 +143,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.out_linear = nn.Linear(self.model_dim, self.input_dim, device=device)
 
-    def compute_attention(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor | None]:
+    def compute_attention(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor :
         """Compute attention matrix for the last layer of transformer
 
         Args:
@@ -182,7 +184,6 @@ class MultiHeadAttention(nn.Module):
         attn_weights = manual_attention(q, k, key_mask)
 
         return attn_weights
-
 
     def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor | None]:
         """Forward pass through multi-head attention layer.
@@ -508,45 +509,12 @@ class TransformerEncoder(nn.Module):
 
         return x_layer
 
-    # def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
-    #     """
-    #     Forward pass through the transformer encoder layer.
-    #     Args:
-    #         x (Tensor): Input tensor of shape (batch_size, seq_len, d_model).
-    #         mask (Tensor): Optional mask tensor of shape (batch_size, seq_len).
-    #     Returns:
-    #         Tensor: Output tensor of shape (batch_size, seq_len, d_model).
-    #     """
-    #     from GUNTAM.Seed.MonitoringPlot import visualize_attention_map
-    #
-    #     x_layer = x
-    #     layer_idx = 0
-    #     for layer in self.layers:
-    #         x_layer, attn_weights = layer.encode(x_layer, mask)
-    #         if attn_weights is not None:
-    #             att = torch.softmax(attn_weights, dim=-1)
-    #             # att = att.mean(dim=1, keepdim=True)  # average over heads
-    #             att = att.max(dim=1, keepdim=True).values
-    #             aw = att[55, 0].detach().cpu().float().numpy()
-    #             n = aw.shape[0]
-    #             visualize_attention_map(
-    #                 attention_weights=aw,
-    #                 pair_info={},
-    #                 valid_hits=np.arange(n),
-    #                 event_idx=0,
-    #                 bin_idx=layer_idx,
-    #                 max_hits=600,
-    #             )
-    #         layer_idx += 1
-
-    #     return x_layer
-
     def _init_weights(self) -> None:
         """
         Initialize weights of the transformer encoder.
         """
         for layer in self.layers:
-            layer._init_weights()
+            layer._init_weights()  # type: ignore[operator]
 
     def get_layers(self) -> nn.ModuleList:
         """Return the list of encoder layers.
