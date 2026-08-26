@@ -491,7 +491,7 @@ def main() -> None:
         model.eval()
         if args.compile:
             print("Compiling PyTorch model with torch.compile...")
-            model = torch.compile(model)
+            model = torch.compile(model)  # type: ignore[assignment]
 
         results["pytorch"] = _benchmark_pytorch(
             model=model,
@@ -527,7 +527,7 @@ def main() -> None:
         model.eval()
         if args.compile:
             print("Compiling PyTorch model with torch.compile...")
-            model = torch.compile(model)
+            model = torch.compile(model)  # type: ignore[assignment]
         results["parallel_pytorch"] = _benchmark_parallel_pytorch(
             model=model,
             events=non_empty_events,

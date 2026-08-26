@@ -122,7 +122,7 @@ class SeedReconstructionModel(nn.Module):
 
         # Sort by (bin, is_secondary, hit_pos): primaries fill slots before neighbors on overflow.
         # Neighbor duplicates are ranked by descending hit_pos so that, on overflow, the
-        # smallest-R duplicates are dropped first and the largest-R ones are kept 
+        # smallest-R duplicates are dropped first and the largest-R ones are kept
         secondary_rank = torch.where(is_secondary.bool(), N - 1 - hit_pos_u, hit_pos_u)
         order = torch.argsort(bins_u * (2 * N) + is_secondary * N + secondary_rank)
         bins_u = bins_u[order]

@@ -143,7 +143,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.out_linear = nn.Linear(self.model_dim, self.input_dim, device=device)
 
-    def compute_attention(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor :
+    def compute_attention(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
         """Compute attention matrix for the last layer of transformer
 
         Args:
