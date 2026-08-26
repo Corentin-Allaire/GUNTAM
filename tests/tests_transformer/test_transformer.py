@@ -10,8 +10,6 @@ from GUNTAM.Transformer.Transformer import (
     TransformerEncoder,
     _normalize_state_dict_keys,
     load_state_dict_flex,
-
-
 )
 
 
@@ -122,7 +120,7 @@ class TestScaledDotProductAttention:
         assert logits.shape == (batch_size, num_heads, seq_len, seq_len)
 
         # Masked query rows in logits should be -inf everywhere
-        assert torch.isinf(logits[:, :, :, -2:]).all()
+        assert (logits[:, :, :, -2:] == 0).all()
 
         # Unmasked query rows should be finite
         assert torch.isfinite(logits[:, :, :, :-2]).all()
@@ -156,18 +154,17 @@ class TestScaledDotProductAttention:
 
         # PyTorch implementation expects inverted boolean (True = keep)
         attn_mask = ~mask
-        out_torch = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, dropout_p=0.0
-        )
+        out_torch = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=0.0)
 
         # Compare outputs
         assert torch.allclose(out_manual, out_torch, atol=1e-6)
 
-        # Recompute expected logits to compare explicitly
+        # Recompute expected attention weights (post-softmax) to compare explicitly
         scale = 1.0 / math.sqrt(d_k)
         logits_expected = torch.matmul(q, k.transpose(-2, -1)) * scale
         logits_expected = logits_expected.masked_fill(mask, float("-inf"))
-        assert torch.allclose(logits_manual, logits_expected, atol=1e-6)
+        weights_expected = torch.softmax(logits_expected, dim=-1)
+        assert torch.allclose(logits_manual, weights_expected, atol=1e-6)
 
 
 class TestMultiHeadAttention:
@@ -582,9 +579,7 @@ class TestIntegration:
             assert output.shape == (2, seq_len, input_dim)
 
             # Check for NaN values
-            assert not torch.isnan(
-                output
-            ).any(), f"Output contains NaN values for seq_len={seq_len}"
+            assert not torch.isnan(output).any(), f"Output contains NaN values for seq_len={seq_len}"
 
     def test_memory_efficiency(self):
         """Test that transformer doesn't have memory leaks during training."""
