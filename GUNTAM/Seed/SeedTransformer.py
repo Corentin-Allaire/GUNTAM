@@ -1,14 +1,16 @@
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
 from torch import Tensor
+import torch.nn.functional as F
 
 from GUNTAM.Seed.TransformerConfig import TransformerConfig
 from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
 from GUNTAM.Transformer.Transformer import load_state_dict_flex
 from GUNTAM.Transformer.Embeding import FourierPositionalEncoding
+from GUNTAM.Seed.shuffle_features import shuffle_features, shuffle_features_per_i
 
 
 class SeedTransformer(nn.Module):
@@ -71,7 +73,9 @@ class SeedTransformer(nn.Module):
 
         # Projection layer to map Fourier-encoded features to the desired embedding dimension
         embedding_input_dim = self.fourier_encoding.output_dim
-        self.embedding_projection = nn.Linear(embedding_input_dim, self.cfg.dim_embedding, device=self.device_acc)
+
+        if self.cfg.embedding_mode == "MLP":
+            self.embedding_projection = nn.Linear(embedding_input_dim, self.cfg.dim_embedding, device=self.device_acc)
 
         # Transformer model
         self.transformer = TransformerEncoder(
@@ -93,14 +97,19 @@ class SeedTransformer(nn.Module):
             use_pytorch=False,
         )
 
-    def embedding(self, hits: Tensor) -> Tensor:
+    def embedding(self, hits: Tensor, *, shuffle_v: Optional[int] = None, situation: Optional[str] = None) -> Tensor:
         """
         Embed the input hit features using Fourier positional encoding and a projection layer.
         Args:
             - hits (Tensor): Input source sequence.
+            - shuffle_v: Indice of the feature we shuffle.
+            - situation: name of the situation corresponding to which features we want to shuffle together.
         Returns:
             - encoded (Tensor): Encoded memory.
         """
+
+        if situation is not None and shuffle_v is not None:
+            raise ValueError("`situation` or `shuffle_v` are not well defined")
 
         if any(i in self.cfg.embedding_feature for i in self.cfg.cosine_processing):
             embedding_cosine = [i for i in self.cfg.embedding_feature if i in self.cfg.cosine_processing]
@@ -135,8 +144,27 @@ class SeedTransformer(nn.Module):
 
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
+
+        if situation is not None and shuffle_v is None:
+            encoded_hits = shuffle_features(encoded_hits, situation)
+        if situation is None and shuffle_v is not None:
+            encoded_hits = shuffle_features_per_i(encoded_hits, shuffle_v)
+        if situation is None and shuffle_v is None:
+            encoded_hits = encoded_hits
+
         # Apply generic projection if needed
-        encoded_hits = self.embedding_projection(encoded_hits)
+        if self.cfg.embedding_mode == "MLP":
+
+            encoded_hits = self.embedding_projection(encoded_hits)
+
+        elif self.cfg.embedding_mode == "padding":
+
+            pad_size = self.cfg.dim_embedding - encoded_hits.shape[-1]
+            encoded_hits = F.pad(encoded_hits, (0, pad_size))
+
+        else:
+
+            raise ValueError(f"Unknown embedding_mode: {self.cfg.embedding_mode}")
 
         return encoded_hits
 
@@ -164,19 +192,30 @@ class SeedTransformer(nn.Module):
         hits: Tensor,
         mask: Tensor,
         width: int = 5,
+        *,
+        shuffle_v: Optional[int] = None,
+        situation: Optional[str] = None,
     ) -> Tuple[Tensor, Tensor]:
         """
         Forward pass of the transformer network.
         Args:
             - hits (Tensor): Input source sequence.
             - mask_hits (Tensor): Source mask.
+            - shuffle_v: Indice of the feature we shuffle.
+            - situation: name of the situation corresponding to which features we want to shuffle together.
         Returns:
             - encoded (Tensor): Encoded memory.
             - attention_weights (Tensor): Attention weights from all layers.
         """
 
         # Encode the input hit sequence
-        encoded_hits = self.embedding(hits)
+        if situation is not None and shuffle_v is None:
+            encoded_hits = self.embedding(hits, situation=situation)
+        if situation is None and shuffle_v is not None:
+            encoded_hits = self.embedding(hits, shuffle_v=shuffle_v)
+        if situation is None and shuffle_v is None:
+            encoded_hits = self.embedding(hits)
+
         # Compute the adjacency matrix using the matching attention layer
         transformer_output, attention_weights = self.compute_adjacency(encoded_hits, mask)
 

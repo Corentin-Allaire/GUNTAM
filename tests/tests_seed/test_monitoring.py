@@ -61,7 +61,7 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
         attention_maps,
     )
 
- 
+
 def make_multi_event_multi_bin_setup():
     """Create a setup with:
     - Event 1: 5 particles, 3 hits each, present in 4 bins
@@ -138,7 +138,7 @@ def test_seeding_performance_basic():
         all_pairs_test,
         attention_maps,
     ) = make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6)
-    
+
     monitor = PerformanceMonitor(
         save_plots=False,
         min_common_hits=3,
@@ -200,7 +200,7 @@ def test_seeding_performance_basic():
             resolution[param] = {
                 "mean_error": np.mean(arr),
                 "std_error": np.std(arr),
-                "rms_error": np.sqrt(np.mean(arr ** 2)),
+                "rms_error": np.sqrt(np.mean(arr**2)),
                 "median_error": np.median(arr),
                 "n_seeds": len(arr),
             }

@@ -537,14 +537,14 @@ def batched_beam_search_seed_reconstruction(
             step_best, step_beam = avg_scores.max(dim=2)  # [B, N]
 
             improve = step_best > best_scores  # [B, N]
-            if improve.any():
-                best_scores = torch.where(improve, step_best, best_scores)
-                best_lens = torch.where(improve, torch.full_like(best_lens, chain_len), best_lens)
+            # if improve.any():
+            best_scores = torch.where(improve, step_best, best_scores)
+            best_lens = torch.where(improve, torch.full_like(best_lens, chain_len), best_lens)
 
-                b_idx = torch.arange(bin_nb, device=device)[:, None]  # [B, 1]
-                n_idx = torch.arange(hit_nb, device=device)[None, :]  # [1, N]
-                winning_chains = chains[b_idx, n_idx, step_beam]  # [B, N, CL]
-                best_chains = torch.where(improve.unsqueeze(-1), winning_chains, best_chains)
+            b_idx = torch.arange(bin_nb, device=device)[:, None]  # [B, 1]
+            n_idx = torch.arange(hit_nb, device=device)[None, :]  # [1, N]
+            winning_chains = chains[b_idx, n_idx, step_beam]  # [B, N, CL]
+            best_chains = torch.where(improve.unsqueeze(-1), winning_chains, best_chains)
 
     params = torch.zeros(bin_nb, hit_nb, 5, device=device, dtype=torch.float32)
 
@@ -560,7 +560,6 @@ def build_seed_features_tensor(
     """
     Build a feature tensor for each seed by gathering hit coordinates.
     This can then be passed to NN for parameter regression and good/fake classification.
-
     Args:
         hits_tensor: Float tensor of shape [N, num_features] containing the hit
             features for all hits in a single bin.

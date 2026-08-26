@@ -1,4 +1,3 @@
-
 import pytest
 import torch
 
@@ -85,13 +84,13 @@ class TestSyncDevice:
         dev = torch.device("cuda")
         # Should not raise; synchronize current device
         sync_device(dev)
-        
+
     @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
     def test_mps_noop_or_sync(self):
         # On MPS, sync_device should be safe to call
         dev = torch.device("mps")
         sync_device(dev)
-        
+
 
 class TestCosineScheduleWithMinLR:
     """Tests for the custom cosine scheduler with warmup and min LR."""
