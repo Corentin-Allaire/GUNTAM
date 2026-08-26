@@ -81,6 +81,7 @@ class SeedTransformer(nn.Module):
             num_heads=self.cfg.nb_heads,  # Number of attention heads can be adjusted
             dropout=self.cfg.dropout,  # Dropout rate can be adjusted
             device=self.device_acc,
+            use_pytorch=True,
         )
 
         # Matching attention layer to produce attention matrice used in reconstruction
