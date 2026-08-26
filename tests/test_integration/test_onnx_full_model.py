@@ -13,7 +13,7 @@ Pipeline:
 
 from pathlib import Path
 import argparse
-
+import torch
 import numpy as np
 import pandas as pd
 import pytest
@@ -27,7 +27,7 @@ HITS_FILE = DATA_DIR / "event000000002-hits.csv"
 MEAS_FILE = DATA_DIR / "event000000002-measurement-simhit-map.csv"
 PARTICLES_FILE = DATA_DIR / "event000000002-particles_selected.csv"
 
-# Particle-ID columns shared between hits and particles CSVs.
+# Particle-ID columns shared between hits and particles CSVs
 _ID_COLUMNS = [
     "particle_id_pv",
     "particle_id_sv",
@@ -35,6 +35,8 @@ _ID_COLUMNS = [
     "particle_id_gen",
     "particle_id_subpart",
 ]
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def _create_particle_id_column(hits: pd.DataFrame, particles: pd.DataFrame) -> None:
@@ -142,18 +144,53 @@ def _majority_pid(seed: np.ndarray, pid_array: np.ndarray) -> int | None:
     return int(np.argmax(counts))
 
 
-def _run_inference(ort_session, sp: "pd.DataFrame"):
+def _run_inference_onnx(ort_session, sp: "pd.DataFrame"):
     """Run the ONNX model and return (seeds [S, SL], seed_scores [S])."""
     sp_np = sp[["x", "y", "z"]].to_numpy(dtype=np.float32)
     seeds, seed_scores = ort_session.run(["seeds", "seed_scores"], {"hits": sp_np})
     return seeds, seed_scores
 
+# def _run_inference_classique(sp):
+#     """Run the ONNX model and return (seeds [S, SL], seed_scores [S])."""
+#     sp_np = sp[["x", "y", "z"]].to_numpy(dtype=np.float32)
+#     sp_tensor = torch.tensor(sp_np, dtype=torch.float32)
+#     # ---- 1. Config (doit correspondre à celle utilisée à l'entraînement) ----
+#     cfg = SeedConfig()
+#     cfg.epoch_nb = 1
+#     #cfg.transformer_config.embedding_mode = "MLP"
+
+
+#     # ---- 2. Transformer entraîné ----
+#     transformer = SeedTransformer(
+#         transformer_config=cfg.transformer_config,
+#         device_acc=cfg.device_acc,
+#         dtype=torch.float32,
+#     )
+#     transformer.to(cfg.device_acc)
+#     transformer.load(DATA_DIR / "transformer.pt", device=cfg.device_acc)
+#     transformer.eval()
+
+#     model = SeedReconstructionModel(
+#         transformer_config=cfg,
+#         transformer=transformer,
+#         )
+#     model.to(device)
+#     model.eval()
+
+#     seeds, seed_scores = model(sp_tensor)
+#     return seeds, seed_scores
+
 
 @pytest.fixture(scope="module")
-def inference_results(ort_session, event0):
+def inference_results_onnx(ort_session, event0):
     """Run inference once and share the results across all tests in the module."""
     sp, _ = event0
-    return _run_inference(ort_session, sp)
+    return _run_inference_onnx(ort_session, sp)
+
+# def inference_results_classique(event0):
+#     """Run inference once and share the results across all tests in the module."""
+#     sp, _ = event0
+#     return _run_inference(sp)
 
 
 class TestOnnxFullModel:
@@ -173,7 +210,8 @@ class TestOnnxFullModel:
         """Every non-negative index in the seed output must be a valid space-point index."""
         sp, _ = event0
         seeds, _ = inference_results
-
+        print("biiiip")
+        print(seeds)
         valid_indices = seeds[seeds >= 0]
         assert valid_indices.max() < len(sp), f"Seed index {valid_indices.max()} out of range for {len(sp)} space points"
 

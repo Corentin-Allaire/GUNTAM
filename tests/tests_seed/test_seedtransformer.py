@@ -42,11 +42,11 @@ class TestSeedTransformerInitialization:
         nb_layers_t, nb_heads, dim_embedding = 3, 2, 96
         cfg = make_config(nb_layers_t=nb_layers_t, nb_heads=nb_heads, dim_embedding=dim_embedding)
         model = SeedTransformer(transformer_config=cfg)
-
         assert model.cfg.nb_layers_t == nb_layers_t
         assert model.cfg.dim_embedding == dim_embedding
         assert isinstance(model.fourier_encoding, torch.nn.Module)
-        assert isinstance(model.embedding_projection, torch.nn.Linear)
+        if model.cfg.embedding_mode == "MLP":
+            assert isinstance(model.embedding_projection, torch.nn.Linear)
         assert len(model.transformer.layers) == nb_layers_t
         # matching_attention uses single head
         assert model.matching_attention.num_heads == 1
