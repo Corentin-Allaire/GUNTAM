@@ -70,16 +70,14 @@ class SeedReconstructionModel(nn.Module):
         # Compute derived coordinates from (x, y, z)
         R = torch.sqrt(x**2 + y**2)
         phi = torch.atan2(y, x)
-        rho = torch.sqrt(x**2 + y**2 + z**2)
-        cos_theta = z / rho
-        eta = 0.5 * torch.log((1.0 + cos_theta) / (1.0 - cos_theta))
-
+        theta = torch.arctan2(R, z)
+        eta = -torch.log(torch.tan(theta / 2))
         orig_idx = torch.arange(N, device=device, dtype=dtype)
         # Build augmented hit matrix with columns (x, y, z, r, phi, eta, orig_idx)
         hits_matrix = torch.stack([x, y, z, R, phi, eta, orig_idx], dim=1)  # [N, 7]
 
-        # Sort hits by R+rho ascending so that hits within each bin are radially ordered
-        sort_order = torch.argsort(R + rho)
+        # Sort hits by R ascending so that hits within each bin are radially ordered
+        sort_order = torch.argsort(R)
         hits_matrix = hits_matrix[sort_order]
 
         bin_width = self.cfg.preprocessing_config.bin_width
@@ -122,9 +120,11 @@ class SeedReconstructionModel(nn.Module):
             hit_pos_u = pairs[:, 1]
             is_secondary = (b1[hit_pos_u] != bins_u).long()  # 0 = primary, 1 = neighbor
 
-        # Sort by (bin, is_secondary, hit_pos): primaries fill slots before neighbors on overflow;
-        # bins_u is non-decreasing after this step.
-        order = torch.argsort(bins_u * (2 * N) + is_secondary * N + hit_pos_u)
+        # Sort by (bin, is_secondary, hit_pos): primaries fill slots before neighbors on overflow.
+        # Neighbor duplicates are ranked by descending hit_pos so that, on overflow, the
+        # smallest-R duplicates are dropped first and the largest-R ones are kept 
+        secondary_rank = torch.where(is_secondary.bool(), N - 1 - hit_pos_u, hit_pos_u)
+        order = torch.argsort(bins_u * (2 * N) + is_secondary * N + secondary_rank)
         bins_u = bins_u[order]
         hit_pos_u = hit_pos_u[order]
 
