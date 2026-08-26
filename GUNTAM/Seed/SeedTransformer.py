@@ -81,6 +81,7 @@ class SeedTransformer(nn.Module):
             num_heads=self.cfg.nb_heads,  # Number of attention heads can be adjusted
             dropout=self.cfg.dropout,  # Dropout rate can be adjusted
             device=self.device_acc,
+            use_pytorch=True,
         )
 
         # Matching attention layer to produce attention matrice used in reconstruction
@@ -153,7 +154,7 @@ class SeedTransformer(nn.Module):
         # Perform the transformer encoding
         transformer_output = self.transformer(x=encoded_hits, mask=mask)
         # Extract the last attention matrix for use in the reconstruction
-        _, attn_weights = self.matching_attention(transformer_output, mask)
+        attn_weights = self.matching_attention.compute_attention(transformer_output, mask)
         # The number of heads is 1 for matching attention, so we can squeeze that dimension
         attn_weights = attn_weights.squeeze(1)
 
@@ -180,13 +181,10 @@ class SeedTransformer(nn.Module):
         # Compute the adjacency matrix using the matching attention layer
         transformer_output, attention_weights = self.compute_adjacency(encoded_hits, mask)
 
-        # Apply softmax to the attention weights to get the final adjacency matrix
-        att = torch.softmax(attention_weights, dim=-1)
-
         # For each source hit, keep only the top-k (source, target, score) triplets
-        topk_scores, topk_targets = att.topk(width, dim=-1)  # [B, N, width]
+        topk_scores, topk_targets = attention_weights.topk(width, dim=-1)  # [B, N, width]
         B, N, k = topk_scores.shape
-        source_indices = torch.arange(N, device=att.device).view(1, N, 1).expand(B, N, k)
+        source_indices = torch.arange(N, device=attention_weights.device).view(1, N, 1).expand(B, N, k)
         triplets = torch.stack(
             [source_indices.float(), topk_targets.float(), topk_scores],
             dim=-1,

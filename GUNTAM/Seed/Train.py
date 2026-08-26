@@ -430,6 +430,8 @@ def main():
     """
     Main function to run the training of the transformer model for seed reconstruction
     """
+    # torch.set_num_threads(1)
+    # torch.set_num_interop_threads(1)
     # Parse the command line argument
     cfg = SeedConfig()
     cfg.parse_args()
@@ -607,8 +609,8 @@ def main():
     event_counter = 0
     global_event_counter = 0  # monotonically increasing across all test files
 
-    event_idx_list = [0]
-    bin_idx_list = [55]
+    event_idx_list = [0]  # example events to analyze in detail (tunable)
+    bin_idx_list = [55]  # example bins to analyze in detail (tunable)
 
     min_common_hits = 3
 

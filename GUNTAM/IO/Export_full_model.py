@@ -108,6 +108,8 @@ def main() -> None:
         max_seed_length=args.max_seed_length,
     )
 
+    model.eval()
+
     # --- 4. Export to ONNX -----------------------------------------------------
     # Build a representative example: hits uniform inside a cylinder
     # x,y in (-500, 500) with x²+y² < 500 ; z in (-1000, 1000).

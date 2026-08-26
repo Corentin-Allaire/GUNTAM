@@ -68,6 +68,8 @@ class PreprocessingConfig:
         self.pv_pair_weight = 10  # Weight for primary-vertex (PV) particle pairs in training
         # z0-based pair weight bin size: weight = int(|z0| / z0_weight_bin) + 1. 0 disables z0 weighting.
         self.z0_weight_bin = 0
+        # Flag to recompute primary vertex (PV) for each event
+        self.recompute_pv_flag = False
 
         # Orphan target hit
         self.orphan_target = False
@@ -232,6 +234,12 @@ class PreprocessingConfig:
                 "Set to 0 to disable z0 weighting."
             ),
         )
+        parser.add_argument(
+            "--recompute_pv_flag",
+            action=argparse.BooleanOptionalAction,
+            default=self.recompute_pv_flag,
+            help="Flag to recompute primary vertex (PV) for each event",
+        )
 
     def apply_args(self, args: argparse.Namespace) -> None:
         """
@@ -263,6 +271,8 @@ class PreprocessingConfig:
         self.num_workers = args.num_workers
         self.pv_pair_weight = args.pv_pair_weight
         self.z0_weight_bin = args.z0_weight_bin
+        self.recompute_pv_flag = args.recompute_pv_flag
+
         self.orphan_target = args.orphan_target
 
         # Validate orphan_hit_fraction range
