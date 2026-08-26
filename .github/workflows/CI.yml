@@ -16,7 +16,9 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Black
         id: black
@@ -56,7 +58,9 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Run tests
         run: pdm run pytest --ignore=tests/test_integration
@@ -74,7 +78,9 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Run mypy
         run: pdm run mypy -p GUNTAM
@@ -93,7 +99,9 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Run integration tests
         run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=xml
