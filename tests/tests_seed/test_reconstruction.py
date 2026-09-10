@@ -13,7 +13,7 @@ from GUNTAM.Seed.Reconstruction import (
 )
 
 
-def _to_edge(att: torch.Tensor, width: int = None) -> torch.Tensor:
+def _to_edge(att: torch.Tensor, width: int | None = None) -> torch.Tensor:
     """Convert a dense [N, N] attention matrix to [N, width, 3] edge triplets."""
     N = att.shape[0]
     if N == 0:
@@ -24,7 +24,7 @@ def _to_edge(att: torch.Tensor, width: int = None) -> torch.Tensor:
     return torch.stack([sources.float(), targets.float(), scores], dim=2)
 
 
-def _to_edge_batched(att: torch.Tensor, width: int = None) -> torch.Tensor:
+def _to_edge_batched(att: torch.Tensor, width: int | None = None) -> torch.Tensor:
     """Convert a dense [B, N, N] attention matrix to [B, N, width, 3] edge triplets."""
     B, N, _ = att.shape
     w = N if width is None else min(width, N)

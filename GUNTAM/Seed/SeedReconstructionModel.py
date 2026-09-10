@@ -1,6 +1,6 @@
 import math
+import onnxruntime as ort
 import torch
-import pathlib
 import torch.nn as nn
 from torch import Tensor
 from typing import Tuple
@@ -8,20 +8,15 @@ from typing import Tuple
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Transformer.BinTensor import global_bin_torch, neighbor_bin_torch, no_bin_torch, margin_bin_torch
-from GUNTAM.IO.prepare_classifier import build_inference_seed_features
-from GUNTAM.Transformer.Classifier_architecture import MLP_CE, running_classifier
+from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.Reconstruction import build_seed_features_tensor
 import GUNTAM.Seed.Reconstruction as Reconstruction
-
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-classifier_path = pathlib.Path(__file__).parents[2] / "tests" / "data" / "classifier.pt"
+from GUNTAM.IO.OnnxRunTime_Interface import onnx_providers, run_onnx_iobinding
 
 
 class SeedReconstructionModel(nn.Module):
     """
     Full model for seed reconstruction from a list of hits, using a transformer architecture.
-    The goal of this model is to be written to ONNX and run efficiently in C++ for inference.
     This is not meant for use in training, but rather as a standalone inference module.
     It implements:
         - Binning of input hits into a fixed-size sequence (with padding and masking).
@@ -39,6 +34,8 @@ class SeedReconstructionModel(nn.Module):
 
     Args:
         - transformer_config (TransformerConfig): Architecture configuration object.
+        - transformer (SeedTransformer): Transformer instance.
+        - classifier (SeedClassifier | None): Optional classifier instance.
         - device_acc (torch.device, optional): Device to run the model on. Defaults to cpu.
     """
 
@@ -46,11 +43,10 @@ class SeedReconstructionModel(nn.Module):
         self,
         transformer_config: SeedConfig = SeedConfig(),
         transformer: SeedTransformer = SeedTransformer(),
+        classifier: SeedClassifier | None = None,
         device_acc: torch.device = torch.device("cpu"),
         width: int = 5,
         max_seed_length: int = 3,
-        classifier_path=classifier_path,
-        classifier_threshold: float = 0.5,
     ) -> None:
         super(SeedReconstructionModel, self).__init__()
 
@@ -61,30 +57,14 @@ class SeedReconstructionModel(nn.Module):
         self.transformer = transformer
         self.width = width
         self.max_seed_length = max_seed_length
+        self.classifier = classifier
 
-        self.classifier_threshold = classifier_threshold
+        self._transformer_onnx_session: ort.InferenceSession | None = None
+        self._transformer_onnx_path: str | None = None
+        self._classifier_onnx_session: ort.InferenceSession | None = None
+        self._classifier_onnx_path: str | None = None
 
-        self.classifier = MLP_CE(
-            input_shape=28,
-            hidden_1=512,
-            hidden_2=256,
-            hidden_3=128,
-            hidden_4=64,
-            output_shape=2,
-            p=0.0,
-            activation=torch.nn.ReLU(),
-        ).float()
-
-        state_dict = torch.load(
-            classifier_path,
-            map_location=device_acc,
-            weights_only=True,
-        )
-
-        self.classifier.load_state_dict(state_dict)
-        self.classifier.to(device_acc)
-
-    def bin_and_pad(self, hits: Tensor) -> Tuple[Tensor, Tensor]:
+    def bin_and_pad(self, hits: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Bin the input hits into a fixed-size sequence and create a corresponding padding mask.
         Args:
@@ -195,63 +175,39 @@ class SeedReconstructionModel(nn.Module):
 
     def reconstruct_seed_triplets(
         self,
+        binned_hits: Tensor,
+        padding_mask: Tensor,
         triplets: Tensor,
-        valid_mask: Tensor,
         att_threshold: float = 0.2,
         beam_width: int = 5,
         max_chain_length: int = 3,
         backward: bool = False,
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor]:
         """
-        Reconstruct 3-hit seed triplets from the sparse edge tensor produced by the transformer,
-        using the batched beam search algorithm from Reconstruction.py.
-
+        Reconstruct 3-hit seed triplets from the sparse edge tensor produced by the transformer
+        Then turn bin-local edge triplets into deduplicated seed chains expressed in original hit indices.
+        Shared by `forward()` and `run_onnx_inference().
         Args:
-            - triplets (Tensor): Shape [B, N, width, 3] — sparse edge tensor from forward(),
-              columns (source_idx, target_idx, score).
-            - valid_mask (Tensor): Shape [B, N] — True for valid (non-padding) hits.
+            - binned_hits (Tensor): Binned and padded hits from `bin_and_pad`, shape [num_bins, max_hit_input, 7].
+            - padding_mask (Tensor): Padding mask from `bin_and_pad`, shape [num_bins, max_hit_input, 1].
+            - triplets (Tensor): Shape [B, N, width, 3] — sparse edge tensor, columns (source_idx, target_idx, score).
             - att_threshold (float): Minimum attention score to consider an edge (default: 0.2).
-            - score_threshold (float): Minimum per-hit score to use a hit as a chain source (default: 0.0).
             - beam_width (int): Number of beams per starting hit (default: 5).
             - max_chain_length (int): Maximum number of hits per seed chain (default: 3).
-            - backward (bool): If True, extend chains to smaller indices (default: False).
+            - backward (bool): If True, extend chains to smaller indices (default:
         Returns:
-            Tuple of:
-              - chains     [B, N, max_chain_length]: hit indices per seed; -1 for invalid slots.
-              - params     [B, N, 5]: seed parameters (all zeros).
-              - scores     [B, N]:   best average edge score (-inf if no valid chain).
+            - unique_chains (Tensor): Shape [S, seed_nb] — deduplicated seed chains in original hit indices.
+            - best_scores (Tensor): Shape [S] — best average edge score for each unique chain.
         """
-
-        return Reconstruction.batched_beam_search_seed_reconstruction(
-            triplets.float(),
+        valid_mask = (~padding_mask.bool()).squeeze(-1)  # [B, N_bin]
+        chains, _, scores = Reconstruction.batched_beam_search_seed_reconstruction(
+            triplets,
             valid_mask,
             att_threshold=att_threshold,
             max_chain_length=max_chain_length,
             beam_width=beam_width,
             backward=backward,
         )
-
-    def forward(self, hits: Tensor) -> tuple[Tensor, Tensor]:
-        """
-        Forward pass of the full seed-reconstruction model.
-        Args:
-            - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
-        Returns:
-            - signal: Long tensor of shape [number of classified true seeds, 3] containing the original
-            input hit indices of all candidate seeds
-            predicted as true seeds by the classifier. Each row corresponds to one reconstructed seed.
-            - signal_scores: Float tensor of shape [number of classified true seeds] containing the classifier confidence score
-            associated with each reconstructed seed. The i-th
-            score corresponds to the i-th seed in `signal` and represents the predicted probability that this seed is a true seed.
-        """
-        binned_hits, padding_mask, flat_hits = self.bin_and_pad(hits)
-        # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
-        _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
-
-        valid_mask = (~padding_mask.bool()).squeeze(-1)  # [B, N_bin]
-        chains, _, scores = self.reconstruct_seed_triplets(
-            triplets, valid_mask, max_chain_length=self.max_seed_length
-        )  # [B, N_bin, SL]
 
         # Map bin-local indices → original hit IDs
         bin_nb, nb_max_hit = valid_mask.shape
@@ -278,85 +234,124 @@ class SeedReconstructionModel(nn.Module):
         first = inverse.flip(0).new_empty(unique_chains.shape[0])
         first[inverse.flip(0)] = perm.flip(0)
 
-        seed_features = build_seed_features_tensor(
-            hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
+        return unique_chains, scores_flat[first]
+
+    def forward(self, hits: Tensor) -> tuple[Tensor, Tensor]:
+        """
+        Forward pass of the full seed-reconstruction model.
+        Args:
+            - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
+        Returns:
+            - signal: Long tensor of shape [number of classified true seeds, 3] containing the original
+            input hit indices of all candidate seeds
+            predicted as true seeds by the classifier. Each row corresponds to one reconstructed seed.
+            - signal_scores: Float tensor of shape [number of classified true seeds] containing the classifier confidence score
+            associated with each reconstructed seed. The i-th
+            score corresponds to the i-th seed in `signal` and represents the predicted probability that this seed is a true seed.
+        """
+        binned_hits, padding_mask, flat_hits = self.bin_and_pad(hits)
+        # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
+        _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
+        unique_chains, best_scores = self.reconstruct_seed_triplets(
+            binned_hits, padding_mask, triplets, max_chain_length=self.max_seed_length
         )
 
-        print("test 1", seed_features.shape)
+        if self.classifier is None:
+            signal = unique_chains
+            signal_scores = best_scores
 
-        features_tensor = seed_features.flatten(start_dim=1)  # [num_seeds, max_seed_length*F]
-        print("test 2", features_tensor.shape)
-        seed_features_dict = {"features": features_tensor}
-        print("test 3", seed_features_dict.values())
+        else:
+            seed_features = build_seed_features_tensor(
+                hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
+            )
+            # Flatten per-point features [N, 3, X] into per-seed features [N, 3*X]
+            if seed_features.dim() == 3:
+                seed_features = seed_features.reshape(seed_features.shape[0], -1)
 
-        X = build_inference_seed_features(data=seed_features_dict)
-
-        print("test 4", X.shape)
-
-        classifier = self.classifier
-
-        keep_mask, scores = running_classifier(
-            X=X,
-            model=classifier,
-            threshold=0.5,
-            device=device,
-        )
-
-        print("test 5", keep_mask.shape)
-        print("test KEEP MASK :", keep_mask)
-        n_true = keep_mask.sum().item()
-        n_false = (~keep_mask).sum().item()
-        print(f"True: {n_true}, False: {n_false}, total: {keep_mask.numel()}")
-        print("test 6", scores.shape)
-
-        signal = unique_chains[keep_mask]
-        signal_scores = scores[keep_mask]
-
-        print("test 7", signal.shape)
-        print("test 8", signal_scores.shape)
+            keep_mask, classifier_scores = self.classifier(seed_features, nb_hits_features=7)
+            signal = unique_chains[keep_mask]
+            signal_scores = classifier_scores[keep_mask]
 
         return signal, signal_scores
 
-    def export_onnx(
+    def run_onnx_inference(
         self,
-        path: str,
-        example_hits: Tensor | None = None,
-    ) -> None:
+        hits: Tensor,
+        transformer_path: str,
+        classifier_path: str | None,
+        device: torch.device | None = None,
+    ) -> tuple[Tensor, Tensor]:
         """
-        Export the model to an ONNX file.
+        Run the same pipeline as `forward()`, but executing the transformer (and, if a
+        classifier ONNX model is provided, the classifier) through ONNX Runtime instead
+        of the PyTorch modules, using `IOBinding` so tensors stay on-device.
+        Binning, beam-search reconstruction and seed-feature building still
+        run in PyTorch. Sessions are cached on `self` and only rebuilt when the requested
+        path or device changes.
         Args:
-            - path (str): File path to save the ONNX model (.onnx).
-            - example_hits (Tensor | None): Representative hits tensor [N, 3] with columns (x, y, z).
-              If None, a small synthetic example is built from the config as fallback.
-        Uses self.width and self.max_seed_length (set at construction time) as graph constants.
+            - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
+            - transformer_path (str): Path to the exported transformer ONNX model.
+            - classifier_path (str | None): Path to the exported classifier ONNX model.
+                If None, every candidate seed is kept, mirroring `forward()` when
+                `self.classifier` is None.
+            - device (torch.device | None): Device to run ONNX Runtime on; selects the
+                CUDA execution provider when available, otherwise falls back to CPU.
+                Defaults to `self.device_acc`.
+        Returns:
+            Same as `forward()`: `(signal, signal_scores)`.
         """
-        if example_hits is None:
-            example_hits = torch.zeros(32, 3, dtype=torch.float32, device="cpu")
 
-        example_hits = example_hits.float().cpu()
+        device = device if device is not None else self.device_acc
+        providers = onnx_providers(device)
+        ort_device_type = "cuda" if device.type == "cuda" else "cpu"
+        ort_device_id = device.index if device.index is not None else 0
 
-        was_training = self.training
-        original_device = next(self.parameters()).device
+        if self._transformer_onnx_session is None or self._transformer_onnx_path != transformer_path:
+            self._transformer_onnx_session = ort.InferenceSession(transformer_path, providers=providers)
+            self._transformer_onnx_path = transformer_path
 
-        self.eval()
-        self.to("cpu")
+        if classifier_path is not None and (
+            self._classifier_onnx_session is None or self._classifier_onnx_path != classifier_path
+        ):
+            self._classifier_onnx_session = ort.InferenceSession(classifier_path, providers=providers)
+            self._classifier_onnx_path = classifier_path
 
-        try:
-            torch.onnx.export(
-                self,
-                (example_hits,),
-                path,
-                input_names=["hits"],
-                output_names=["seeds", "seed_scores"],
-                dynamic_axes={
-                    "hits": {0: "num_hits"},
-                    "seeds": {0: "num_seeds"},
-                    "seed_scores": {0: "num_seeds"},
-                },
-                opset_version=17,
-            )
-            print(f"Model exported to ONNX at {path}")
-        finally:
-            self.to(original_device)
-            if was_training:
-                self.train()
+        binned_hits, padding_mask, flat_hits = self.bin_and_pad(hits)
+        # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
+        print(f"Shape of binned_hits: {binned_hits.shape}, padding_mask: {padding_mask.shape}")
+        _, triplets = run_onnx_iobinding(
+            self._transformer_onnx_session,
+            [binned_hits[..., :6].float(), padding_mask.squeeze(-1)],
+            ort_device_type,
+            ort_device_id,
+            {"width": torch.tensor(5, dtype=torch.int64)},
+        )
+        triplets = triplets.to(hits.device)
+
+        unique_chains, best_scores = self.reconstruct_seed_triplets(
+            binned_hits, padding_mask, triplets, max_chain_length=self.max_seed_length
+        )
+
+        if classifier_path is None:
+            return unique_chains, best_scores
+
+        seed_features = build_seed_features_tensor(
+            hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
+        )
+        if seed_features.dim() == 3:
+            seed_features = seed_features.reshape(seed_features.shape[0], -1)
+
+        keep_mask, classifier_scores = run_onnx_iobinding(
+            self._classifier_onnx_session,
+            [seed_features.float()],
+            ort_device_type,
+            ort_device_id,
+            {"nb_hits_features": torch.tensor(7, dtype=torch.int64)},
+        )
+        keep_mask = keep_mask.to(hits.device).bool()
+        classifier_scores = classifier_scores.to(hits.device)
+
+        signal = unique_chains[keep_mask]
+        signal_scores = classifier_scores[keep_mask]
+
+        return signal, signal_scores

@@ -31,9 +31,12 @@ from GUNTAM.IO.Read_ACTS_Csv import (
     _process_particles_data,
     _process_space_points_data,
 )
+from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
 from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.SeedReconstructionModel import SeedReconstructionModel
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
+from GUNTAM.IO.OnnxRunTime_Interface import onnx_providers
 
 
 def _load_spacepoint_event_tensors(
@@ -115,6 +118,8 @@ def _build_reconstruction_model(
     device: torch.device,
     width: int,
     max_seed_length: int,
+    classifier_checkpoint: str | None = None,
+    classifier_config_path: str | None = None,
 ) -> SeedReconstructionModel:
     """
     Load a trained SeedTransformer checkpoint wrapped in a SeedReconstructionModel.
@@ -127,10 +132,14 @@ def _build_reconstruction_model(
         device: Device the transformer and reconstruction model are moved to.
         width: Top-k width used by SeedReconstructionModel during inference.
         max_seed_length: Maximum number of hits per reconstructed seed.
+        classifier_checkpoint: Optional path to a SeedClassifier checkpoint (.pt).
+            If provided, a SeedClassifier is loaded and attached to the model.
+        classifier_config_path: Optional path to a ClassifierConfig JSON file,
+            used to build the classifier before loading its checkpoint.
 
     Returns:
         A SeedReconstructionModel in eval mode, moved to `device`, wrapping the
-        loaded SeedTransformer.
+        loaded SeedTransformer and, if requested, the loaded SeedClassifier.
     """
     cfg = SeedConfig()
     if config_path is not None:
@@ -141,9 +150,61 @@ def _build_reconstruction_model(
     transformer.eval()
 
     cfg.transformer_config = transformer.cfg
+
+    classifier = None
+    if classifier_checkpoint is not None:
+        classifier_cfg = ClassifierConfig()
+        if classifier_config_path is not None:
+            classifier_cfg.load_config(classifier_config_path)
+        classifier = SeedClassifier(classifier_config=classifier_cfg, device_acc=device)
+        classifier.load(classifier_checkpoint, device=device)
+        classifier.eval()
+
     model = SeedReconstructionModel(
         transformer_config=cfg,
         transformer=transformer,
+        classifier=classifier,
+        device_acc=device,
+        width=width,
+        max_seed_length=max_seed_length,
+    )
+    model.to(device)
+    model.eval()
+    return model
+
+
+def _build_onnx_reconstruction_model(
+    config_path: str | None,
+    device: torch.device,
+    width: int,
+    max_seed_length: int,
+) -> SeedReconstructionModel:
+    """
+    Build a SeedReconstructionModel used only to drive `run_onnx_inference()`.
+
+    No checkpoint is loaded here: binning and beam-search reconstruction (the
+    only PyTorch-side logic `run_onnx_inference` relies on) only depend on
+    `cfg.preprocessing_config`, `width` and `max_seed_length`, not on the
+    transformer/classifier weights.
+
+    Args:
+        config_path: Optional path to a SeedConfig JSON file. If None, the
+            default SeedConfig is used.
+        device: Device to run ONNX Runtime and the PyTorch-side steps on.
+        width: Top-k width used by SeedReconstructionModel during inference.
+        max_seed_length: Maximum number of hits per reconstructed seed.
+
+    Returns:
+        A SeedReconstructionModel in eval mode, moved to `device`.
+    """
+    cfg = SeedConfig()
+    if config_path is not None:
+        cfg.load_config(config_path)
+
+    model = SeedReconstructionModel(
+        transformer_config=cfg,
+        transformer=SeedTransformer(transformer_config=cfg.transformer_config, device_acc=device),
+        classifier=None,
         device_acc=device,
         width=width,
         max_seed_length=max_seed_length,
@@ -282,45 +343,28 @@ def _benchmark_parallel_pytorch(
     }
 
 
-def _create_onnx_session(onnx_model_path: str, device: torch.device) -> tuple[Any, list[str]]:
-    """
-    Create an ONNX Runtime inference session and choose providers from the requested device.
-
-    Args:
-        onnx_model_path: Path to the exported ONNX model file.
-        device: Device requested for inference; CUDA is used only if the
-            device type is "cuda" and the CUDA execution provider is available.
-
-    Returns:
-        Tuple of `(session, providers)` where `session` is the ONNX Runtime
-        `InferenceSession` and `providers` is the ordered list of execution
-        providers it was created with.
-    """
-    import onnxruntime as ort
-
-    available = ort.get_available_providers()
-    if device.type == "cuda" and "CUDAExecutionProvider" in available:
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    else:
-        providers = ["CPUExecutionProvider"]
-
-    session = ort.InferenceSession(onnx_model_path, providers=providers)
-    return session, providers
-
-
 def _benchmark_onnx(
-    session: Any,
-    event_arrays: list[np.ndarray],
+    model: SeedReconstructionModel,
+    events: list[torch.Tensor],
+    transformer_path: str,
+    classifier_path: str | None,
+    device: torch.device,
     warmup: int,
     repeat: int,
 ) -> dict[str, Any]:
     """
-    Run warmup + timed ONNX Runtime inference over all events and return summary stats.
+    Run warmup + timed ONNX Runtime inference over all events, via
+    `SeedReconstructionModel.run_onnx_inference`, and return summary stats.
 
     Args:
-        session: ONNX Runtime `InferenceSession` to benchmark.
-        event_arrays: List of per-event float32 numpy arrays (shape [N, 3])
-            to run inference on.
+        model: SeedReconstructionModel used to drive `run_onnx_inference`
+            (binning and beam-search reconstruction run in PyTorch on `device`).
+        events: List of per-event hit tensors (shape [N, 3]) to run inference on.
+        transformer_path: Path to the exported transformer ONNX model.
+        classifier_path: Path to the exported classifier ONNX model, or None to
+            skip classification and keep every reconstructed seed.
+        device: Device inference is run on; used to trigger the appropriate
+            synchronization primitive before timing each run.
         warmup: Number of untimed passes over all events run before timing,
             used to stabilize the runtime before measurement.
         repeat: Number of timed passes over all events used to compute the
@@ -333,27 +377,30 @@ def _benchmark_onnx(
             mean_time: Mean wall-clock time (seconds) per timed run over all events.
             event_rate: Mean event throughput (events/second).
     """
-    input_name = session.get_inputs()[0].name
-
-    for _ in range(warmup):
-        for event in event_arrays:
-            session.run(None, {input_name: event})
+    with torch.no_grad():
+        for _ in range(warmup):
+            for event in events:
+                model.run_onnx_inference(event.to(device), transformer_path, classifier_path, device=device)
 
     timed_runs: list[float] = []
-    total_events = len(event_arrays)
+    total_events = len(events)
     total_seeds = 0
 
-    for _ in range(repeat):
-        start = time.perf_counter()
-        run_seed_count = 0
-        for event in event_arrays:
-            print(f"Running ONNX inference for event with {event.shape[0]} hits...")
-            outputs = session.run(None, {input_name: event})
-            seeds = outputs[0]
-            run_seed_count += int(seeds.shape[0])
-        elapsed = time.perf_counter() - start
-        timed_runs.append(elapsed)
-        total_seeds = run_seed_count
+    with torch.no_grad():
+        for _ in range(repeat):
+            start = time.perf_counter()
+            run_seed_count = 0
+            for event in events:
+                print(f"Running ONNX inference for event with {event.shape[0]} hits...")
+                seeds, _ = model.run_onnx_inference(event.to(device), transformer_path, classifier_path, device=device)
+                run_seed_count += int(seeds.shape[0])
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            elif device.type == "mps":
+                torch.mps.synchronize()
+            elapsed = time.perf_counter() - start
+            timed_runs.append(elapsed)
+            total_seeds = run_seed_count
 
     mean_time = sum(timed_runs) / len(timed_runs)
     event_rate = total_events / mean_time if mean_time > 0 else 0.0
@@ -389,6 +436,21 @@ def main() -> None:
         type=str,
         default=None,
         help="Optional SeedConfig JSON file. If omitted, defaults are used.",
+    )
+    parser.add_argument(
+        "--classifier-checkpoint",
+        type=str,
+        default=None,
+        help=(
+            "Path to a SeedClassifier checkpoint (.pt). If provided, the classifier is "
+            "attached to the model and used to filter reconstructed seeds."
+        ),
+    )
+    parser.add_argument(
+        "--classifier-config",
+        type=str,
+        default=None,
+        help="Optional ClassifierConfig JSON file used to build the classifier before loading its checkpoint.",
     )
     parser.add_argument(
         "--device",
@@ -444,7 +506,7 @@ def main() -> None:
         "--backend",
         type=str,
         default="both",
-        choices=["pytorch", "parallel_pytorch" "onnx", "both"],
+        choices=["pytorch", "parallel_pytorch", "onnx", "both"],
         help="Inference backend to benchmark: pytorch, onnx, or both.",
     )
     parser.add_argument(
@@ -453,10 +515,19 @@ def main() -> None:
         help="Use torch.compile for the reconstruction model (PyTorch 2.x).",
     )
     parser.add_argument(
-        "--onnx-model",
+        "--transformer-onnx",
         type=str,
-        default="Work/model.onnx",
-        help="Path to ONNX model file used for ONNX backend benchmarking.",
+        default="Work/transformer.onnx",
+        help="Path to the exported transformer ONNX model, used for ONNX backend benchmarking.",
+    )
+    parser.add_argument(
+        "--classifier-onnx",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to the exported classifier ONNX model. If omitted, every "
+            "reconstructed seed is kept (no classification step) for the ONNX backend."
+        ),
     )
     args = parser.parse_args()
 
@@ -487,6 +558,8 @@ def main() -> None:
             device=device,
             width=args.width,
             max_seed_length=args.max_seed_length,
+            classifier_checkpoint=args.classifier_checkpoint,
+            classifier_config_path=args.classifier_config,
         )
         model.eval()
         if args.compile:
@@ -502,16 +575,28 @@ def main() -> None:
         )
 
     if args.backend in ("onnx", "both"):
-        if not os.path.exists(args.onnx_model):
-            raise FileNotFoundError(f"ONNX model not found: {args.onnx_model}. Provide --onnx-model or export first.")
+        if not os.path.exists(args.transformer_onnx):
+            raise FileNotFoundError(
+                f"Transformer ONNX model not found: {args.transformer_onnx}. Provide --transformer-onnx or export first."
+            )
+        if args.classifier_onnx is not None and not os.path.exists(args.classifier_onnx):
+            raise FileNotFoundError(f"Classifier ONNX model not found: {args.classifier_onnx}.")
 
-        event_arrays = [event.cpu().numpy().astype(np.float32, copy=False) for event in non_empty_events]
-        onnx_session, providers = _create_onnx_session(args.onnx_model, device=device)
+        onnx_model = _build_onnx_reconstruction_model(
+            config_path=args.config,
+            device=device,
+            width=args.width,
+            max_seed_length=args.max_seed_length,
+        )
+        providers = onnx_providers(device)
         print(f"ONNX Runtime providers: {providers}")
 
         results["onnx"] = _benchmark_onnx(
-            session=onnx_session,
-            event_arrays=event_arrays,
+            model=onnx_model,
+            events=non_empty_events,
+            transformer_path=args.transformer_onnx,
+            classifier_path=args.classifier_onnx,
+            device=device,
             warmup=args.warmup,
             repeat=args.repeat,
         )
@@ -523,6 +608,8 @@ def main() -> None:
             device=device,
             width=args.width,
             max_seed_length=args.max_seed_length,
+            classifier_checkpoint=args.classifier_checkpoint,
+            classifier_config_path=args.classifier_config,
         )
         model.eval()
         if args.compile:

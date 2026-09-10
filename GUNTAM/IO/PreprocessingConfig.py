@@ -57,8 +57,8 @@ class PreprocessingConfig:
 
         # Selection parameters
         self.eta_range = [-3.0, 3.0]  # Eta range for particle selection [min, max]
-        self.vertex_cuts = [10, 200]  # Cuts on d0 and z0 for primary vertex selection
-        self.hit_range = [500, 1000]  # Cuts on R and Z for hit selection [R_max, Z_max]
+        self.vertex_cuts = [10.0, 200.0]  # Cuts on d0 and z0 for primary vertex selection
+        self.hit_range = [500.0, 1000.0]  # Cuts on R and Z for hit selection [R_max, Z_max]
 
         # Feature lists
         self.hit_features = ["x", "y", "z"]  # List of hit features to extract

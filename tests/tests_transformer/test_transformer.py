@@ -433,7 +433,7 @@ class TestEncoderLayer:
     def test_bad_dropout_tuple_length_raises(self):
         input_dim, model_dim, num_heads = 32, 16, 4
         with pytest.raises(ValueError):
-            EncoderLayer(input_dim, model_dim, num_heads, dropout=(0.1, 0.2, 0.3), use_pytorch=False)
+            EncoderLayer(input_dim, model_dim, num_heads, dropout=(0.1, 0.2, 0.3), use_pytorch=False)  # type: ignore[arg-type]
 
 
 class TestTransformerEncoder:

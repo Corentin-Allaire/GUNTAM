@@ -128,14 +128,14 @@ class TestDataLoader:
         dataset_dir, dataset_name = synthetic_dataset
         dl = DataLoader(dataset_dir=dataset_dir, dataset_name=dataset_name, tensor_names=["x"])
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((1, 0))  # end < start
+        with pytest.raises(IndexError):  # end < start
+            _ = dl.get_batch_files((1, 0))
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((-1, 1))  # negative start
+        with pytest.raises(IndexError):  # negative start
+            _ = dl.get_batch_files((-1, 1))
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((0, 10))  # end out of bounds
+        with pytest.raises(IndexError):  # end out of bounds
+            _ = dl.get_batch_files((0, 10))
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((0,))  # invalid tuple size
+        with pytest.raises(IndexError):  # invalid tuple size
+            _ = dl.get_batch_files((0,))  # type: ignore[arg-type]

@@ -625,6 +625,8 @@ def main():
     seed_features_dir = os.path.join(cfg.input_tensor_path, "seed_features")
     os.makedirs(seed_features_dir, exist_ok=True)
     feature_indices = cfg.transformer_config.high_level_features
+    if feature_indices == []:
+        feature_indices = [0, 1, 2, 3, 4, 5]
     cosine_feature_indices = cfg.transformer_config.cosine_processing
     all_features: List[torch.Tensor] = []
     all_labels: List[torch.Tensor] = []
@@ -682,8 +684,6 @@ def main():
                     features = Reconstruction.build_seed_features_tensor(
                         bin_hits_tensor,
                         seed_tensor,
-                        feature_indices=feature_indices,
-                        cosine_feature_indices=cosine_feature_indices,
                     )  # [num_seeds, 3, F]
                     # Flatten the last two dimensions to get a [num_seeds, 3*F] feature vector for each seed
                     all_features.append(features.float().cpu().flatten(start_dim=1))  # [num_seeds, 3*F]
