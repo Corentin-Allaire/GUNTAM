@@ -1,6 +1,5 @@
-from typing import List, Tuple, Optional
+from typing import Tuple
 
-from numpy.random import random
 import torch
 import torch.nn as nn
 from torch import Tensor

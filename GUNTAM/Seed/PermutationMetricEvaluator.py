@@ -90,7 +90,8 @@ def efficiency_reconstructed_seeds(
         file_indices: List of indices indexing the files we use.
         dataset: The dataset object containing trained data.
         cfg: Full architecture configuration.
-        features: List of indices of the features (last dimension) to shuffle. Each feature is shuffled with its own independent permutation.
+        features: List of indices of the features (last dimension) to shuffle.
+        Each feature is shuffled with its own independent permutation.
 
     Returns:
         Seeding efficiency.
@@ -138,7 +139,7 @@ def efficiency_reconstructed_seeds(
                 encoded_hits, _, attention_maps = prepare_event_encoding(
                     model=model, event_hits=event_hits_tensor, event_mask=event_padding_mask, features=features
                 )
-                triplets = model.triplet_extraction(attention_maps, width=5)
+                _ = model.triplet_extraction(attention_maps, width=5)
 
                 if cfg.transformer_config.regression:
                     hits_score = encoded_hits

@@ -1,7 +1,6 @@
-import pytest
 from GUNTAM.Seed.Config import SeedConfig
 from GUNTAM.Seed.PermutationMetricEvaluator import validate_function
-from GUNTAM.Seed.permutation_importances import config_model_dataset
+from GUNTAM.Seed.Permutation_importances import config_model_dataset
 
 
 import pathlib

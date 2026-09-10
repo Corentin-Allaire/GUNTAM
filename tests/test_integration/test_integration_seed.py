@@ -4,7 +4,6 @@ import shutil
 import tempfile
 import subprocess
 import sys
-import torch
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -239,7 +238,6 @@ class TestFullIntegration:
         # guaranteed to contain both fake and true seeds.
         seed_features_path = os.path.join(test_data_dir, "seed_features.pt")
         assert os.path.exists(seed_features_path), f"Copied seed features file not found: {seed_features_path}"
-        seed_features = torch.load(seed_features_path, weights_only=True)
 
         classifier_model_path = os.path.join(temp_dir, f"classifier_{suffix}.pt")
         self._run_classifier_training(

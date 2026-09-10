@@ -1,7 +1,6 @@
-from numpy.char import center
 import torch
 import torch.nn as nn
-from torch import Tensor, normal
+from torch import Tensor
 
 from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
 from GUNTAM.Transformer.OutputClassifier import OutputClassifier
@@ -75,7 +74,8 @@ class SeedClassifier(nn.Module):
 
     def prepare_seed_features(self, data: Tensor, nb_hits_features: int = 7) -> Tensor:
         """
-        We add nb_hits_features new features for each seed. These features are the parameters of the circle made of the three points in each seed
+        We add nb_hits_features new features for each seed.
+        These features are the parameters of the circle made of the three points in each seed
         Args:
             data: Tensor of shape [N, 21] containing the features of the N seeds.
             Each seed is represented by 3 points, each point having nb_hits_features features,

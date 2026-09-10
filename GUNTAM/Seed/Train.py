@@ -627,7 +627,6 @@ def main():
     feature_indices = cfg.transformer_config.high_level_features
     if feature_indices == []:
         feature_indices = [0, 1, 2, 3, 4, 5]
-    cosine_feature_indices = cfg.transformer_config.cosine_processing
     all_features: List[torch.Tensor] = []
     all_labels: List[torch.Tensor] = []
 

@@ -1,12 +1,9 @@
 import torch
 
 from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
-from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.Train_classifier import (
     SeedDataset,
     balance_dataset,
-    train_classifier,
-    train_loop_Classifier,
 )
 from torch.utils.data import DataLoader as TorchDataLoader
 

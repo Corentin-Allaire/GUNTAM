@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
         "--classifier_output",
         type=str,
         default="classifier.onnx",
-        help="Output path for the exported classifier ONNX model, if --classifier_checkpoint is given (default: classifier.onnx).",
+        help="Output path for the exported classifier ONNX model, (default: classifier.onnx).",
     )
     parser.add_argument(
         "--width",
