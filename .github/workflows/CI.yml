@@ -187,6 +187,7 @@ jobs:
       - name: Combine coverage
         run: |
           mkdir coverage-combined
+          ls coverage-data
           cp coverage-data/.coverage.* coverage-combined/
 
           cd coverage-combined
