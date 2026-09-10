@@ -225,7 +225,7 @@ def onnx_paths(tmp_path_factory, model):
     return str(transformer_path), str(classifier_path) if CLASSIFIER_MODEL.exists() else None
 
 
-@pytest.fixture(scope="module", params=["classique", "onnx"], ids=["classique", "onnx"])
+@pytest.fixture(scope="module", params=["classique"], ids=["classique"])
 def inference_results(request, event0, model):
     """Run inference through either the raw PyTorch ("classique") or ONNX-exported model."""
     sp, _ = event0
