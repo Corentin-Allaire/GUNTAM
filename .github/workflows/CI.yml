@@ -67,13 +67,14 @@ jobs:
 
       - name: Rename coverage data
         run: |
-          mv .coverage.* .coverage.test
+          mv .coverage .coverage.test
 
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
           name: coverage-test
           path: .coverage.test
+          include-hidden-files: true
 
 
   Typing:
@@ -119,13 +120,14 @@ jobs:
 
       - name: Rename coverage data
         run: |
-          mv .coverage.* .coverage.integration_train
+          mv .coverage .coverage.integration_train
 
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
           name: coverage-integration_train
           path: .coverage.integration_train
+          include-hidden-files: true
 
   integration-test_run:
     runs-on: ubuntu-latest
@@ -150,13 +152,14 @@ jobs:
 
       - name: Rename coverage data
         run: |
-          mv .coverage.* .coverage.integration_chain
+          mv .coverage .coverage.integration_chain
 
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
           name: coverage-integration_chain
           path: .coverage.integration_chain
+          include-hidden-files: true
 
       
   coverage:
