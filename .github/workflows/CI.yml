@@ -115,7 +115,7 @@ jobs:
           pdm install
 
       - name: Run integration tests
-        run: pdm run pytest tests/test_integration/test_integration_train.py --cov=GUNTAM --cov-branch --cov-report=
+        run: pdm run pytest tests/test_integration/test_integration_seed.py --cov=GUNTAM --cov-branch --cov-report=
 
       - name: Rename coverage data
         run: |
