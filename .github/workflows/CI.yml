@@ -161,7 +161,7 @@ jobs:
       
   coverage:
     runs-on: ubuntu-latest
-    needs: [test, integration-test]
+    needs: [test, integration-test-train, integration-test_run]
     steps:
       - uses: actions/checkout@v4
 
