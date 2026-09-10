@@ -63,7 +63,18 @@ jobs:
           pdm install
 
       - name: Run tests
-        run: pdm run pytest --ignore=tests/test_integration
+        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report= --ignore=tests/test_integration
+
+      - name: Rename coverage data
+        run: |
+          mv .coverage .coverage.test
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-test
+          path: .coverage.test
+
 
   Typing:
     runs-on: ubuntu-latest
@@ -104,10 +115,55 @@ jobs:
           pdm install
 
       - name: Run integration tests
-        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=xml
+        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=
+
+      - name: Rename coverage data
+        run: |
+          mv .coverage .coverage.integration
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: .coverage.integration
+
+      
+  coverage:
+    runs-on: ubuntu-latest
+    needs: [test, integration-test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Ensure deps
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage-data
+          merge-multiple: true
+
+      - name: Combine coverage
+        run: |
+          mkdir coverage-combined
+          cp coverage-data/.coverage.* coverage-combined/
+
+          cd coverage-combined
+          pdm run coverage combine
+          pdm run coverage xml -o coverage.xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: coverage.xml
+          files: coverage-combined/coverage.xml
