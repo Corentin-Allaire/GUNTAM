@@ -27,3 +27,12 @@ line-length = 130
 
 [tool.mypy]
 ignore_missing_imports = true
+
+# pyproject.toml
+[tool.coverage.run]
+source = ["GUNTAM"]
+branch = true
+omit = [
+    "/tmp/*",
+    "tests/*",
+]
