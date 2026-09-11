@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
-from GUNTAM.Seed.MonitoringPlot import (
+from GUNTAM.Monitoring.MonitoringPlot import (
     visualize_attention_map,
     create_seeding_performance_plots,
     create_particle_reconstruction_comparison_plots,

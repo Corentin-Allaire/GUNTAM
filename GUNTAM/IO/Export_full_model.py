@@ -30,8 +30,8 @@ import argparse
 
 import torch
 
-from GUNTAM.Seed.Config import SeedConfig
-from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
+from GUNTAM.Seed.Config.ClassifierConfig import ClassifierConfig
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.SeedReconstructionModel import SeedReconstructionModel

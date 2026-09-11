@@ -6,7 +6,7 @@ from torch import Tensor
 from typing import Tuple
 
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
-from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 from GUNTAM.Transformer.BinTensor import global_bin_torch, neighbor_bin_torch, no_bin_torch, margin_bin_torch
 from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.Reconstruction import build_seed_features_tensor

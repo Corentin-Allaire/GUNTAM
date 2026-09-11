@@ -9,11 +9,11 @@ import argparse
 import multiprocessing as mp
 import matplotlib.pyplot as plt
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
-from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader
-from GUNTAM.Seed.PermutationMetricEvaluator import validate_function
-from GUNTAM.Seed.PermutationMetricEvaluator import efficiency_reconstructed_seeds
-from GUNTAM.Seed.PermutationMetricEvaluator import PermutationMetricEvaluator
+from GUNTAM.Monitoring.PermutationMetricEvaluator import validate_function
+from GUNTAM.Monitoring.PermutationMetricEvaluator import efficiency_reconstructed_seeds
+from GUNTAM.Monitoring.PermutationMetricEvaluator import PermutationMetricEvaluator
 
 
 def parse_args():

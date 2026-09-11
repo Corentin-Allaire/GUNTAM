@@ -2,7 +2,7 @@ import os
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
+from GUNTAM.Seed.Config.ClassifierConfig import ClassifierConfig
 from GUNTAM.Seed.SeedClassifier import SeedClassifier
 
 from torch.utils.data import Dataset

@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
-from GUNTAM.Seed.TransformerConfig import TransformerConfig
+from GUNTAM.Seed.Config.TransformerConfig import TransformerConfig
 
 
 def make_config(

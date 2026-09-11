@@ -2,10 +2,10 @@ import pytest
 import torch
 
 from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
-from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 from GUNTAM.Seed.SeedReconstructionModel import SeedReconstructionModel
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
-from GUNTAM.Seed.TransformerConfig import TransformerConfig
+from GUNTAM.Seed.Config.TransformerConfig import TransformerConfig
 import GUNTAM.Seed.Reconstruction as Reconstruction
 
 

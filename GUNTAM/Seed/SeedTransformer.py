@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
 
-from GUNTAM.Seed.TransformerConfig import TransformerConfig
+from GUNTAM.Seed.Config.TransformerConfig import TransformerConfig
 from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
 from GUNTAM.Transformer.Transformer import load_state_dict_flex

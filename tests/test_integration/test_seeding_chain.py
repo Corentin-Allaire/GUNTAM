@@ -28,7 +28,7 @@ import GUNTAM.IO.Export_full_model as _export_module
 from GUNTAM.Seed.SeedReconstructionModel import SeedReconstructionModel
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.SeedClassifier import SeedClassifier
-from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 PT_MODEL = DATA_DIR / "transformer.pt"

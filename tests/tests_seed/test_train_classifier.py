@@ -1,6 +1,6 @@
 import torch
 
-from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
+from GUNTAM.Seed.Config.ClassifierConfig import ClassifierConfig
 from GUNTAM.Seed.Train_classifier import (
     SeedDataset,
     balance_dataset,
