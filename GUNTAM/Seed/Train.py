@@ -351,6 +351,8 @@ def run_model(
 
     beam_hits_t, beam_params_t, beam_scores_t = None, None, None
 
+    raw_chain_len = cfg.raw_chain_length if cfg.radial_separation_constraint else 3
+
     if reco_method == "beam_search":
 
         valid_mask_gpu = (~padding_mask.bool()).squeeze(-1)
@@ -358,7 +360,7 @@ def run_model(
             attention_edge.float(),
             valid_mask_gpu,
             att_threshold=att_threshold,
-            max_chain_length=3,
+            max_chain_length=raw_chain_len,
             beam_width=5,
         )
     elif reco_method == "beam_search_backward":
@@ -368,12 +370,22 @@ def run_model(
             attention_edge.float(),
             valid_mask_gpu,
             att_threshold=att_threshold,
-            max_chain_length=3,
+            max_chain_length=raw_chain_len,
             beam_width=5,
             backward=True,
         )
     else:
         raise ValueError(f"Invalid reconstruction method: {reco_method}. Supported: 'beam_search', 'beam_search_backward'.")
+
+    if cfg.radial_separation_constraint:
+        # 3D spherical radius sqrt(x^2 + y^2 + z^2) per hit slot (intentionally includes z).
+        r3d_bin_slot_space = torch.sqrt((hits_tensor[..., :3] ** 2).sum(dim=-1))
+        beam_hits_t = Reconstruction.apply_radial_separation_filter(
+            beam_hits_t,
+            r3d_bin_slot_space,
+            min_delta_rho_mm=cfg.min_delta_rho_mm,
+            target_length=3,
+        )
 
     if cfg.timing_enabled:
         Utils.sync_device(cfg.device_acc)
@@ -399,8 +411,14 @@ def run_model(
         bin_seeds = []
         seen_bs: set = set()
         lengths = (hit_chains_np >= 0).sum(axis=1)  # [N] — vectorized length per chain
-        prefilter = np.isfinite(scores_np) & (scores_np > seed_score_threshold)
-        for i in np.where(prefilter)[0]:
+        # Only complete 3-hit chains are valid seeds: a finite score alone does not imply the radial
+        # filter kept all three hits (it can drop hits or return an incomplete/-1-padded row).
+        prefilter = (lengths == 3) & np.isfinite(scores_np) & (scores_np > seed_score_threshold)
+        # Deduplicate keeping the highest-scoring instance of each hit-set, matching the exported
+        # ONNX model's `_dedup_seeds` (which keeps the max score) so evaluation and inference agree.
+        candidate_idx = np.where(prefilter)[0]
+        candidate_idx = candidate_idx[np.argsort(-scores_np[candidate_idx], kind="stable")]
+        for i in candidate_idx:
             chain_compact = hit_chains_np[i, : lengths[i]]
             key = tuple(sorted(chain_compact.tolist()))
             if key in seen_bs:

@@ -47,8 +47,19 @@ class SeedReconstructionModel(nn.Module):
         device_acc: torch.device = torch.device("cpu"),
         width: int = 5,
         max_seed_length: int = 3,
+        radial_separation_constraint: bool = True,
+        min_delta_rho_mm: float = 5.0,
+        raw_chain_length: int = 5,
     ) -> None:
         super(SeedReconstructionModel, self).__init__()
+
+        if raw_chain_length < max_seed_length:
+            raise ValueError(
+                f"raw_chain_length ({raw_chain_length}) must be >= max_seed_length ({max_seed_length}). "
+                "A raw chain shorter than the target seed can never produce a full-length seed."
+            )
+        if min_delta_rho_mm < 0:
+            raise ValueError(f"min_delta_rho_mm must be >= 0, got {min_delta_rho_mm}.")
 
         self.cfg = transformer_config
         self.cfg.epoch_nb = 1
@@ -57,6 +68,9 @@ class SeedReconstructionModel(nn.Module):
         self.transformer = transformer
         self.width = width
         self.max_seed_length = max_seed_length
+        self.radial_separation_constraint = radial_separation_constraint
+        self.min_delta_rho_mm = min_delta_rho_mm
+        self.raw_chain_length = raw_chain_length
         self.classifier = classifier
 
         self._transformer_onnx_session: ort.InferenceSession | None = None
@@ -209,6 +223,15 @@ class SeedReconstructionModel(nn.Module):
             backward=backward,
         )
 
+        
+        if self.radial_separation_constraint:
+            # 3D spherical radius r3d = sqrt(x^2 + y^2 + z^2) per hit slot (intentionally includes z;
+            # see apply_radial_separation_filter for why this is not the cylindrical detector rho).
+            r3d_bin_slot_space = torch.sqrt((binned_hits[..., :3] ** 2).sum(dim=-1))  # [B, N_bin]
+            chains = Reconstruction.apply_radial_separation_filter(
+                chains, r3d_bin_slot_space, self.min_delta_rho_mm, self.max_seed_length
+        )
+        
         # Map bin-local indices → original hit IDs
         bin_nb, nb_max_hit = valid_mask.shape
         seed_nb = chains.shape[2]
@@ -235,7 +258,7 @@ class SeedReconstructionModel(nn.Module):
         first[inverse.flip(0)] = perm.flip(0)
 
         return unique_chains, scores_flat[first]
-
+      
     def forward(self, hits: Tensor) -> tuple[Tensor, Tensor]:
         """
         Forward pass of the full seed-reconstruction model.
