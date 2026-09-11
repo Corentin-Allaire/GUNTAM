@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+DATA_DIR = Path(__file__).parent.parent / "data"
+
 
 class TestFullIntegration:
     """
@@ -14,7 +16,8 @@ class TestFullIntegration:
     2. Write output to both CSV and H5 formats
     3. Run preprocessing on all outputs
     4. Run training (2 epochs)
-    5. Clean up all generated files
+    5. Train the seed classifier
+    6. Clean up all generated files
     """
 
     @pytest.fixture
@@ -32,7 +35,7 @@ class TestFullIntegration:
         Path to test data directory with proper structure.
         Creates an 'odd_output' subdirectory and copies test files there.
         """
-        source_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        source_dir = DATA_DIR
         test_input_dir = os.path.join(temp_dir, "test_input")
         odd_output_dir = os.path.join(test_input_dir, "odd_output")
         os.makedirs(odd_output_dir, exist_ok=True)
@@ -41,6 +44,9 @@ class TestFullIntegration:
         for filename in os.listdir(source_dir):
             if filename.endswith(".csv"):
                 shutil.copy(os.path.join(source_dir, filename), os.path.join(odd_output_dir, filename))
+
+        # Copy the seed_features.pt fixture to the test input directory
+        shutil.copy(os.path.join(source_dir, "seed_features.pt"), os.path.join(test_input_dir, "seed_features.pt"))
 
         return test_input_dir
 
@@ -203,6 +209,7 @@ class TestFullIntegration:
             dataset_name=f"test_{suffix}",
             input_format=output_format,
             loss_components=all_losses,
+            write_seed_tensor=True,
         )
 
         # Step 4: Verify all outputs including model
@@ -217,6 +224,34 @@ class TestFullIntegration:
             output_format=output_format,
             use_space_point=use_space_point,
         )
+
+        # Step 5: Run the trained model to produce seeds, then train the classifier on them
+        print(f"\n{'=' * 80}")
+        print(f"STEP 5: Training seed classifier from model-generated seeds ({suffix})")
+        print(f"{'=' * 80}")
+
+        seed_features_path = os.path.join(preprocessing_output, "seed_features", "seed_features.pt")
+        assert os.path.exists(seed_features_path), f"Seed features file not found: {seed_features_path}"
+
+        # This tiny toy dataset/model may produce zero seeds or only one seed class, which the
+        # classifier can't be trained/tested on. Use the pre-generated fixture instead, which is
+        # guaranteed to contain both fake and true seeds.
+        seed_features_path = os.path.join(test_data_dir, "seed_features.pt")
+        assert os.path.exists(seed_features_path), f"Copied seed features file not found: {seed_features_path}"
+
+        classifier_model_path = os.path.join(temp_dir, f"classifier_{suffix}.pt")
+        self._run_classifier_training(
+            seed_features_path=seed_features_path,
+            classifier_model_path=classifier_model_path,
+        )
+
+        assert os.path.exists(classifier_model_path), f"Classifier model not found: {classifier_model_path}"
+        classifier_size = os.path.getsize(classifier_model_path)
+        assert classifier_size > 0, f"Classifier model file is empty: {classifier_model_path}"
+
+        print("  Seed classifier trained successfully")
+        print(f"  - Seed features: {seed_features_path}")
+        print(f"  - Classifier model: {classifier_model_path} ({classifier_size / 1024:.2f} KB)")
 
         print(f"\n{'=' * 80}")
         print(f"FULL PIPELINE WITH TRAINING COMPLETED SUCCESSFULLY ({suffix})")
@@ -421,7 +456,16 @@ class TestFullIntegration:
             result.returncode == 0
         ), f"PrepareTensor with tensor_format={tensor_format} failed with return code {result.returncode}"
 
-    def _run_training(self, input_path, input_tensor_path, model_path, dataset_name, input_format, loss_components=None):
+    def _run_training(
+        self,
+        input_path,
+        input_tensor_path,
+        model_path,
+        dataset_name,
+        input_format,
+        loss_components=None,
+        write_seed_tensor=False,
+    ):
         """
         Run the Train.py script
 
@@ -432,6 +476,7 @@ class TestFullIntegration:
             dataset_name: Name of the dataset
             input_format: Input format ('csv' or 'h5')
             loss_components: List of loss components to use (optional)
+            write_seed_tensor: Whether to write seed feature tensors/labels during evaluation (optional)
         """
         # Build the command
         cmd = [
@@ -490,6 +535,9 @@ class TestFullIntegration:
         if loss_components:
             cmd += ["--loss_components"] + loss_components
 
+        if write_seed_tensor:
+            cmd.append("--write_seed_tensor")
+
         # Run the command
         result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -501,6 +549,57 @@ class TestFullIntegration:
 
         # Check if command succeeded
         assert result.returncode == 0, f"Training failed with return code {result.returncode}"
+
+    def _run_classifier_training(self, seed_features_path, classifier_model_path):
+        """
+        Run the Train_classifier.py script on the seed features produced by Train.py
+
+        Args:
+            seed_features_path: Path to the seed_features.pt file (features + labels)
+            classifier_model_path: Path to save the trained classifier model
+        """
+        cmd = [
+            sys.executable,
+            "-m",
+            "coverage",
+            "run",
+            "--parallel-mode",
+            "--branch",
+            "-m",
+            "GUNTAM.Seed.Train_classifier",
+            "--input_tensor_path",
+            seed_features_path,
+            "--classifier_model_path",
+            classifier_model_path,
+            "--input_shape",
+            "28",
+            "--hidden_layers",
+            "32",
+            "16",
+            "8",
+            "--n_epochs",
+            "1",
+            "--icing_epochs",
+            "1",
+            "--batch_size",
+            "10",
+            "--test_fraction",
+            "0.2",
+            "--val_fraction",
+            "0.2",
+        ]
+
+        # Run the command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        print(f"Classifier training command: {' '.join(cmd)}")
+        print(f"Return code: {result.returncode}")
+        print(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            print(f"STDERR:\n{result.stderr}")
+
+        # Check if command succeeded
+        assert result.returncode == 0, f"Classifier training failed with return code {result.returncode}"
 
     def _verify_read_and_preprocessing_outputs(self, read_output, preprocessing_output, output_format, use_space_point):
         """

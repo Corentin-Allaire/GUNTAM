@@ -800,7 +800,7 @@ def create_efficiency_vs_truth_param_plots(
         return centers, eff, err_eff, eff_pure, err_eff_pure, counts_all, half_widths
 
     bins_d0 = np.linspace(0, 10, num=20)
-    bins_eta = np.linspace(-3, 3, num=20)
+    bins_eta = np.linspace(-4, 4, num=20)
     bins_phi = np.linspace(-np.pi, np.pi, num=21)
     bins_z0 = np.linspace(-150, 150, num=20)
     bins_pt = np.linspace(0, 10, num=20)
@@ -919,7 +919,7 @@ def _prepare_rate_plot_data(
     phi = ((phi + np.pi) % (2 * np.pi)) - np.pi
 
     bins_d0 = np.linspace(0, 10, num=20)
-    bins_eta = np.linspace(-3, 3, num=20)
+    bins_eta = np.linspace(-4, 4, num=20)
     bins_phi = np.linspace(-np.pi, np.pi, num=21)
     bins_z0 = np.linspace(-150, 150, num=20)
     bins_pt = np.linspace(0, 10, num=20)

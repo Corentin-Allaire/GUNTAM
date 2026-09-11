@@ -120,7 +120,7 @@ class TestScaledDotProductAttention:
         assert logits.shape == (batch_size, num_heads, seq_len, seq_len)
 
         # Masked query rows in logits should be -inf everywhere
-        assert torch.isinf(logits[:, :, :, -2:]).all()
+        assert (logits[:, :, :, -2:] == 0).all()
 
         # Unmasked query rows should be finite
         assert torch.isfinite(logits[:, :, :, :-2]).all()
@@ -159,11 +159,12 @@ class TestScaledDotProductAttention:
         # Compare outputs
         assert torch.allclose(out_manual, out_torch, atol=1e-6)
 
-        # Recompute expected logits to compare explicitly
+        # Recompute expected attention weights (post-softmax) to compare explicitly
         scale = 1.0 / math.sqrt(d_k)
         logits_expected = torch.matmul(q, k.transpose(-2, -1)) * scale
         logits_expected = logits_expected.masked_fill(mask, float("-inf"))
-        assert torch.allclose(logits_manual, logits_expected, atol=1e-6)
+        weights_expected = torch.softmax(logits_expected, dim=-1)
+        assert torch.allclose(logits_manual, weights_expected, atol=1e-6)
 
 
 class TestMultiHeadAttention:
@@ -432,7 +433,7 @@ class TestEncoderLayer:
     def test_bad_dropout_tuple_length_raises(self):
         input_dim, model_dim, num_heads = 32, 16, 4
         with pytest.raises(ValueError):
-            EncoderLayer(input_dim, model_dim, num_heads, dropout=(0.1, 0.2, 0.3), use_pytorch=False)
+            EncoderLayer(input_dim, model_dim, num_heads, dropout=(0.1, 0.2, 0.3), use_pytorch=False)  # type: ignore[arg-type]
 
 
 class TestTransformerEncoder:

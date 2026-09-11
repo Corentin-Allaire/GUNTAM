@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -10,7 +10,6 @@ from GUNTAM.Transformer.Transformer import MultiHeadAttention
 from GUNTAM.Transformer.Transformer import TransformerEncoder
 from GUNTAM.Transformer.Transformer import load_state_dict_flex
 from GUNTAM.Transformer.Embeding import FourierPositionalEncoding
-from GUNTAM.Seed.shuffle_features import shuffle_features, shuffle_features_per_i
 
 
 class SeedTransformer(nn.Module):
@@ -73,7 +72,6 @@ class SeedTransformer(nn.Module):
 
         # Projection layer to map Fourier-encoded features to the desired embedding dimension
         embedding_input_dim = self.fourier_encoding.output_dim
-
         if self.cfg.embedding_mode == "MLP":
             self.embedding_projection = nn.Linear(embedding_input_dim, self.cfg.dim_embedding, device=self.device_acc)
 
@@ -85,6 +83,7 @@ class SeedTransformer(nn.Module):
             num_heads=self.cfg.nb_heads,  # Number of attention heads can be adjusted
             dropout=self.cfg.dropout,  # Dropout rate can be adjusted
             device=self.device_acc,
+            use_pytorch=True,
         )
 
         # Matching attention layer to produce attention matrice used in reconstruction
@@ -97,19 +96,14 @@ class SeedTransformer(nn.Module):
             use_pytorch=False,
         )
 
-    def embedding(self, hits: Tensor, *, shuffle_v: Optional[int] = None, situation: Optional[str] = None) -> Tensor:
+    def fourier_embedding(self, hits: Tensor) -> Tensor:
         """
         Embed the input hit features using Fourier positional encoding and a projection layer.
         Args:
             - hits (Tensor): Input source sequence.
-            - shuffle_v: Indice of the feature we shuffle.
-            - situation: name of the situation corresponding to which features we want to shuffle together.
         Returns:
             - encoded (Tensor): Encoded memory.
         """
-
-        if situation is not None and shuffle_v is not None:
-            raise ValueError("`situation` or `shuffle_v` are not well defined")
 
         if any(i in self.cfg.embedding_feature for i in self.cfg.cosine_processing):
             embedding_cosine = [i for i in self.cfg.embedding_feature if i in self.cfg.cosine_processing]
@@ -144,28 +138,40 @@ class SeedTransformer(nn.Module):
 
         # Use Fourier positional encoding
         encoded_hits = self.fourier_encoding(coord, high_level)
+        return encoded_hits
 
-        if situation is not None and shuffle_v is None:
-            encoded_hits = shuffle_features(encoded_hits, situation)
-        if situation is None and shuffle_v is not None:
-            encoded_hits = shuffle_features_per_i(encoded_hits, shuffle_v)
-        if situation is None and shuffle_v is None:
-            encoded_hits = encoded_hits
+    def feature_projection(self, encoded_hits: Tensor) -> Tensor:
+        """
+        Project the encoded hits to the desired embedding dimension based on the embedding mode.
+        Args:
+            - encoded_hits (Tensor): The embedded hit features after Fourier encoding.
+        Returns:
+            - projected_encoded_hits (Tensor): The encoded hits after projection to the desired embedding dimension.
+        """
 
         # Apply generic projection if needed
         if self.cfg.embedding_mode == "MLP":
-
             encoded_hits = self.embedding_projection(encoded_hits)
 
         elif self.cfg.embedding_mode == "padding":
-
             pad_size = self.cfg.dim_embedding - encoded_hits.shape[-1]
             encoded_hits = F.pad(encoded_hits, (0, pad_size))
 
         else:
-
             raise ValueError(f"Unknown embedding_mode: {self.cfg.embedding_mode}")
 
+        return encoded_hits
+
+    def embedding(self, hits: Tensor) -> Tensor:
+        """
+        Embed the input hit features using Fourier positional encoding and a projection layer.
+        Args:
+            - hits (Tensor): Input source sequence.
+        Returns:
+            - encoded (Tensor): Encoded memory.
+        """
+        encoded_hits = self.fourier_embedding(hits)
+        encoded_hits = self.feature_projection(encoded_hits)
         return encoded_hits
 
     def compute_adjacency(self, encoded_hits: Tensor, mask: Tensor) -> Tuple[Tensor, Tensor]:
@@ -181,55 +187,54 @@ class SeedTransformer(nn.Module):
         # Perform the transformer encoding
         transformer_output = self.transformer(x=encoded_hits, mask=mask)
         # Extract the last attention matrix for use in the reconstruction
-        _, attn_weights = self.matching_attention(transformer_output, mask)
+        attn_weights = self.matching_attention.compute_attention(transformer_output, mask)
         # The number of heads is 1 for matching attention, so we can squeeze that dimension
         attn_weights = attn_weights.squeeze(1)
 
         return transformer_output, attn_weights
+
+    def triplet_extraction(self, attention_weights: Tensor, width: int = 5) -> Tensor:
+        """
+        For each source hit, keep only the top-k (source, target, score) triplets.
+        Args:
+            - attention_weights (Tensor): Attention weights from the matching attention layer.
+            - width (int): Number of top-k connections to keep for each source hit.
+        Returns:
+            - triplets (Tensor): Tensor of shape [B, N, width, 3] containing (source, target, score) triplets.
+        """
+        topk_scores, topk_targets = attention_weights.topk(width, dim=-1)  # [B, N, width]
+        B, N, k = topk_scores.shape
+        source_indices = torch.arange(N, device=attention_weights.device).view(1, N, 1).expand(B, N, k)
+        triplets = torch.stack(
+            [source_indices.float(), topk_targets.float(), topk_scores],
+            dim=-1,
+        )  # [B, N, width, 3] columns: source, target, score
+
+        return triplets
 
     def forward(
         self,
         hits: Tensor,
         mask: Tensor,
         width: int = 5,
-        *,
-        shuffle_v: Optional[int] = None,
-        situation: Optional[str] = None,
     ) -> Tuple[Tensor, Tensor]:
         """
         Forward pass of the transformer network.
         Args:
             - hits (Tensor): Input source sequence.
             - mask_hits (Tensor): Source mask.
-            - shuffle_v: Indice of the feature we shuffle.
-            - situation: name of the situation corresponding to which features we want to shuffle together.
+            - width (int): Number of top-k connections to keep for each source hit.
+            - embedded (Bool) : If True, the input hits are already embedded and will not be re-embedded.
         Returns:
             - encoded (Tensor): Encoded memory.
             - attention_weights (Tensor): Attention weights from all layers.
         """
-
-        # Encode the input hit sequence
-        if situation is not None and shuffle_v is None:
-            encoded_hits = self.embedding(hits, situation=situation)
-        if situation is None and shuffle_v is not None:
-            encoded_hits = self.embedding(hits, shuffle_v=shuffle_v)
-        if situation is None and shuffle_v is None:
-            encoded_hits = self.embedding(hits)
-
+        encoded_hits = self.embedding(hits)
         # Compute the adjacency matrix using the matching attention layer
         transformer_output, attention_weights = self.compute_adjacency(encoded_hits, mask)
 
-        # Apply softmax to the attention weights to get the final adjacency matrix
-        att = torch.softmax(attention_weights, dim=-1)
-
-        # For each source hit, keep only the top-k (source, target, score) triplets
-        topk_scores, topk_targets = att.topk(width, dim=-1)  # [B, N, width]
-        B, N, k = topk_scores.shape
-        source_indices = torch.arange(N, device=att.device).view(1, N, 1).expand(B, N, k)
-        triplets = torch.stack(
-            [source_indices.float(), topk_targets.float(), topk_scores],
-            dim=-1,
-        )  # [B, N, width, 3] columns: source, target, score
+        # Extract triplets from the attention weights
+        triplets = self.triplet_extraction(attention_weights, width=width)
 
         return transformer_output, triplets
 
@@ -314,7 +319,7 @@ class SeedTransformer(nn.Module):
                     "output": {0: "batch_size", 1: "seq_len"},
                     "attention_weights": {0: "batch_size", 1: "seq_len", 2: "seq_len"},
                 },
-                opset_version=17,
+                opset_version=18,
             )
             print(f"Model exported to ONNX at {path}")
         finally:

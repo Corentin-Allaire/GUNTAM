@@ -61,8 +61,9 @@ class SeedConfig:
 
         # Loss configuration using lists
         self.loss_components = ["attention_next"]  # List of active loss components
-        self.loss_weights = []  # Default weights matching loss_components
-        self.loss_config = dict(zip(self.loss_components, [1]))
+        self.loss_weights: list[float] = []  # Default weights matching loss_componentsS
+        self.loss_config = dict(zip(self.loss_components, [1.0]))  # Dictionary mapping loss components to weights
+
         # Reconstruction method for inference (None = auto-select from loss config)
         # Choices: None (auto), "beam_search", "beam_search_backward"
         self.reconstruction_method = None
