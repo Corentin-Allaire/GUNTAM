@@ -6,10 +6,10 @@ import torch
 import numpy as np
 from typing import List
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
-from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader
 from GUNTAM.Seed.Reconstruction import batched_beam_search_seed_reconstruction
-from GUNTAM.Seed.Monitoring import PerformanceMonitor
+from GUNTAM.Monitoring.Monitoring import PerformanceMonitor
 import GUNTAM.Seed.SeedLoss as Losses
 
 

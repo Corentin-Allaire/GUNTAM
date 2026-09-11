@@ -292,7 +292,7 @@ class TestExportWithConfig:
     def test_export_with_seed_config(self, tmp_path):
         """Test exporting with a custom SeedConfig JSON file."""
         from GUNTAM.IO.Export_full_model import main
-        from GUNTAM.Seed.Config import SeedConfig
+        from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 
         # Create a SeedConfig and save it as JSON
         cfg = SeedConfig()
@@ -330,7 +330,7 @@ class TestExportWithConfig:
     def test_export_with_classifier_config(self, tmp_path):
         """Test exporting with a custom ClassifierConfig JSON file."""
         from GUNTAM.IO.Export_full_model import main
-        from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
+        from GUNTAM.Seed.Config.ClassifierConfig import ClassifierConfig
 
         # Create a classifier config with a custom threshold
         classifier_cfg = ClassifierConfig()

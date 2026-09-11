@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
+from GUNTAM.Seed.Config.ClassifierConfig import ClassifierConfig
 from GUNTAM.Transformer.OutputClassifier import OutputClassifier
 from GUNTAM.Transformer.Transformer import load_state_dict_flex
 

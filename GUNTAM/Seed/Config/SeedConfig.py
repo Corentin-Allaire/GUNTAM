@@ -6,7 +6,7 @@ import os
 from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
 from typing import Any
 
-from GUNTAM.Seed.TransformerConfig import TransformerConfig
+from GUNTAM.Seed.Config.TransformerConfig import TransformerConfig
 
 
 class SeedConfig:

@@ -31,8 +31,8 @@ from GUNTAM.IO.Read_ACTS_Csv import (
     _process_particles_data,
     _process_space_points_data,
 )
-from GUNTAM.Seed.ClassifierConfig import ClassifierConfig
-from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.Config.ClassifierConfig import ClassifierConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.SeedReconstructionModel import SeedReconstructionModel
 from GUNTAM.Seed.SeedTransformer import SeedTransformer

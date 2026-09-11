@@ -9,12 +9,12 @@ from typing import List, Optional, Dict, Any
 from torch.utils.tensorboard import SummaryWriter
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 import GUNTAM.Seed.SeedLoss as Losses
-from GUNTAM.Seed.Config import SeedConfig
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 from GUNTAM.IO.DataLoader import DataLoader
 from GUNTAM.Transformer.Utils import ts_print
 import GUNTAM.Transformer.Utils as Utils
 import GUNTAM.Seed.Reconstruction as Reconstruction
-from GUNTAM.Seed.Monitoring import PerformanceMonitor
+from GUNTAM.Monitoring.Monitoring import PerformanceMonitor
 from GUNTAM.IO.PrepareTensor import compute_barcode, prepare_tensor
 
 

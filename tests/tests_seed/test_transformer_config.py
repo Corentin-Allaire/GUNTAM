@@ -1,7 +1,7 @@
 import sys
 import pytest
 
-from GUNTAM.Seed.TransformerConfig import TransformerConfig
+from GUNTAM.Seed.Config.TransformerConfig import TransformerConfig
 
 
 def test_defaults_initialization():

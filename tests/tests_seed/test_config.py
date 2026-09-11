@@ -1,8 +1,7 @@
 import sys
 import pytest
 
-from GUNTAM.Seed.Config import SeedConfig
-
+from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 
 def test_defaults_initialization():
     cfg = SeedConfig()

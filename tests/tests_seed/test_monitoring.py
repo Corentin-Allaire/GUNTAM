@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from GUNTAM.Seed.Monitoring import PerformanceMonitor
+from GUNTAM.Monitoring.Monitoring import PerformanceMonitor
 
 
 def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):

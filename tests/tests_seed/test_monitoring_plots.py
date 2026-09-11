@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
-from GUNTAM.Seed.MonitoringPlot import PlotUtility
+from GUNTAM.Monitoring.MonitoringPlot import PlotUtility
 
 
 class TestPlotUtility:
