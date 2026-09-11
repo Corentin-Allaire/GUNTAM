@@ -43,7 +43,7 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
 
     # Seeds: one pure seed matching the particle hits
     seed_params = true_params.copy()
-    seeds_test = [[[(particle_hit_indices, seed_params, 0.0)]]]  # nested [E][B]
+    seeds_test: list[list[list[tuple]]] = [[[(particle_hit_indices, seed_params, 0.0)]]]  # nested [E][B]
 
     # Pair info and attention maps (not used unless detailed analysis enabled)
     pairs1 = np.arange(H, dtype=int)
@@ -61,7 +61,7 @@ def make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6):
         attention_maps,
     )
 
- 
+
 def make_multi_event_multi_bin_setup():
     """Create a setup with:
     - Event 1: 5 particles, 3 hits each, present in 4 bins
@@ -78,7 +78,7 @@ def make_multi_event_multi_bin_setup():
     ID_test = np.full((E, B, H), -1, dtype=int)
     padding_mask_hit_test = np.zeros((E, B, H), dtype=bool)
 
-    seeds_test = [[[] for _ in range(B)] for _ in range(E)]
+    seeds_test: list[list[list[tuple]]] = [[[] for _ in range(B)] for _ in range(E)]
 
     all_pairs_test = [[(np.arange(H), np.arange(H), np.zeros(H, dtype=int)) for _ in range(B)] for _ in range(E)]
     attention_maps = [[np.zeros((H, H), dtype=float) for _ in range(B)] for _ in range(E)]
@@ -138,7 +138,7 @@ def test_seeding_performance_basic():
         all_pairs_test,
         attention_maps,
     ) = make_synthetic_inputs(num_events=1, num_bins=1, hits_per_bin=6)
-    
+
     monitor = PerformanceMonitor(
         save_plots=False,
         min_common_hits=3,
@@ -200,7 +200,7 @@ def test_seeding_performance_basic():
             resolution[param] = {
                 "mean_error": np.mean(arr),
                 "std_error": np.std(arr),
-                "rms_error": np.sqrt(np.mean(arr ** 2)),
+                "rms_error": np.sqrt(np.mean(arr**2)),
                 "median_error": np.median(arr),
                 "n_seeds": len(arr),
             }
@@ -237,7 +237,7 @@ def test_input_validation_mismatched_bins_raises():
     monitor = PerformanceMonitor(save_plots=False)
 
     # Pass an event with mismatched per-event seeds (no bins) and expect an IndexError
-    event_seeds_mismatched = []
+    event_seeds_mismatched: list[list[list[tuple]]] = []
     for ev in range(len(hits_test)):
         with pytest.raises(IndexError):
             monitor.bin_seeding_performance(ev, hits_test[ev], particles_test[ev], ID_test[ev], event_seeds_mismatched)

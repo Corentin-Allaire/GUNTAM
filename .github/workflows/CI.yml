@@ -1,6 +1,6 @@
 name: CI
 
-on: [push, pull_request]
+on: [push]
 
 jobs:
   lint:
@@ -16,7 +16,9 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Black
         id: black
@@ -56,10 +58,24 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Run tests
-        run: pdm run pytest --ignore=tests/test_integration
+        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report= --ignore=tests/test_integration
+
+      - name: Rename coverage data
+        run: |
+          mv .coverage .coverage.test
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-test
+          path: .coverage.test
+          include-hidden-files: true
+
 
   Typing:
     runs-on: ubuntu-latest
@@ -74,12 +90,14 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Run mypy
         run: pdm run mypy -p GUNTAM
 
-  integration-test:
+  integration-test-train:
     runs-on: ubuntu-latest
     needs: [lint, test, Typing]
     steps:
@@ -93,13 +111,94 @@ jobs:
         run: pip install pdm
 
       - name: Ensure deps
-        run: pdm install
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
 
       - name: Run integration tests
-        run: pdm run pytest --cov=GUNTAM --cov-branch --cov-report=xml
+        run: pdm run pytest tests/test_integration/test_integration_seed.py --cov=GUNTAM --cov-branch --cov-report=
+
+      - name: Rename coverage data
+        run: |
+          mv .coverage .coverage.integration_train
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration_train
+          path: .coverage.integration_train
+          include-hidden-files: true
+
+  integration-test_run:
+    runs-on: ubuntu-latest
+    needs: [lint, test, Typing]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Ensure deps
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
+
+      - name: Run integration tests
+        run: pdm run pytest tests/test_integration/test_seeding_chain.py --cov=GUNTAM --cov-branch --cov-report=
+
+      - name: Rename coverage data
+        run: |
+          mv .coverage .coverage.integration_chain
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration_chain
+          path: .coverage.integration_chain
+          include-hidden-files: true
+
+      
+  coverage:
+    runs-on: ubuntu-latest
+    needs: [test, integration-test-train, integration-test_run]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PDM
+        run: pip install pdm
+
+      - name: Ensure deps
+        run: |
+          pdm config pypi.pytorch.url https://download.pytorch.org/whl/cpu
+          pdm install
+
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage-data
+          merge-multiple: true
+
+      - name: Combine coverage
+        run: |
+          mkdir coverage-combined
+          ls coverage-data
+          cp coverage-data/.coverage.* coverage-combined/
+
+          cd coverage-combined
+          pdm run coverage combine
+          pdm run coverage xml -o coverage.xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: coverage.xml
+          files: coverage-combined/coverage.xml

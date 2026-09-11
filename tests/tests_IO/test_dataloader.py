@@ -38,11 +38,7 @@ class TestDataLoader:
 
             # Create tensors with [E, B, ...] shape where B=3
             x = torch.arange(start * 3, end * 3, dtype=torch.float32).reshape(n, 3)  # [E, B]
-            y = (
-                torch.arange(start, end, dtype=torch.long)
-                .unsqueeze(1)
-                .expand(-1, 3)
-            )  # [E, B]
+            y = torch.arange(start, end, dtype=torch.long).unsqueeze(1).expand(-1, 3)  # [E, B]
 
             torch.save(
                 {
@@ -132,14 +128,14 @@ class TestDataLoader:
         dataset_dir, dataset_name = synthetic_dataset
         dl = DataLoader(dataset_dir=dataset_dir, dataset_name=dataset_name, tensor_names=["x"])
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((1, 0))  # end < start
+        with pytest.raises(IndexError):  # end < start
+            _ = dl.get_batch_files((1, 0))
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((-1, 1))  # negative start
+        with pytest.raises(IndexError):  # negative start
+            _ = dl.get_batch_files((-1, 1))
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((0, 10))  # end out of bounds
+        with pytest.raises(IndexError):  # end out of bounds
+            _ = dl.get_batch_files((0, 10))
 
-        with pytest.raises(IndexError):
-            _ = dl.get_batch_files((0,))  # invalid tuple size
+        with pytest.raises(IndexError):  # invalid tuple size
+            _ = dl.get_batch_files((0,))  # type: ignore[arg-type]

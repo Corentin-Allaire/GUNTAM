@@ -564,7 +564,7 @@ class PerformanceMonitor:
             self.min_truth_hits,
         )
 
-    def performance_analysis(self) -> None:
+    def performance_analysis(self):
 
         total_unique_particles = len(self.eligible_particles)
         particles_with_seeds_count = sum(1 for p in self.eligible_particles if p.get("had_seed", False))
@@ -637,6 +637,8 @@ class PerformanceMonitor:
                 create_2d_efficiency_heatmaps(self.eligible_particles)
             except Exception as e:
                 print(f"Error creating efficiency-vs-parameter plots: {e}")
+
+        return performance_results
 
     def analyse_bin_performance(
         self,

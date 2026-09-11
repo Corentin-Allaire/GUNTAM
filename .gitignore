@@ -160,3 +160,16 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+attention_map_event_0_bin_0.png
+training_config.sh
+attention_map_event_0_bin_55.png
+bin_complexity_analysis.png
+duplicate_rate_vs_truth_params.png
+efficiency_2d_heatmaps.png
+fake_rate_vs_truth_params.png
+particle_reconstruction_comparison.png
+seeding_efficiency_vs_truth_params.png
+seeding_performance_analysis.png
+odd_output_new_5/event000000001-hits.csv
+training_seeding/

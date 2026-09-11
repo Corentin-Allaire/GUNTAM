@@ -14,6 +14,50 @@ from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
 import h5py
 
 
+def _compute_pv_flag(data_batch: pd.DataFrame, particles_batch: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Assign a particle-vertex ID to each row.
+
+    Particles with the same (vx, vy, vz) triplet belong to the same
+    vertex. Vertices are ranked by their total pT, with ID=1 assigned
+    to the vertex with the largest total pT.
+
+    Args:
+        data_batch: DataFrame containing the hit data for a batch of events, must have 'event_id' column.
+        particles_batch: DataFrame containing the particle data for a batch of events, must have a: vx, vy, vz and pT column
+    Returns:
+        Tuple of (data_batch, particles_batch) with an updated particle_id_pv column in each.
+    """
+
+    vertex_cols = ["vx", "vy", "vz"]
+
+    # Calculate total pT for each vertex and rank vertices by pT.
+    particles_batch["P"] = np.sqrt(particles_batch["px"] ** 2 + particles_batch["py"] ** 2 + particles_batch["pz"] ** 2)
+    vertex_ids = (
+        particles_batch.groupby(vertex_cols, as_index=False)
+        .agg(P=("P", "sum"))
+        .sort_values("P", ascending=False)
+        .assign(particle_id_pv=lambda df: range(1, len(df) + 1))[vertex_cols + ["particle_id_pv"]]
+    )
+    # Add the vertex ID back to every particle.
+    particles_batch = particles_batch.drop(columns="particle_id_pv", errors="ignore").merge(
+        vertex_ids,
+        on=vertex_cols,
+        how="left",
+    )
+    # Use the particle_id to update the value of particle_id_pv associated to the data hit
+    particle_pv = particles_batch[["particle_id", "particle_id_pv"]]
+
+    data_batch = data_batch.drop(columns="particle_id_pv", errors="ignore").merge(
+        particle_pv,
+        on="particle_id",
+        how="left",
+    )
+    particles_batch.drop(columns="P", inplace=True)
+
+    return data_batch, particles_batch
+
+
 def _particle_selection(
     data_batch: pd.DataFrame, particles_batch: pd.DataFrame, bins: pd.DataFrame, hit_to_particle: pd.Series, cfg
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series]:
@@ -40,7 +84,7 @@ def _particle_selection(
     mask = (
         (particles_batch["eta"] >= eta_range[0])
         & (particles_batch["eta"] <= eta_range[1])
-        & (particles_batch["pT"] > 0)
+        & (particles_batch["pT"] > 0.8)
         & (particles_batch["d0"] < cfg.vertex_cuts[0])
         & (particles_batch["z0"].abs() < cfg.vertex_cuts[1])
     )
@@ -661,6 +705,10 @@ def _process_single_batch(args: Tuple) -> Tuple[str, Tuple[int, int], int, int]:
 
     # Optionally perform orphan hit removal (seed derived from file_id for independent removal per batch)
     data_batch = _orphan_hit_removal(data_batch, cfg.orphan_hit_fraction, random_state=1993 + file_id)
+
+    # If not available by default, compute the primary vertex particle flag for each hit
+    if cfg.recompute_pv_flag:
+        data_batch, particles_batch = _compute_pv_flag(data_batch, particles_batch)
 
     # Apply geometric hit range cuts [R_max, Z_max]
     data_batch = _hit_selection(data_batch, cfg)

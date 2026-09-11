@@ -31,9 +31,7 @@ def make_config(
         embed_cosine_n = len(set(cfg.embedding_feature) & set(cfg.cosine_processing))
         coord_dim = len(cfg.embedding_feature) + embed_cosine_n
         n_high = len(cfg.high_level_features) + len(set(cfg.high_level_features) & set(cfg.cosine_processing))
-        cfg.fourier_num_frequencies = [
-            max(1, (dim_embedding - n_high) // (2 * coord_dim))
-        ] * coord_dim
+        cfg.fourier_num_frequencies = [max(1, (dim_embedding - n_high) // (2 * coord_dim))] * coord_dim
     return cfg
 
 
@@ -44,11 +42,11 @@ class TestSeedTransformerInitialization:
         nb_layers_t, nb_heads, dim_embedding = 3, 2, 96
         cfg = make_config(nb_layers_t=nb_layers_t, nb_heads=nb_heads, dim_embedding=dim_embedding)
         model = SeedTransformer(transformer_config=cfg)
-
         assert model.cfg.nb_layers_t == nb_layers_t
         assert model.cfg.dim_embedding == dim_embedding
         assert isinstance(model.fourier_encoding, torch.nn.Module)
-        assert isinstance(model.embedding_projection, torch.nn.Linear)
+        if model.cfg.embedding_mode == "MLP":
+            assert isinstance(model.embedding_projection, torch.nn.Linear)
         assert len(model.transformer.layers) == nb_layers_t
         # matching_attention uses single head
         assert model.matching_attention.num_heads == 1
@@ -131,8 +129,8 @@ class TestSeedTransformerForward:
         assert output.shape == (2, 6, 32)
         assert attn_weights.shape == (2, 6, 5, 3)
         # Masked key positions (4, 5) get -inf logits -> softmax score ~0 in triplets
-        target_idx = attn_weights[..., 1].long()   # [B, N, width]
-        scores = attn_weights[..., 2]              # [B, N, width]
+        target_idx = attn_weights[..., 1].long()  # [B, N, width]
+        scores = attn_weights[..., 2]  # [B, N, width]
         masked_edges = (target_idx == 4) | (target_idx == 5)
         if masked_edges.any():
             assert scores[masked_edges].abs().max() < 1e-5, "Masked targets have non-zero scores"

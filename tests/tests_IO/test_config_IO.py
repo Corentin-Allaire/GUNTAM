@@ -138,7 +138,7 @@ class TestPreprocessingConfig:
         for fmt in valid_input_formats:
             config.input_format = fmt
             assert config.input_format == fmt
-        
+
         # Valid tensor formats
         valid_tensor_formats = ["pt", "h5"]
         for fmt in valid_tensor_formats:
@@ -229,19 +229,27 @@ class TestPreprocessingConfig:
         """Test basic argument parsing with various parameters."""
         argv = [
             "prog",
-            "--input_path", "test_data",
-            "--input_format", "h5",
-            "--tensor_format", "h5",
-            "--max_events", "500",
-            "--binning_strategy", "global",
-            "--bin_width", "0.08",
-            "--hit_range", "700", "1500",
+            "--input_path",
+            "test_data",
+            "--input_format",
+            "h5",
+            "--tensor_format",
+            "h5",
+            "--max_events",
+            "500",
+            "--binning_strategy",
+            "global",
+            "--bin_width",
+            "0.08",
+            "--hit_range",
+            "700",
+            "1500",
         ]
         monkeypatch.setattr(sys, "argv", argv)
-        
+
         config = PreprocessingConfig()
         config.parse_args()
-        
+
         assert config.input_path == "test_data"
         assert config.input_format == "h5"
         assert config.tensor_format == "h5"
@@ -258,12 +266,12 @@ class TestPreprocessingConfig:
         config.binning_strategy = "global"
         config.max_events = 2000
         config.orphan_hit_fraction = 0.25
-        
+
         config.print_config()
-        
+
         captured = capsys.readouterr()
         output = captured.out
-        
+
         # Check main sections are present
         assert "Preprocessing Configuration:" in output
         assert "Input/Output:" in output
