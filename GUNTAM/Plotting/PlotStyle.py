@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -48,7 +49,7 @@ def assign_series_styles(n_series: int) -> list[tuple[str, str]]:
 
     cmap = plt.colormaps["viridis"]
     positions = np.linspace(0.0, 1.0, n_series)
-    return [(cmap(pos), MARKERS[i % len(MARKERS)]) for i, pos in enumerate(positions)]
+    return [(mcolors.to_hex(cmap(pos)), MARKERS[i % len(MARKERS)]) for i, pos in enumerate(positions)]
 
 
 @dataclass(frozen=True)

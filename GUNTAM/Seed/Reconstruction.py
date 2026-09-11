@@ -533,9 +533,6 @@ def batched_beam_search_seed_reconstruction(
         # Track best chain per (bin, starting hit): avg score, length >= 3 only
         chain_len = step + 1
         if chain_len >= 3:
-            # A chain of `chain_len` hits has `chain_len - 1` edges; chain_scores is the sum of
-            # those edge scores, so the average edge score divides by the edge count, not the hit
-            # count. This matters now that chains of length 3/4/5 are ranked against each other.
             avg_scores = chain_scores / (chain_len - 1)  # [B, N, BW]
             step_best, step_beam = avg_scores.max(dim=2)  # [B, N]
 
@@ -555,11 +552,12 @@ def batched_beam_search_seed_reconstruction(
 
 def apply_radial_separation_filter(
     chains: torch.Tensor,
+    scores: torch.Tensor,
     r3d: torch.Tensor,
     min_delta_rho_mm: float,
     target_length: int = 3,
     check_bounds: bool = False,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Post-hoc geometric filter applied to the raw output of `batched_beam_search_seed_reconstruction`.
 
@@ -647,10 +645,9 @@ def apply_radial_separation_filter(
         kept_count = torch.where(passes, kept_count + 1, kept_count)
 
     # Only complete seeds survive: a chain that kept fewer than target_length hits becomes all -1.
-    complete = (kept_count >= target_length).unsqueeze(-1)  # [B, N, 1]
-    out = torch.where(complete, out, torch.full_like(out, -1))
-
-    return out
+    complete = kept_count >= target_length  # [B, N]
+    score_out = torch.where(complete, scores, -1)
+    return out, score_out
 
 
 def build_seed_features_tensor(

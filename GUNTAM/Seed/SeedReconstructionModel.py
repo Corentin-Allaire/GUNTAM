@@ -222,16 +222,13 @@ class SeedReconstructionModel(nn.Module):
             beam_width=beam_width,
             backward=backward,
         )
-
-        
         if self.radial_separation_constraint:
             # 3D spherical radius r3d = sqrt(x^2 + y^2 + z^2) per hit slot (intentionally includes z;
             # see apply_radial_separation_filter for why this is not the cylindrical detector rho).
             r3d_bin_slot_space = torch.sqrt((binned_hits[..., :3] ** 2).sum(dim=-1))  # [B, N_bin]
-            chains = Reconstruction.apply_radial_separation_filter(
-                chains, r3d_bin_slot_space, self.min_delta_rho_mm, self.max_seed_length
-        )
-        
+            chains, scores = Reconstruction.apply_radial_separation_filter(
+                chains, scores, r3d_bin_slot_space, self.min_delta_rho_mm, self.max_seed_length
+            )
         # Map bin-local indices → original hit IDs
         bin_nb, nb_max_hit = valid_mask.shape
         seed_nb = chains.shape[2]
@@ -258,7 +255,7 @@ class SeedReconstructionModel(nn.Module):
         first[inverse.flip(0)] = perm.flip(0)
 
         return unique_chains, scores_flat[first]
-      
+
     def forward(self, hits: Tensor) -> tuple[Tensor, Tensor]:
         """
         Forward pass of the full seed-reconstruction model.
