@@ -263,9 +263,9 @@ def neighbor_bin_Z_phi(
     """
     Binning of the detector in Z and phi with neighboring bins. For each hit, we compute the bin it falls into (bin1)
     and also the neighboring bins (bin0 and bin2) in phi. The Z binning is determined by the eta value of the hit,
-    which is computed from the r and z coordinates. The eta value is computed for two reference Z positions: ]
-    -Z_threashold and Z_threashold. The hit is assigned to the Z bin corresponding to the eta value that falls within the defined eta bins,
-    considering a margin for neighboring bins.
+    which is computed from the r and z coordinates. The eta value is computed for two reference Z positions:
+    -Z_threashold and Z_threashold. The hit is assigned to the Z bin corresponding
+    to the eta value that falls within the defined eta bins, considering a margin for neighboring bins.
 
     Args:
         values: DataFrame of shape [N, 3] containing the values to bin. The columns should be ["r", "z", "phi"].
