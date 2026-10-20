@@ -57,6 +57,9 @@ def config_model_dataset(path: str, dataset_name: str, model_name: str):
 
     cfg = SeedConfig()
     # cfg.parse_args()
+    # Use default weights (1.0) for each loss component if none are specified
+    if not cfg.loss_weights:
+        cfg.loss_weights = [1.0] * len(cfg.loss_components)
     cfg.loss_config = dict(zip(cfg.loss_components, cfg.loss_weights))
     cfg.epoch_nb = 1
     cfg.transformer_config.embedding_mode = "MLP"
@@ -186,15 +189,15 @@ def perm_imp_featuress(features: List[int], method: str, dataset, model, cfg):
     """
 
     if method == "loss":
-        result = validate_function(
+        return validate_function(
             model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg, features=features
         )
     if method == "seed_eff":
-        result = efficiency_reconstructed_seeds(
+        return efficiency_reconstructed_seeds(
             model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg, features=features
         )
 
-    return result
+    raise ValueError(f"Unknown method: {method}. Must be 'loss' or 'seed_eff'.")
 
 
 # ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''

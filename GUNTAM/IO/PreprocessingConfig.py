@@ -25,7 +25,9 @@ class PreprocessingConfig:
 
             - binning_strategy: str: Binning strategy ('no_bin', 'global', 'neighbor', or 'margin')
             - bin_width: float: Width of bins for binning in phi
-            - binning_margin: float: Margin for margin binning strategy (fraction of bin_width)
+            - binning_margin: float: Margin for margin binning strategy (fraction of bin_width), also used as the
+              eta margin for the 'Z_Phi' strategy
+            - value_bins_eta: list[float]: Eta bin edges for the Z binning of the 'Z_Phi' strategy
             - max_hit_input: int: Maximum number of hits per bin
 
             - eta_range: list[float, float]: Eta range for particle selection [min, max]
@@ -53,6 +55,7 @@ class PreprocessingConfig:
         self.binning_strategy = "neighbor"  # Binning strategy: 'no_bin', 'global', 'neighbor', or 'margin'
         self.bin_width = 0.05  # Width of bins for binning in phi
         self.binning_margin = 0.01  # Margin for margin binning strategy (fraction of bin_width)
+        self.value_bins_eta = [0.4, 0.9, 1.4, 2.5, 4.0]  # Eta bin edges for the Z binning of the 'Z_Phi' strategy
         self.max_hit_input = 1200  # Maximum number of hits per bin
 
         # Selection parameters
@@ -143,7 +146,7 @@ class PreprocessingConfig:
             "--binning_strategy",
             type=str,
             default=self.binning_strategy,
-            choices=["global", "neighbor", "margin", "no_bin"],
+            choices=["global", "neighbor", "margin", "no_bin", "Z_Phi"],
             help="Binning strategy to use",
         )
         parser.add_argument(
@@ -156,7 +159,14 @@ class PreprocessingConfig:
             "--binning_margin",
             type=float,
             default=self.binning_margin,
-            help="Margin for margin binning strategy (fraction of bin_width)",
+            help="Margin for margin binning strategy (fraction of bin_width), also the eta margin for 'Z_Phi'",
+        )
+        parser.add_argument(
+            "--value_bins_eta",
+            nargs="+",
+            type=float,
+            default=self.value_bins_eta,
+            help="Eta bin edges for the Z binning of the 'Z_Phi' binning strategy",
         )
         parser.add_argument(
             "--max_hit_input",
@@ -260,6 +270,7 @@ class PreprocessingConfig:
         self.binning_strategy = args.binning_strategy
         self.bin_width = args.bin_width
         self.binning_margin = args.binning_margin
+        self.value_bins_eta = args.value_bins_eta
         self.max_hit_input = args.max_hit_input
 
         self.eta_range = args.eta_range
@@ -377,6 +388,7 @@ class PreprocessingConfig:
         print("  Binning strategy: ", self.binning_strategy)
         print("  Bin width (phi): ", self.bin_width)
         print("  Binning margin: ", self.binning_margin)
+        print("  Value bins eta: ", self.value_bins_eta)
         print("  Max hit input: ", self.max_hit_input)
 
         print("\nSelection:")
