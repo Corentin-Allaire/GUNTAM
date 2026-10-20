@@ -7,7 +7,13 @@ from typing import Tuple
 
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config.SeedConfig import SeedConfig
-from GUNTAM.Transformer.BinTensor import global_bin_torch, neighbor_bin_torch, no_bin_torch, margin_bin_torch
+from GUNTAM.Transformer.BinTensor import (
+    global_bin_torch,
+    neighbor_bin_torch,
+    no_bin_torch,
+    margin_bin_torch,
+    neighbor_bin_Z_phi_torch,
+)
 from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.Reconstruction import build_seed_features_tensor
 import GUNTAM.Seed.Reconstruction as Reconstruction
@@ -125,6 +131,17 @@ class SeedReconstructionModel(nn.Module):
             bins_t, num_bins = neighbor_bin_torch(phi_val, bin_width, phi_range)
         elif strategy == "margin":
             bins_t, num_bins = margin_bin_torch(phi_val, bin_width, bin_margin, phi_range)
+        elif strategy == "Z_Phi":
+            z_val = hits_matrix[:, 2]  # [N] — z in r-sorted order
+            r_val = hits_matrix[:, 3]  # [N] — r in r-sorted order
+            bins_t, num_bins = neighbor_bin_Z_phi_torch(
+                torch.stack([phi_val, z_val, r_val], dim=1),
+                bin_width,
+                phi_range,
+                self.cfg.preprocessing_config.value_bins_eta,
+                bin_margin,
+            )
+
         else:
             raise ValueError(f"Unknown binning_strategy: {strategy!r}")
 
