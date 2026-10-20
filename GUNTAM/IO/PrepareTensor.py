@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import torch
 
-from GUNTAM.Transformer.BinTensor import global_bin, neighbor_bin, no_bin, margin_bin
+from GUNTAM.Transformer.BinTensor import global_bin, neighbor_bin, no_bin, margin_bin, neighbor_bin_Z_phi
 from GUNTAM.IO.PreprocessingConfig import PreprocessingConfig
 
 import h5py
@@ -139,6 +139,17 @@ def _hit_selection(data_batch: pd.DataFrame, cfg) -> pd.DataFrame:
     return data_batch[geometric_mask | empty_hit_mask].reset_index(drop=True)
 
 
+def _bin_columns(bins: pd.DataFrame) -> Tuple[List[str], List[str]]:
+    """
+    Return all the bin columns and the primary ones.
+
+    Bin columns are stored as (bin0, bin1, bin2) triplets, one per Z slot for Z_Phi and a single one otherwise.
+    The primary bin is the middle element of each triplet.
+    """
+    columns = list(bins.columns)
+    return columns, columns[1::3]
+
+
 def _build_good_pairs_tensors(
     data_batch: pd.DataFrame,
     bins: pd.DataFrame,
@@ -178,12 +189,14 @@ def _build_good_pairs_tensors(
             weight = int(abs_z0 / z0_weight_bin)
             z0_lookup[(int(eid), int(pid))] = 2**weight - 1
 
+    # Get unique bins and events
+    unique_bins = bins.stack().unique()  # type: ignore[operator]
+    # Remove -1 from unique_bins if present, as it indicates no bin assignment
+    unique_bins = unique_bins[unique_bins != -1]
     unique_events = data_batch["event_id"].unique()
-    unique_bins = bins["bin1"].unique()
-    bin_only = bins[["bin0", "bin1", "bin2"]]
     global_bin_mask = []
     for bin_id in range(max(unique_bins) + 1):
-        mask = bin_only.eq(bin_id).any(axis=1)
+        mask = bins.eq(bin_id).any(axis=1)
         global_bin_mask.append(mask)
 
     # Collect all pairs organized by event and bin
@@ -301,7 +314,7 @@ def _to_tensor(
     hit_features: List of column names in data_batch to use as hit features.
     particle_features: List of column names in particles_batch to use as particle features.
     num_bins: Total number of bins used in the binning strategy.
-    cfg: Configuration object containing max_hit_input parameter.
+    max_hits_per_bin: Number of hit slots per bin in the output tensors.
     Returns:
     Tuple of (hits_tensor, particles_tensor, hit_to_particle_tensor) where:
     - hits_tensor: PyTorch tensor of shape [num_events, num_bins, cfg.max_hit_input, num_hit_features]
@@ -312,13 +325,15 @@ def _to_tensor(
       containing the mapping from hits to particles.
     """
 
+    # Get unique bins and events
+    unique_bins = bins.stack().unique()  # type: ignore[operator]
+    # Remove -1 from unique_bins if present, as it indicates no bin assignment
+    unique_bins = unique_bins[unique_bins != -1]
     unique_events = data_batch["event_id"].unique()
-    unique_bins = bins["bin1"].unique()
     num_events_batch = len(unique_events)
-    bin_only = bins[["bin0", "bin1", "bin2"]]
     global_bin_mask = []
     for bin_id in range(max(unique_bins) + 1):
-        mask = bin_only.eq(bin_id).any(axis=1)
+        mask = bins.eq(bin_id).any(axis=1)
         global_bin_mask.append(mask)
 
     # Determine max sizes for padding
@@ -388,15 +403,22 @@ def _add_padding(
     # Prepare the padding for each event
     print("    Preparing padding for events...")
     data_batch["is_padding"] = False
-
     # Get unique bins and events
-    unique_bins = bins["bin1"].unique()
+    unique_bins = bins.stack().unique()  # type: ignore[operator]
+    # Remove -1 from unique_bins if present, as it indicates no bin assignment
+    unique_bins = unique_bins[unique_bins != -1]
     unique_events = data_batch["event_id"].unique()
-    bin_only = bins[["bin0", "bin1", "bin2"]]
+    bin_only = bins.copy()
+    bin_columns, primary_col = _bin_columns(bins)
+    secondary_cols = [col for col in bin_columns if col != primary_col]
     global_bin_mask = []
+    secondary_bin_mask = []
     for bin_id in range(max(unique_bins) + 1):
         mask = bin_only.eq(bin_id).any(axis=1)
         global_bin_mask.append(mask)
+        primary_mask = bin_only[primary_col].eq(bin_id).any(axis=1)
+        secondary_mask = mask & ~primary_mask
+        secondary_bin_mask.append(secondary_mask)
 
     padding_data_rows = []
     padding_bin_rows = []
@@ -411,33 +433,49 @@ def _add_padding(
             num_hits = len(hits_in_bin_)
             # Remove excess hits if there are more than target_hits
             if num_hits > target_hits:
-                # Too many hits - prioritize removing hits where bin1 != bin_id
-                bins_in_bin = bins.loc[hits_in_bin_.index]
-                primary_mask = bins_in_bin["bin1"] == bin_id
-                duplicate_indices = hits_in_bin_.index[~primary_mask].tolist()
+                # Too many hits: prioritize removing secondary (neighbor) hits whose primary
+                # bin differs from bin_id — they appear in this bin only via a secondary column.
+                secondary_mask = secondary_bin_mask[bin_id] & event_mask
+                duplicate_indices = data_batch.index[secondary_mask].tolist()
 
                 hits_to_remove_count = num_hits - target_hits
 
-                # Remove from duplicates first (from the start)
+                # Remove from secondary hits first (from the start)
                 if len(duplicate_indices) >= hits_to_remove_count:
-                    # Enough duplicates to remove
+                    # Enough secondary hits to remove
                     indices_to_modify = duplicate_indices[:hits_to_remove_count]
                     bins_subset = bins.loc[indices_to_modify]
 
-                    # Replace bin0 with bin1 where bin0 == bin_id
-                    bins.loc[indices_to_modify, "bin0"] = np.where(
-                        bins_subset["bin0"] == bin_id, bins_subset["bin1"], bins_subset["bin0"]
-                    )
-
-                    # Replace bin2 with bin1 where bin2 == bin_id
-                    bins.loc[indices_to_modify, "bin2"] = np.where(
-                        bins_subset["bin2"] == bin_id, bins_subset["bin1"], bins_subset["bin2"]
-                    )
+                    # Detach these secondary hits from bin_id: any secondary bin column that
+                    # points to bin_id is set back to the hit's primary bin value.
+                    for col in secondary_cols:
+                        bins.loc[indices_to_modify, col] = np.where(
+                            bins_subset[col] == bin_id, bins_subset[primary_col[0]], bins_subset[col]
+                        )
                 else:
-                    raise ValueError(
-                        f"Not enough hits to remove for Event {event_id}, Bin {bin_id}. "
-                        f"Consider adjusting max_hit_input or binning strategy."
+                    print(
+                        f"Not enough secondary hits to remove for Event {event_id}, Bin {bin_id}. "
+                        f"Need to remove {hits_to_remove_count} hits, but only "
+                        f"{len(duplicate_indices)} secondary hits available. "
+                        f"Removing excessive hits from the central (primary) bin instead."
                     )
+                    # 1) Detach all available secondary hits from bin_id (best effort).
+                    if len(duplicate_indices) > 0:
+                        indices_to_modify = duplicate_indices[:]
+                        bins_subset = bins.loc[indices_to_modify]
+                        for col in secondary_cols:
+                            bins.loc[indices_to_modify, col] = np.where(
+                                bins_subset[col] == bin_id, bins_subset[primary_col[0]], bins_subset[col]
+                            )
+
+                    # 2) Remove the remaining excess hits from the central (primary) bin by
+                    #    setting their bin assignment to -1, which drops them from every bin.
+                    remaining_to_remove = hits_to_remove_count - len(duplicate_indices)
+                    if remaining_to_remove > 0:
+                        primary_hits_mask = bin_only[primary_col].eq(bin_id).any(axis=1) & event_mask
+                        primary_indices = data_batch.index[primary_hits_mask].tolist()
+                        indices_to_remove = primary_indices[:remaining_to_remove]
+                        bins.loc[indices_to_remove, bin_columns] = -1
 
             # Add padding if there are fewer than target_hits
             elif num_hits < target_hits and num_hits > 0:
@@ -455,8 +493,9 @@ def _add_padding(
                         if col not in padding_data_row:
                             padding_data_row[col] = 0
 
-                    # Create corresponding padding bin row
-                    padding_bin_row = {"bin0": bin_id, "bin1": bin_id, "bin2": bin_id}
+                    # Create corresponding padding bin row: every bin column points to the
+                    # current bin, so the padding hit is primary to bin_id.
+                    padding_bin_row = {col: bin_id for col in bin_columns}
 
                     padding_data_rows.append(padding_data_row)
                     padding_bin_rows.append(padding_bin_row)
@@ -467,7 +506,6 @@ def _add_padding(
         padding_bins_df = pd.DataFrame(padding_bin_rows)
         data_batch = pd.concat([data_batch, padding_data_df], ignore_index=True)
         bins = pd.concat([bins, padding_bins_df], ignore_index=True)
-        print(f"    Added {len(padding_data_rows)} padding hits")
 
     return data_batch, bins
 
@@ -507,7 +545,7 @@ def _add_empty_hit(
             empty_row["particle_id"] = -2
             empty_row["is_padding"] = False
             empty_data_rows.append(empty_row)
-            empty_bin_rows.append({"bin0": bin_id, "bin1": bin_id, "bin2": bin_id})
+            empty_bin_rows.append({col: bin_id for col in bins.columns})
 
     num_empty = len(empty_data_rows)
     empty_data_df = pd.DataFrame(empty_data_rows)
@@ -549,12 +587,14 @@ def _create_padding_mask(
         padding_mask: tensor of shape [num_events, num_bins, max_hit_input]
             where True indicates padding positions.
     """
-    unique_bins = bins["bin1"].unique()
+    # Get unique bins and events
+    unique_bins = bins.stack().unique()  # type: ignore[operator]
+    # Remove -1 from unique_bins if present, as it indicates no bin assignment
+    unique_bins = unique_bins[unique_bins != -1]
     unique_events = data_batch["event_id"].unique()
-    bin_only = bins[["bin0", "bin1", "bin2"]]
     global_bin_mask = []
     for bin_id in range(max(unique_bins) + 1):
-        mask = bin_only.eq(bin_id).any(axis=1)
+        mask = bins.eq(bin_id).any(axis=1)
         global_bin_mask.append(mask)
 
     # Create padding mask tensor [num_events, num_bins, max_hit_input]
@@ -634,6 +674,15 @@ def _bin_data(data_batch: pd.DataFrame, cfg: PreprocessingConfig) -> Tuple[pd.Da
         bins, num_bins = neighbor_bin(data_batch[["phi"]], cfg.bin_width, phi_range)
     elif cfg.binning_strategy == "margin":
         bins, num_bins = margin_bin(data_batch[["phi"]], cfg.bin_width, cfg.binning_margin, phi_range)
+    elif cfg.binning_strategy == "Z_Phi":
+        bins, num_bins = neighbor_bin_Z_phi(
+            data_batch[["phi", "z", "r"]],
+            cfg.bin_width,
+            phi_range,
+            cfg.value_bins_eta,
+            cfg.binning_margin,
+            cfg.vertex_cuts[1],
+        )
     else:
         raise ValueError(f"Unknown binning strategy: {cfg.binning_strategy}")
 

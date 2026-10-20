@@ -1,6 +1,21 @@
+import math
+
+import numpy as np
 import pytest
 import pandas as pd
-from GUNTAM.Transformer.BinTensor import global_bin, neighbor_bin, no_bin, margin_bin
+import torch
+from GUNTAM.Transformer.BinTensor import (
+    global_bin,
+    global_bin_torch,
+    margin_bin,
+    margin_bin_torch,
+    neighbor_bin,
+    neighbor_bin_torch,
+    neighbor_bin_Z_phi,
+    neighbor_bin_Z_phi_torch,
+    no_bin,
+    no_bin_torch,
+)
 
 
 class TestNoBin:
@@ -238,3 +253,166 @@ class TestMarginBin:
         assert row["bin1"] == 4  # Last bin
         # Should be in end margin, so bin2 should be clipped to max
         assert row["bin2"] == 0
+
+
+class TestNeighborBinZPhi:
+    """Tests for the neighbor_bin_Z_phi function."""
+
+    PHI_RANGE = (-math.pi, math.pi)
+    BIN_WIDTH = math.pi / 2  # 4 phi bins
+    ETA_EDGES = [1.0, 2.0]
+    MARGIN = 0.1
+
+    def _call(self, hits: pd.DataFrame):
+        return neighbor_bin_Z_phi(hits, self.BIN_WIDTH, self.PHI_RANGE, self.ETA_EDGES, self.MARGIN)
+
+    def test_output_shape_and_num_bins(self):
+        """Test the number of output columns and the total number of bins."""
+        hits = pd.DataFrame({"phi": [0.1, -2.0, 3.0], "z": [0.0, 300.0, -500.0], "r": [150.0, 100.0, 200.0]})
+        bins_df, num_bins = self._call(hits)
+
+        # 4 phi bins * 2 eta bins * 2 sides
+        assert num_bins == 16
+        assert bins_df.shape == (3, 6 * len(self.ETA_EDGES))
+
+    def test_input_columns_unchanged(self):
+        """Test that the temporary eta columns are removed from the input."""
+        hits = pd.DataFrame({"phi": [0.1], "z": [0.0], "r": [150.0]})
+        self._call(hits)
+        assert list(hits.columns) == ["phi", "z", "r"]
+
+    def test_known_assignment(self):
+        """Test a hit with known eta values (eta_neg=0.881, eta_pos=-0.881)."""
+        hits = pd.DataFrame({"phi": [0.1], "z": [0.0], "r": [150.0]})
+        bins_df, _ = self._call(hits)
+
+        # phi bin 2; assigned to the first positive and the first negative Z slot only
+        expected = [1, 2, 3, -1, -1, -1, 9, 10, 11, -1, -1, -1]
+        assert bins_df.iloc[0].tolist() == expected
+
+    def test_hit_close_to_beam_assigned_to_all_slots(self):
+        """Test that a hit at z=0 with a small r falls in every Z slot."""
+        hits = pd.DataFrame({"phi": [0.1], "z": [0.0], "r": [10.0]})
+        bins_df, _ = self._call(hits)
+        assert (bins_df.iloc[0].values != -1).all()
+
+    def test_unassigned_entries_are_triplets(self):
+        """Test that each Z slot is either fully assigned or fully -1."""
+        rng = np.random.default_rng(0)
+        hits = pd.DataFrame(
+            {
+                "phi": rng.uniform(-math.pi, math.pi, 200),
+                "z": rng.uniform(-1000, 1000, 200),
+                "r": rng.uniform(30, 1000, 200),
+            }
+        )
+        bins_df, num_bins = self._call(hits)
+        slots = bins_df.values.reshape(200, -1, 3)
+        assigned = (slots != -1).all(axis=2)
+        unassigned = (slots == -1).all(axis=2)
+        assert (assigned | unassigned).all()
+        assert (slots[assigned] < num_bins).all()
+
+    def test_eta_bins_are_sorted(self):
+        """Test that the order of the eta edges does not matter."""
+        hits = pd.DataFrame({"phi": [0.1, 1.0], "z": [0.0, 200.0], "r": [150.0, 50.0]})
+        ref, _ = self._call(hits.copy())
+        shuffled, _ = neighbor_bin_Z_phi(hits.copy(), self.BIN_WIDTH, self.PHI_RANGE, list(reversed(self.ETA_EDGES)), self.MARGIN)
+        pd.testing.assert_frame_equal(ref, shuffled)
+
+
+def _random_values(n: int = 500, seed: int = 0) -> np.ndarray:
+    """Random 1D values, some outside of the [-4, 4] range to check the clipping."""
+    rng = np.random.default_rng(seed)
+    return rng.uniform(-4.8, 4.8, n)
+
+
+class TestTorchMatchesPandas:
+    """The torch implementations must give the same bins as the pandas ones.
+
+    Bin widths evenly divide the range, as the pandas global_bin splits the range in equal bins
+    while the torch one uses bin_width directly.
+    """
+
+    VALUE_RANGE = (-4.0, 4.0)
+    PHI_RANGE = (-math.pi, math.pi)
+
+    def test_no_bin(self):
+        values = _random_values()
+        ref, n_ref = no_bin(pd.DataFrame({"value": values}))
+        out, n_out = no_bin_torch(torch.tensor(values))
+
+        assert n_ref == n_out
+        assert np.array_equal(ref.values, out.numpy())
+
+    @pytest.mark.parametrize("bin_width", [0.25, 0.5, 1.0, 2.0])
+    def test_global_bin(self, bin_width):
+        values = _random_values()
+        ref, n_ref = global_bin(pd.DataFrame({"value": values}), bin_width, self.VALUE_RANGE)
+        out, n_out = global_bin_torch(torch.tensor(values), bin_width, self.VALUE_RANGE)
+
+        assert n_ref == n_out
+        assert out.dtype == torch.long
+        assert np.array_equal(ref.values, out.numpy())
+
+    @pytest.mark.parametrize("bin_width", [0.25, 0.5, 1.0, 2.0])
+    def test_neighbor_bin(self, bin_width):
+        values = _random_values()
+        ref, n_ref = neighbor_bin(pd.DataFrame({"value": values}), bin_width, self.VALUE_RANGE)
+        out, n_out = neighbor_bin_torch(torch.tensor(values), bin_width, self.VALUE_RANGE)
+
+        assert n_ref == n_out
+        assert np.array_equal(ref.values, out.numpy())
+
+    @pytest.mark.parametrize("bin_width, margin", [(0.5, 0.1), (1.0, 0.2), (2.0, 0.9)])
+    def test_margin_bin(self, bin_width, margin):
+        values = _random_values()
+        ref, n_ref = margin_bin(pd.DataFrame({"value": values}), bin_width, margin, self.VALUE_RANGE)
+        out, n_out = margin_bin_torch(torch.tensor(values), bin_width, margin, self.VALUE_RANGE)
+
+        assert n_ref == n_out
+        assert np.array_equal(ref.values, out.numpy())
+
+    @pytest.mark.parametrize("bin_width", [math.pi / 4, math.pi / 2])
+    @pytest.mark.parametrize("eta_edges", [[0.4, 0.9, 1.4, 2.5, 4.0], [1.0, 2.0]])
+    def test_neighbor_bin_Z_phi(self, bin_width, eta_edges):
+        rng = np.random.default_rng(1)
+        n = 2000
+        hits = pd.DataFrame(
+            {
+                "phi": rng.uniform(-math.pi, math.pi, n),
+                "z": rng.uniform(-3000, 3000, n),
+                "r": rng.uniform(30, 1000, n),
+            }
+        )
+        ref, n_ref = neighbor_bin_Z_phi(hits.copy(), bin_width, self.PHI_RANGE, eta_edges, 0.05)
+        out, n_out = neighbor_bin_Z_phi_torch(
+            torch.tensor(hits[["phi", "z", "r"]].values), bin_width, self.PHI_RANGE, eta_edges, 0.05
+        )
+
+        assert n_ref == n_out
+        assert out.shape == ref.shape
+        assert np.array_equal(ref.values, out.numpy())
+
+    def test_neighbor_bin_Z_phi_unsorted_edges_and_custom_threshold(self):
+        rng = np.random.default_rng(2)
+        n = 1000
+        hits = pd.DataFrame(
+            {
+                "phi": rng.uniform(-math.pi, math.pi, n),
+                "z": rng.uniform(-1000, 1000, n),
+                "r": rng.uniform(30, 1000, n),
+            }
+        )
+        edges = [2.5, 0.4, 1.4]
+        ref, n_ref = neighbor_bin_Z_phi(hits.copy(), math.pi / 4, self.PHI_RANGE, edges, 0.1, Z_threashold=100)
+        out, n_out = neighbor_bin_Z_phi_torch(
+            torch.tensor(hits[["phi", "z", "r"]].values), math.pi / 4, self.PHI_RANGE, edges, 0.1, Z_threashold=100
+        )
+
+        assert n_ref == n_out
+        assert np.array_equal(ref.values, out.numpy())
+
+    def test_neighbor_bin_Z_phi_torch_invalid_shape(self):
+        with pytest.raises(ValueError, match="Input values must have shape \\[N, 3\\]"):
+            neighbor_bin_Z_phi_torch(torch.zeros(5, 2), 0.5, self.PHI_RANGE, [1.0], 0.1)
