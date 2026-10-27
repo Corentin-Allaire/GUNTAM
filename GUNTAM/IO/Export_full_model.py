@@ -198,9 +198,10 @@ def main() -> None:
     if classifier is not None:
         with torch.no_grad():
             _, triplets = transformer(binned_hits[..., :6], padding_mask.squeeze(-1), args.width)
-            unique_chains, _ = model.reconstruct_seed_triplets(
+            chains_orig, scores = model.reconstruct_seed_triplets(
                 binned_hits, padding_mask, triplets, max_chain_length=args.max_seed_length
             )
+            unique_chains, _ = model.dedupe_chains(chains_orig, scores)
             seed_features = build_seed_features_tensor(
                 hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
             )

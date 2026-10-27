@@ -18,7 +18,6 @@ import argparse
 import glob
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -281,58 +280,47 @@ def _benchmark_parallel_pytorch(
     events: list[torch.Tensor],
     device: torch.device,
     warmup: int,
-    nb_workers: int = 4,
+    nb_events: int = 4,
 ) -> dict[str, Any]:
     """
-    Run warmup, then `nb_workers` concurrent workers over all events and measure wall-clock throughput.
+    Run warmup, then process `nb_events` copies of `events` in a single batched
+    model call and measure wall-clock throughput.
 
-    Each worker independently runs inference over the full `events` list on a
-    shared thread pool, so this measures aggregate throughput under
-    concurrent load rather than single-stream latency.
 
     Args:
         model: SeedReconstructionModel to benchmark, already moved to `device`.
         events: List of per-event hit tensors (shape [N, 3]) to run inference on.
         device: Device inference is run on; used to trigger the appropriate
             synchronization primitive before timing.
-        warmup: Number of untimed passes over all events run before timing,
+        warmup: Number of untimed passes over the full batch run before timing,
             used to stabilize JIT/kernel caches before measurement.
-        nb_workers: Number of concurrent worker threads, each processing the
-            full `events` list once.
+        nb_events: Number of times `events` is replicated to build the batch,
+            mirroring the total event count of the former thread-based benchmark.
 
     Returns:
         Dict with keys:
-            events: Total number of events processed across all workers.
-            seeds: Total number of seeds reconstructed across all workers.
-            mean_time: Wall-clock time (seconds) for all workers to complete.
+            events: Total number of events processed in the batch.
+            seeds: Total number of seeds reconstructed across the batch.
+            mean_time: Wall-clock time (seconds) for the batched call to complete.
             event_rate: Aggregate event throughput (events/second).
     """
+    batch = [event.to(device) for event in events] * nb_events
+
     with torch.no_grad():
         for _ in range(warmup):
-            for event in events:
-                model(event.to(device))
+            model.forward_multi_events(batch)
 
-    def _run_worker() -> int:
-        seed_count = 0
-        with torch.no_grad():
-            for event in events:
-                seeds, _ = model(event.to(device))
-                seed_count += int(seeds.shape[0])
-        return seed_count
+    with torch.no_grad():
+        start = time.perf_counter()
+        per_event_results = model.forward_multi_events(batch)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elif device.type == "mps":
+            torch.mps.synchronize()
+        elapsed = time.perf_counter() - start
 
-    start = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=nb_workers) as executor:
-        futures = [executor.submit(_run_worker) for _ in range(nb_workers)]
-        seed_counts = [future.result() for future in futures]
-
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-    elif device.type == "mps":
-        torch.mps.synchronize()
-    elapsed = time.perf_counter() - start
-
-    total_events = len(events) * nb_workers
-    total_seeds = sum(seed_counts)
+    total_events = len(batch)
+    total_seeds = sum(int(seeds.shape[0]) for seeds, _ in per_event_results)
     event_rate = total_events / elapsed if elapsed > 0 else 0.0
 
     return {
@@ -620,7 +608,7 @@ def main() -> None:
             events=non_empty_events,
             device=device,
             warmup=args.warmup,
-            nb_workers=args.repeat,
+            nb_events=args.repeat,
         )
 
     print("Inference completed.")
