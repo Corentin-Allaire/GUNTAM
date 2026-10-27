@@ -3,7 +3,7 @@ import onnxruntime as ort
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import Tuple
+from typing import List, Tuple
 
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
 from GUNTAM.Seed.Config.SeedConfig import SeedConfig
@@ -187,6 +187,49 @@ class SeedReconstructionModel(nn.Module):
 
         return binned, mask, flat_hits
 
+    def bin_and_pad_batch(self, events: List[Tensor]) -> Tuple[Tensor, Tensor, List[Tensor], int]:
+        """
+        Bin and pad several events independently, then stack their bins into a single
+        batch dimension so the transformer and beam search can process all events in one call.
+        Args:
+            - events (List[Tensor]): One raw hit tensor of shape [N_e, 3] (columns x, y, z) per event.
+        Returns:
+            - binned_hits (Tensor): Shape [num_events * num_bins, max_hit_input, 7], events concatenated
+              along dim 0 in the same order as `events`.
+            - padding_mask (Tensor): Shape [num_events * num_bins, max_hit_input, 1], matching `binned_hits`.
+            - flat_hits (List[Tensor]): Per-event flat hit tensor (as returned by `bin_and_pad`), needed to
+              build seed features with event-local hit indices.
+            - bins_per_event (int): Number of bins per event; every event yields the same count since it is
+              only a function of the (fixed) binning configuration, not of the data.
+        """
+        if not events:
+            raise ValueError("No events provided to bin_and_pad_batch().")
+
+        binned_list: List[Tensor] = []
+        mask_list: List[Tensor] = []
+        flat_hits_list: List[Tensor] = []
+        bins_per_event: int | None = None
+
+        for event_hits in events:
+            binned, mask, flat_hits = self.bin_and_pad(event_hits)
+            if bins_per_event is None:
+                bins_per_event = binned.shape[0]
+            elif binned.shape[0] != bins_per_event:
+                raise ValueError(
+                    f"Inconsistent number of bins across events ({binned.shape[0]} != {bins_per_event}); "
+                    "binning configuration must be identical for all events in a batch."
+                )
+            binned_list.append(binned)
+            mask_list.append(mask)
+            flat_hits_list.append(flat_hits)
+
+        assert bins_per_event is not None  # events is non-empty, so the loop above ran at least once
+
+        binned_hits = torch.cat(binned_list, dim=0)
+        padding_mask = torch.cat(mask_list, dim=0)
+
+        return binned_hits, padding_mask, flat_hits_list, bins_per_event
+
     def reconstruct_seed_triplets(
         self,
         binned_hits: Tensor,
@@ -198,20 +241,22 @@ class SeedReconstructionModel(nn.Module):
         backward: bool = False,
     ) -> Tuple[Tensor, Tensor]:
         """
-        Reconstruct 3-hit seed triplets from the sparse edge tensor produced by the transformer
-        Then turn bin-local edge triplets into deduplicated seed chains expressed in original hit indices.
-        Shared by `forward()` and `run_onnx_inference().
+        Reconstruct raw seed chains from the sparse edge tensor produced by the transformer: run
+        beam search per bin, then map bin-local edge triplets to original hit indices.
+        Shared by `forward()` and `run_onnx_inference()`.
         Args:
-            - binned_hits (Tensor): Binned and padded hits from `bin_and_pad`, shape [num_bins, max_hit_input, 7].
-            - padding_mask (Tensor): Padding mask from `bin_and_pad`, shape [num_bins, max_hit_input, 1].
+            - binned_hits (Tensor): Binned and padded hits from `bin_and_pad`/`bin_and_pad_batch`,
+              shape [num_bins, max_hit_input, 7] (or [num_events * num_bins, max_hit_input, 7] for a batch).
+            - padding_mask (Tensor): Padding mask matching `binned_hits`, shape [num_bins, max_hit_input, 1].
             - triplets (Tensor): Shape [B, N, width, 3] — sparse edge tensor, columns (source_idx, target_idx, score).
             - att_threshold (float): Minimum attention score to consider an edge (default: 0.2).
             - beam_width (int): Number of beams per starting hit (default: 5).
             - max_chain_length (int): Maximum number of hits per seed chain (default: 3).
-            - backward (bool): If True, extend chains to smaller indices (default:
+            - backward (bool): If True, extend chains to smaller indices (default: False).
         Returns:
-            - unique_chains (Tensor): Shape [S, seed_nb] — deduplicated seed chains in original hit indices.
-            - best_scores (Tensor): Shape [S] — best average edge score for each unique chain.
+            - chains_orig (Tensor): Shape [bin_nb, nb_max_hit, seed_nb], -1-padded, original hit
+              indices (not yet deduplicated or split by event).
+            - scores (Tensor): Shape [bin_nb, nb_max_hit], best average edge score per starting hit.
         """
         valid_mask = (~padding_mask.bool()).squeeze(-1)  # [B, N_bin]
         chains, _, scores = Reconstruction.batched_beam_search_seed_reconstruction(
@@ -244,6 +289,43 @@ class SeedReconstructionModel(nn.Module):
         # Fill invalid hits slots with -1 (padding)
         chains_orig = chains_orig.masked_fill(~mask, -1)
 
+        return chains_orig, scores
+
+    def split_by_event(self, chains_orig: Tensor, scores: Tensor, bins_per_event: int) -> List[Tuple[Tensor, Tensor]]:
+        """
+        Split raw per-bin seed chains/scores into per-event chunks, undoing the concatenation
+        performed by `bin_and_pad_batch()`.
+        Args:
+            - chains_orig (Tensor): Shape [bin_nb, nb_max_hit, seed_nb], as returned by `reconstruct_seed_triplets()`.
+            - scores (Tensor): Shape [bin_nb, nb_max_hit], as returned by `reconstruct_seed_triplets()`.
+            - bins_per_event (int): Number of bins per event; `bin_nb` must be a multiple of it.
+        Returns:
+            List of `(chains_orig_e, scores_e)` pairs, one per event, in concatenation order.
+        """
+        bin_nb = chains_orig.shape[0]
+        if bin_nb % bins_per_event != 0:
+            raise ValueError(f"bin_nb ({bin_nb}) is not a multiple of bins_per_event ({bins_per_event}).")
+        num_events = bin_nb // bins_per_event
+
+        chains_by_event = chains_orig.view(num_events, bins_per_event, *chains_orig.shape[1:])
+        scores_by_event = scores.view(num_events, bins_per_event, *scores.shape[1:])
+
+        return [(chains_by_event[e], scores_by_event[e]) for e in range(num_events)]
+
+    def dedupe_chains(self, chains_orig: Tensor, scores: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Deduplicate bin-local seed chains already expressed in original hit indices, keeping the
+        score of the first occurrence of each unique chain. Shared by single-event and per-event
+        (batched) reconstruction paths.
+        Args:
+            - chains_orig (Tensor): Shape [bin_nb, nb_max_hit, seed_nb], -1-padded, original hit indices.
+            - scores (Tensor): Shape [bin_nb, nb_max_hit], best average edge score per starting hit.
+        Returns:
+            - unique_chains (Tensor): Shape [S, seed_nb] — deduplicated seed chains.
+            - best_scores (Tensor): Shape [S] — score of the first occurrence of each unique chain.
+        """
+        seed_nb = chains_orig.shape[-1]
+
         # Keep only valid seeds (beam search already excluded padding) then deduplicate
         chains_flat = chains_orig.reshape(-1, seed_nb)  # [bin_nb*N_bin, seed_nb]
         scores_flat = scores.reshape(-1)  # [bin_nb*N_bin]
@@ -256,43 +338,94 @@ class SeedReconstructionModel(nn.Module):
 
         return unique_chains, scores_flat[first]
 
-    def forward(self, hits: Tensor) -> tuple[Tensor, Tensor]:
+    def classify_seeds(
+        self,
+        flat_hits_list: List[Tensor],
+        per_event_chains_scores: List[Tuple[Tensor, Tensor]],
+        classifier_fn,
+    ) -> List[Tuple[Tensor, Tensor]]:
         """
-        Forward pass of the full seed-reconstruction model.
+        Classify candidate seeds for several events in a single classifier call.
+        Seed features must be built per event (seed indices are event-local, so each event
+        needs its own `flat_hits`).
         Args:
-            - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
+            - flat_hits_list (List[Tensor]): Per-event flat hit tensor, as returned by `bin_and_pad_batch`.
+            - per_event_chains_scores (List[Tuple[Tensor, Tensor]]): Per-event `(unique_chains, best_scores)`,
+              as returned by `dedupe_chains()` after splitting with `split_by_event()`.
+            - classifier_fn (Callable[[Tensor], Tuple[Tensor, Tensor]]): Takes the concatenated
+              [S_total, input_shape] seed-feature tensor and returns `(keep_mask, classifier_scores)`.
         Returns:
-            - signal: Long tensor of shape [number of classified true seeds, 3] containing the original
-            input hit indices of all candidate seeds
-            predicted as true seeds by the classifier. Each row corresponds to one reconstructed seed.
-            - signal_scores: Float tensor of shape [number of classified true seeds] containing the classifier confidence score
-            associated with each reconstructed seed. The i-th
-            score corresponds to the i-th seed in `signal` and represents the predicted probability that this seed is a true seed.
+            List of `(signal, signal_scores)` pairs, one per event, in the same order as `flat_hits_list`.
         """
-        binned_hits, padding_mask, flat_hits = self.bin_and_pad(hits)
-        # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
-        _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
-        unique_chains, best_scores = self.reconstruct_seed_triplets(
-            binned_hits, padding_mask, triplets, max_chain_length=self.max_seed_length
-        )
-
-        if self.classifier is None:
-            signal = unique_chains
-            signal_scores = best_scores
-
-        else:
+        seed_features_list: List[Tensor] = []
+        seed_counts: List[int] = []
+        for flat_hits, (chains, _) in zip(flat_hits_list, per_event_chains_scores):
             seed_features = build_seed_features_tensor(
-                hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
+                hits_tensor=flat_hits, seed_tensor=chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
             )
             # Flatten per-point features [N, 3, X] into per-seed features [N, 3*X]
             if seed_features.dim() == 3:
                 seed_features = seed_features.reshape(seed_features.shape[0], -1)
+            seed_features_list.append(seed_features)
+            seed_counts.append(seed_features.shape[0])
 
-            keep_mask, classifier_scores = self.classifier(seed_features, nb_hits_features=7)
-            signal = unique_chains[keep_mask]
-            signal_scores = classifier_scores[keep_mask]
+        keep_mask, classifier_scores = classifier_fn(torch.cat(seed_features_list, dim=0))
 
-        return signal, signal_scores
+        results: List[Tuple[Tensor, Tensor]] = []
+        start = 0
+        for chains, _ in per_event_chains_scores:
+            count = chains.shape[0]
+            event_keep = keep_mask[start : start + count]
+            results.append((chains[event_keep], classifier_scores[start : start + count][event_keep]))
+            start += count
+
+        return results
+
+    def forward(self, hits: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Reconstruct seeds for a single event. Thin wrapper around `forward_multi_events()`;
+        see that method to batch several events into one transformer/beam-search call.
+        Args:
+            - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
+        Returns:
+            - signal: Long tensor of shape [number of classified true seeds, 3] containing the
+              original input hit indices of all candidate seeds predicted as true seeds by the
+              classifier. Each row corresponds to one reconstructed seed.
+            - signal_scores: Float tensor of shape [number of classified true seeds] containing
+              the classifier confidence score for each seed in `signal`.
+        """
+        return self.forward_multi_events([hits])[0]
+
+    def forward_multi_events(self, events: List[Tensor]) -> List[Tuple[Tensor, Tensor]]:
+        """
+        Reconstruct seeds for several events in a single call, stacking their bins along the
+        batch dimension so the transformer and beam search run once across all events.
+        Args:
+            - events (List[Tensor]): One raw flat hit tensor of shape [N_e, 3] (columns x, y, z)
+              per event.
+        Returns:
+            List of `(signal, signal_scores)` pairs, one per event, in the same order as `events`;
+            see `forward()` for the meaning of each pair.
+        """
+        binned_hits, padding_mask, flat_hits_list, bins_per_event = self.bin_and_pad_batch(events)
+        # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
+        _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
+        chains_orig, scores = self.reconstruct_seed_triplets(
+            binned_hits, padding_mask, triplets, max_chain_length=self.max_seed_length
+        )
+        # With a single event there is nothing to split: skip the (no-op) reshape.
+        if len(events) == 1:
+            per_event_raw = [(chains_orig, scores)]
+        else:
+            per_event_raw = self.split_by_event(chains_orig, scores, bins_per_event)
+        per_event_chains_scores = [self.dedupe_chains(chains_e, scores_e) for chains_e, scores_e in per_event_raw]
+
+        if self.classifier is None:
+            return per_event_chains_scores
+
+        return self.classify_seeds(
+            flat_hits_list, per_event_chains_scores, lambda feats: self.classifier(feats, nb_hits_features=7)
+        )
 
     def run_onnx_inference(
         self,
@@ -300,14 +433,11 @@ class SeedReconstructionModel(nn.Module):
         transformer_path: str,
         classifier_path: str | None,
         device: torch.device | None = None,
-    ) -> tuple[Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor]:
         """
-        Run the same pipeline as `forward()`, but executing the transformer (and, if a
-        classifier ONNX model is provided, the classifier) through ONNX Runtime instead
-        of the PyTorch modules, using `IOBinding` so tensors stay on-device.
-        Binning, beam-search reconstruction and seed-feature building still
-        run in PyTorch. Sessions are cached on `self` and only rebuilt when the requested
-        path or device changes.
+        Reconstruct seeds for a single event via ONNX Runtime. Thin wrapper around
+        `run_onnx_inference_multi_events()`; see that method to batch several events into
+        one ONNX call.
         Args:
             - hits (Tensor): Raw flat hit tensor of shape [N, 3] with columns (x, y, z).
             - transformer_path (str): Path to the exported transformer ONNX model.
@@ -320,7 +450,34 @@ class SeedReconstructionModel(nn.Module):
         Returns:
             Same as `forward()`: `(signal, signal_scores)`.
         """
+        return self.run_onnx_inference_multi_events([hits], transformer_path, classifier_path, device=device)[0]
 
+    def run_onnx_inference_multi_events(
+        self,
+        events: List[Tensor],
+        transformer_path: str,
+        classifier_path: str | None,
+        device: torch.device | None = None,
+    ) -> List[Tuple[Tensor, Tensor]]:
+        """
+        Run the same pipeline as `forward_multi_events()`, but executing the transformer (and,
+        if a classifier ONNX model is provided, the classifier) through ONNX Runtime instead of
+        the PyTorch modules, using `IOBinding` so tensors stay on-device. Binning, beam-search
+        reconstruction and seed-feature building still run in PyTorch. Sessions are cached on
+        `self` and only rebuilt when the requested path or device changes.
+        Args:
+            - events (List[Tensor]): One raw flat hit tensor of shape [N_e, 3] (columns x, y, z)
+              per event.
+            - transformer_path (str): Path to the exported transformer ONNX model.
+            - classifier_path (str | None): Path to the exported classifier ONNX model.
+                If None, every candidate seed is kept, mirroring `forward_multi_events()` when
+                `self.classifier` is None.
+            - device (torch.device | None): Device to run ONNX Runtime on; selects the
+                CUDA execution provider when available, otherwise falls back to CPU.
+                Defaults to `self.device_acc`.
+        Returns:
+            Same as `forward_multi_events()`: a list of `(signal, signal_scores)` pairs, one per event.
+        """
         device = device if device is not None else self.device_acc
         providers = onnx_providers(device)
         ort_device_type = "cuda" if device.type == "cuda" else "cpu"
@@ -336,9 +493,8 @@ class SeedReconstructionModel(nn.Module):
             self._classifier_onnx_session = ort.InferenceSession(classifier_path, providers=providers)
             self._classifier_onnx_path = classifier_path
 
-        binned_hits, padding_mask, flat_hits = self.bin_and_pad(hits)
+        binned_hits, padding_mask, flat_hits_list, bins_per_event = self.bin_and_pad_batch(events)
         # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
-        print(f"Shape of binned_hits: {binned_hits.shape}, padding_mask: {padding_mask.shape}")
         _, triplets = run_onnx_iobinding(
             self._transformer_onnx_session,
             [binned_hits[..., :6].float(), padding_mask.squeeze(-1)],
@@ -346,32 +502,29 @@ class SeedReconstructionModel(nn.Module):
             ort_device_id,
             {"width": torch.tensor(5, dtype=torch.int64)},
         )
-        triplets = triplets.to(hits.device)
+        triplets = triplets.to(binned_hits.device)
 
-        unique_chains, best_scores = self.reconstruct_seed_triplets(
+        chains_orig, scores = self.reconstruct_seed_triplets(
             binned_hits, padding_mask, triplets, max_chain_length=self.max_seed_length
         )
+        # With a single event there is nothing to split: skip the (no-op) reshape.
+        if len(events) == 1:
+            per_event_raw = [(chains_orig, scores)]
+        else:
+            per_event_raw = self.split_by_event(chains_orig, scores, bins_per_event)
+        per_event_chains_scores = [self.dedupe_chains(chains_e, scores_e) for chains_e, scores_e in per_event_raw]
 
         if classifier_path is None:
-            return unique_chains, best_scores
+            return per_event_chains_scores
 
-        seed_features = build_seed_features_tensor(
-            hits_tensor=flat_hits, seed_tensor=unique_chains, feature_indices=[0, 1, 2, 3, 4, 5], cosine_feature_indices=[4]
-        )
-        if seed_features.dim() == 3:
-            seed_features = seed_features.reshape(seed_features.shape[0], -1)
+        def _classifier_fn(seed_features: Tensor) -> Tuple[Tensor, Tensor]:
+            keep_mask, classifier_scores = run_onnx_iobinding(
+                self._classifier_onnx_session,
+                [seed_features.float()],
+                ort_device_type,
+                ort_device_id,
+                {"nb_hits_features": torch.tensor(7, dtype=torch.int64)},
+            )
+            return keep_mask.to(seed_features.device).bool(), classifier_scores.to(seed_features.device)
 
-        keep_mask, classifier_scores = run_onnx_iobinding(
-            self._classifier_onnx_session,
-            [seed_features.float()],
-            ort_device_type,
-            ort_device_id,
-            {"nb_hits_features": torch.tensor(7, dtype=torch.int64)},
-        )
-        keep_mask = keep_mask.to(hits.device).bool()
-        classifier_scores = classifier_scores.to(hits.device)
-
-        signal = unique_chains[keep_mask]
-        signal_scores = classifier_scores[keep_mask]
-
-        return signal, signal_scores
+        return self.classify_seeds(flat_hits_list, per_event_chains_scores, _classifier_fn)
