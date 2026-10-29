@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Callable, Dict
 import torch
 import torch.nn.functional as F
 
@@ -391,6 +391,7 @@ def reconstruction_loss(
         {'z': loss_z, 'eta': loss_eta, 'phi': loss_phi, 'pt': loss_pt}
     """
     device = reconstructed_particle.device
+    loss_function: Callable[..., torch.Tensor]
     if loss_type == "MSE":
         loss_function = F.mse_loss
     elif loss_type == "L1":

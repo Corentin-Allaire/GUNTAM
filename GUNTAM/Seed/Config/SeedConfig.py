@@ -31,6 +31,8 @@ class SeedConfig:
             - no_test: bool: Skip testing/evaluation phase after training
             - resume_training: bool: Resume training from an existing model checkpoint
             - device_acc: torch.device: The device to use (cpu/gpu)
+            - profile: bool: Record a torch profiler trace during training
+            - profile_dir: str: Output directory for the profiler traces
 
             - loss_components: list[str]: Active loss components (e.g., 'cosine', 'MSE', 'attention')
             - loss_weights: list[float]: Corresponding weights for each loss component
@@ -79,6 +81,8 @@ class SeedConfig:
         self.resume_training = False
         self.timing_enabled = False  # Timing measurements during training/testing
         self.write_seed_tensor = False  # Write seed feature tensors to disk after evaluation
+        self.profile = False  # Record a torch profiler trace during training
+        self.profile_dir = "profiler_logs"  # Output directory for the profiler traces
 
     def parse_args(self):
         """
@@ -174,6 +178,17 @@ class SeedConfig:
             "--write_seed_tensor",
             action="store_true",
             help="Write seed feature tensors and labels to disk after evaluation",
+        )
+        parser.add_argument(
+            "--profile",
+            action="store_true",
+            help="Record a torch profiler trace of a few training steps",
+        )
+        parser.add_argument(
+            "--profile_dir",
+            type=str,
+            default=self.profile_dir,
+            help="Output directory for the profiler traces",
         )
         parser.add_argument(
             "--reconstruction_method",
@@ -282,6 +297,8 @@ class SeedConfig:
         self.batch_size = args.batch_size
         self.timing_enabled = args.timing_enabled
         self.write_seed_tensor = args.write_seed_tensor
+        self.profile = args.profile
+        self.profile_dir = args.profile_dir
         self.reconstruction_method = args.reconstruction_method
         self.radial_separation_constraint = args.radial_separation_constraint
         self.min_delta_rho_mm = args.min_delta_rho_mm
@@ -501,6 +518,7 @@ class SeedConfig:
         print("Device: ", self.device_acc)
         print("Cuda available: ", torch.cuda.is_available())
         print("Timing enabled: ", self.timing_enabled)
+        print("Profiler enabled: ", self.profile)
         print("Reconstruction method: ", self.reconstruction_method if self.reconstruction_method else "auto (from loss config)")
         print("Radial separation constraint: ", self.radial_separation_constraint)
         print("Min delta rho (mm): ", self.min_delta_rho_mm)

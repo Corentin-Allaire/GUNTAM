@@ -5,6 +5,7 @@ import math
 import torch
 import time
 import numpy as np
+from torch.profiler import profile, schedule, ProfilerActivity, tensorboard_trace_handler, record_function
 from typing import List, Optional, Dict, Any
 from torch.utils.tensorboard import SummaryWriter
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
@@ -97,6 +98,21 @@ def train_model(
         scheduler.step()
         print(f"Initial learning rate: {scheduler.get_last_lr()}")
 
+    prof = None
+    if cfg.profile:
+        activities = [ProfilerActivity.CPU]
+        if torch.cuda.is_available():
+            activities.append(ProfilerActivity.CUDA)
+        prof = profile(
+            activities=activities,
+            schedule=schedule(wait=10, warmup=5, active=10, repeat=1),
+            on_trace_ready=tensorboard_trace_handler(cfg.profile_dir),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        )
+        prof.start()
+
     for epoch in range(start_epoch, start_epoch + epoch_nb):
         ts_print("Epoch: ", epoch)
         entry = 0
@@ -162,8 +178,9 @@ def train_model(
                         batch_loss = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
 
                         # Perform the hit embedding for all bins in one forward pass
-                        embedded_hits = model.embedding(batched_hits)
-                        encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
+                        with record_function("forward"):
+                            embedded_hits = model.embedding(batched_hits)
+                            encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
 
                         # Process each bin's results for pair-based losses
                         for idx_in_batch, bin_idx in enumerate(batch_bin_indices):
@@ -214,10 +231,14 @@ def train_model(
 
                         # Apply gradients once per batch of bins (for training)
                         if status == "Training":
-                            optimiser.zero_grad()
-                            accumulated_loss.backward()
-                            optimiser.step()
+                            with record_function("backward_step"):
+                                optimiser.zero_grad()
+                                accumulated_loss.backward()
+                                optimiser.step()
                             accumulated_loss = torch.tensor(0.0, device=cfg.device_acc, requires_grad=True)
+
+                        if prof is not None:
+                            prof.step()
 
                 # Average the losses across valid bins
                 if num_valid_bins > 0:
@@ -278,6 +299,9 @@ def train_model(
             print(f"Saved backup checkpoint to {backup_path}")
         if optimiser and scheduler:
             scheduler.step()
+
+    if prof is not None:
+        prof.stop()
 
     return model
 
