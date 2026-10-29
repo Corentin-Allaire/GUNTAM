@@ -1,4 +1,3 @@
-from GUNTAM.Seed.Config.SeedConfig import SeedConfig
 from GUNTAM.Monitoring.PermutationMetricEvaluator import validate_function
 from GUNTAM.Monitoring.PermutationImportances import config_model_dataset
 
