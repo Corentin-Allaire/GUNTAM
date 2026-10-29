@@ -20,23 +20,27 @@ class SeedReconstructionModel(nn.Module):
     This is not meant for use in training, but rather as a standalone inference module.
     It implements:
         - Binning of input hits into a fixed-size sequence (with padding and masking).
-        - Creation of adjacency matrix using a transformer encoder and a matching attention layer.
-        - Reconstruction of seeds by selecting top-k connections for each hit based on attention scores.
-        - To be added : Seed parameters regression and classification
+        - Creation of an adjacency (edge) representation using a transformer encoder.
+        - Reconstruction of seeds by running a beam search per starting hit over the edge scores.
+        - Optional classification of candidate seeds via a ``SeedClassifier``.
+        - To be added : Seed parameters regression.
 
     Attributes:
-        - transformer (TransformerEncoder): Transformer encoder operating on embedded hits.
-        - fourier_encoding (FourierPositionalEncoding): Fourier-based positional encoder for hit coordinates.
-        - embedding_projection (nn.Linear): Linear layer projecting encoded features to `dim_embedding`.
-        - matching_attention (MultiHeadAttention): Attention module producing matching scores and weights.
+        - transformer (SeedTransformer): Transformer module producing the sparse edge (triplet) tensor.
+        - classifier (SeedClassifier | None): Optional classifier instance used to filter candidate seeds.
         - cfg (SeedConfig): Full architecture configuration.
         - device_acc (torch.device): Device on which the model's parameters are allocated.
 
     Args:
-        - transformer_config (TransformerConfig): Architecture configuration object.
+        - transformer_config (SeedConfig): Architecture configuration object.
         - transformer (SeedTransformer): Transformer instance.
         - classifier (SeedClassifier | None): Optional classifier instance.
         - device_acc (torch.device, optional): Device to run the model on. Defaults to cpu.
+        - width (int): Number of candidate edges kept per hit fed to the transformer (default: 5).
+        - max_seed_length (int): Maximum number of hits per reconstructed seed (default: 3).
+        - radial_separation_constraint (bool): Enable the minimum radial-separation filter (default: True).
+        - min_delta_rho_mm (float): Minimum 3D radial separation between consecutive seed hits, in mm (default: 5.0).
+        - raw_chain_length (int): Maximum chain length searched before trimming to ``max_seed_length`` (default: 5).
     """
 
     def __init__(

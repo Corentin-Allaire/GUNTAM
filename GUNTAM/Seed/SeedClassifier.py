@@ -63,8 +63,10 @@ class SeedClassifier(nn.Module):
         Forward pass of the classifier network.
         Args:
             - x (Tensor): Input features for a batch of seeds.
+            - nb_hits_features (int): Number of features per hit used by `prepare_seed_features` (default: 7).
         Returns:
-            - out (Tensor): Class logits (use `seed_classification` to get probabilities/keep mask).
+            - keep_mask (Tensor): Boolean mask, True for seeds with a score >= `self.threshold`.
+            - scores (Tensor): Classifier score (probability of the "true" class) per seed.
         """
         seed = self.prepare_seed_features(x, nb_hits_features)
         proba = self.classifier(seed)
@@ -82,8 +84,9 @@ class SeedClassifier(nn.Module):
             the first 3 need to be the coordinates of the point (x, y, z).
 
         Returns:
-            Tensor of shape [N, 10] containing the new features for each seed.
-            The new features are the parameters of the circle made of the three points in each seed:
+            Tensor of shape [N, 3 * nb_hits_features + 7] (i.e. [N, 28] with the default):
+            the original seed features followed by the 7 new features, which are the
+            parameters of the circle made of the three points in each seed:
             - center_x, center_y, center_z: coordinates of the center of the circle
             - radius: radius of the circle
             - normal_x, normal_y, normal_z: components of the normal vector to the plane of the circle

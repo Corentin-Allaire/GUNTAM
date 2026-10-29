@@ -70,7 +70,7 @@ def train_model(
         train_file_indices: List of file indices for training data.
         dataset: The dataset object containing training data.
         nb_events: Number of events per file.
-        batch_size: Batch size for training.
+        batch_size: Number of bins processed per gradient accumulation step.
         cfg: Configuration object with training parameters.
         writer: TensorBoard writer for logging.
         optimiser: Optimizer for training.
@@ -288,16 +288,28 @@ def run_model(
     padding_mask: torch.Tensor,
     cfg: SeedConfig,
 ) -> tuple:
-    """Run inference over files and return per-bin artifacts.
+    """Run inference over a tensor of binned hits and return per-bin artifacts.
 
-    Performs a forward pass (embedding + attention + dummy regression) and then executes
-    a lightweight seed reconstruction on the CPU for every valid bin of each processed
-    event. Outputs are kept as Python/NumPy containers to reduce peak memory usage.
+    Performs the transformer forward pass (embedding + attention + top-k triplet
+    extraction) and then runs the configured beam-search seed reconstruction (with the
+    optional radial-separation filter) for every bin. Outputs are kept as Python/NumPy
+    containers to reduce peak memory usage.
 
-    Returns (nested lists; indexing is [event_idx][bin_idx]):
-        - seeds: Reconstruction seeds (list of seed tuples per bin). Each seed is a
-          tuple (hit_indices: np.ndarray, avg_params: np.ndarray). Empty bins yield [].
-        - attention_maps: per-bin np.ndarray[num_valid_hits, num_valid_hits] used for seeding, or None.
+    Args:
+        model: The transformer model used for inference.
+        hits_tensor: Binned hits tensor of shape [num_bins, max_hit_input, num_hit_features].
+        padding_mask: Padding mask of shape [num_bins, max_hit_input, 1] (True where padded).
+        cfg: Configuration object with inference parameters.
+
+    Returns:
+        Tuple of:
+        - seeds: List of per-bin seed lists (indexing is [bin_idx]). Each seed is a
+          tuple (hit_indices: np.ndarray, params: np.ndarray, score: float). Bins with
+          no valid seed yield [].
+        - attention_maps: List of per-bin np.ndarray[num_hits, num_hits] attention matrices
+          (top-k triplets scattered into a dense matrix) used for seeding.
+        - event_duration, transformer_duration, seed_reconstruction_duration: float timing
+          measurements in seconds (0.0 when timing is disabled).
     """
     reco_width = 5  # max hits per seed (fixed for now, could be dynamic in the future)
     seed_score_threshold = 0.4  # minimum score for a seed to be considered valid (tunable)
