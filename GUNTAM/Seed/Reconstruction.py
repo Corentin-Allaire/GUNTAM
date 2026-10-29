@@ -339,10 +339,8 @@ def beam_search_seed_reconstruction(
     with a larger index) until no eligible neighbor remains or `max_chain_length` is
     reached.
 
-    Scoring rule during search:
-      - While a chain has fewer than 3 hits: cumulative sum of edge attention scores.
-      - Once a chain has 3 or more hits: average edge attention score (cumulative sum
-        divided by number of edges), which rewards compactness.
+    Scoring rule during search: chains are ranked by their mean edge attention score
+    (cumulative edge score divided by the number of hits in the chain).
 
     The best-scoring chain from each beam is kept as a seed candidate.  Duplicate
     seeds (same set of hit indices) are discarded.  Only chains of length >= 3 are

@@ -221,13 +221,13 @@ class SeedTransformer(nn.Module):
         """
         Forward pass of the transformer network.
         Args:
-            - hits (Tensor): Input source sequence.
-            - mask_hits (Tensor): Source mask.
-            - width (int): Number of top-k connections to keep for each source hit.
-            - embedded (Bool) : If True, the input hits are already embedded and will not be re-embedded.
+            - hits (Tensor): Input hit features of shape [B, N, num_features].
+            - mask (Tensor): Key-padding mask of shape [B, N] (True where a slot is padding).
+            - width (int): Number of top-k connections to keep for each source hit (default: 5).
         Returns:
-            - encoded (Tensor): Encoded memory.
-            - attention_weights (Tensor): Attention weights from all layers.
+            - transformer_output (Tensor): Output of the transformer encoder [B, N, dim_embedding].
+            - triplets (Tensor): Top-k edge triplets of shape [B, N, width, 3],
+              columns (source, target, score).
         """
         encoded_hits = self.embedding(hits)
         # Compute the adjacency matrix using the matching attention layer

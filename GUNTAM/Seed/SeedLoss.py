@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Callable, Dict
 import torch
 import torch.nn.functional as F
 
@@ -53,23 +53,23 @@ def full_attention_loss(
     target: torch.Tensor,  # [N_pairs] target labels (-1 or 1)
 ) -> torch.Tensor:
     """
-    Compute the attention loss using only the last transformer layer's attention.
+    Compute the attention loss on a single attention map.
 
     Encourages high attention weights for positive pairs (same particle) and
     low attention weights for negative pairs (different particles).
-    Compared to attention_loss, this version doesn't use negative pairs, it instead looks
+    Compared to attention_loss, this version doesn't use explicit negative pairs, it instead looks
     at all possible pairs not in the positive set as negative. The value of the loss for positive
     and negative pairs is weighted by the number of pairs of each type.
 
-        Args:
-            attention_map_bin: `[seq_len, seq_len]` attention logits matrix.
-            pairs1: `[N_pairs]` first indices for positive pairs.
-            pairs2: `[N_pairs]` second indices for positive pairs.
-            target: `[N_pairs]` labels where positives are `+1` (others ignored).
+    Args:
+        attention_map_bin: `[seq_len, seq_len]` attention logits matrix.
+        pairs1: `[N_pairs]` first indices for positive pairs.
+        pairs2: `[N_pairs]` second indices for positive pairs.
+        target: `[N_pairs]` labels where positives are `+1` (others ignored).
 
-        Note:
-            For consistency, positives in (`pairs1`,`pairs2`) should be symmetric (both `(i, j)` and `(j, i)`)
-            and should exclude diagonal `(i, i)`.
+    Note:
+        For consistency, positives in (`pairs1`,`pairs2`) should be symmetric (both `(i, j)` and `(j, i)`)
+        and should exclude diagonal `(i, i)`.
 
     Returns:
         Scalar attention loss tensor
@@ -376,7 +376,8 @@ def reconstruction_loss(
 
     Expected tensor layout:
     - `reconstructed_particle`: [batch, max_hits, 5] with components [z, eta, sin(phi), cos(phi), pT]
-    - `particles_data`:        [batch, max_hits, 4] with components [z, eta, phi, pT]
+    - `particles_data`:        [batch, max_hits, 5]; the loss uses indices 1 (z), 2 (phi), 3 (eta)
+      and 4 (pT; pT > 0 also marks hits with a valid particle association)
     - `padded_mask`:           [batch, max_hits] boolean (True means padded)
 
     Args:
@@ -390,7 +391,7 @@ def reconstruction_loss(
         {'z': loss_z, 'eta': loss_eta, 'phi': loss_phi, 'pt': loss_pt}
     """
     device = reconstructed_particle.device
-    loss_function = None
+    loss_function: Callable[..., torch.Tensor]
     if loss_type == "MSE":
         loss_function = F.mse_loss
     elif loss_type == "L1":

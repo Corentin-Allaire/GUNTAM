@@ -5,6 +5,7 @@ import math
 import torch
 import time
 import numpy as np
+from torch.profiler import profile, schedule, ProfilerActivity, tensorboard_trace_handler, record_function
 from typing import List, Optional, Dict, Any
 from torch.utils.tensorboard import SummaryWriter
 from GUNTAM.Seed.SeedTransformer import SeedTransformer
@@ -70,7 +71,7 @@ def train_model(
         train_file_indices: List of file indices for training data.
         dataset: The dataset object containing training data.
         nb_events: Number of events per file.
-        batch_size: Batch size for training.
+        batch_size: Number of bins processed per gradient accumulation step.
         cfg: Configuration object with training parameters.
         writer: TensorBoard writer for logging.
         optimiser: Optimizer for training.
@@ -96,6 +97,21 @@ def train_model(
     if optimiser and scheduler:
         scheduler.step()
         print(f"Initial learning rate: {scheduler.get_last_lr()}")
+
+    prof = None
+    if cfg.profile:
+        activities = [ProfilerActivity.CPU]
+        if torch.cuda.is_available():
+            activities.append(ProfilerActivity.CUDA)
+        prof = profile(
+            activities=activities,
+            schedule=schedule(wait=10, warmup=5, active=10, repeat=1),
+            on_trace_ready=tensorboard_trace_handler(cfg.profile_dir),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        )
+        prof.start()
 
     for epoch in range(start_epoch, start_epoch + epoch_nb):
         ts_print("Epoch: ", epoch)
@@ -162,8 +178,9 @@ def train_model(
                         batch_loss = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
 
                         # Perform the hit embedding for all bins in one forward pass
-                        embedded_hits = model.embedding(batched_hits)
-                        encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
+                        with record_function("forward"):
+                            embedded_hits = model.embedding(batched_hits)
+                            encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
 
                         # Process each bin's results for pair-based losses
                         for idx_in_batch, bin_idx in enumerate(batch_bin_indices):
@@ -214,10 +231,14 @@ def train_model(
 
                         # Apply gradients once per batch of bins (for training)
                         if status == "Training":
-                            optimiser.zero_grad()
-                            accumulated_loss.backward()
-                            optimiser.step()
+                            with record_function("backward_step"):
+                                optimiser.zero_grad()
+                                accumulated_loss.backward()
+                                optimiser.step()
                             accumulated_loss = torch.tensor(0.0, device=cfg.device_acc, requires_grad=True)
+
+                        if prof is not None:
+                            prof.step()
 
                 # Average the losses across valid bins
                 if num_valid_bins > 0:
@@ -279,6 +300,9 @@ def train_model(
         if optimiser and scheduler:
             scheduler.step()
 
+    if prof is not None:
+        prof.stop()
+
     return model
 
 
@@ -288,16 +312,28 @@ def run_model(
     padding_mask: torch.Tensor,
     cfg: SeedConfig,
 ) -> tuple:
-    """Run inference over files and return per-bin artifacts.
+    """Run inference over a tensor of binned hits and return per-bin artifacts.
 
-    Performs a forward pass (embedding + attention + dummy regression) and then executes
-    a lightweight seed reconstruction on the CPU for every valid bin of each processed
-    event. Outputs are kept as Python/NumPy containers to reduce peak memory usage.
+    Performs the transformer forward pass (embedding + attention + top-k triplet
+    extraction) and then runs the configured beam-search seed reconstruction (with the
+    optional radial-separation filter) for every bin. Outputs are kept as Python/NumPy
+    containers to reduce peak memory usage.
 
-    Returns (nested lists; indexing is [event_idx][bin_idx]):
-        - seeds: Reconstruction seeds (list of seed tuples per bin). Each seed is a
-          tuple (hit_indices: np.ndarray, avg_params: np.ndarray). Empty bins yield [].
-        - attention_maps: per-bin np.ndarray[num_valid_hits, num_valid_hits] used for seeding, or None.
+    Args:
+        model: The transformer model used for inference.
+        hits_tensor: Binned hits tensor of shape [num_bins, max_hit_input, num_hit_features].
+        padding_mask: Padding mask of shape [num_bins, max_hit_input, 1] (True where padded).
+        cfg: Configuration object with inference parameters.
+
+    Returns:
+        Tuple of:
+        - seeds: List of per-bin seed lists (indexing is [bin_idx]). Each seed is a
+          tuple (hit_indices: np.ndarray, params: np.ndarray, score: float). Bins with
+          no valid seed yield [].
+        - attention_maps: List of per-bin np.ndarray[num_hits, num_hits] attention matrices
+          (top-k triplets scattered into a dense matrix) used for seeding.
+        - event_duration, transformer_duration, seed_reconstruction_duration: float timing
+          measurements in seconds (0.0 when timing is disabled).
     """
     reco_width = 5  # max hits per seed (fixed for now, could be dynamic in the future)
     seed_score_threshold = 0.4  # minimum score for a seed to be considered valid (tunable)
