@@ -11,9 +11,7 @@ model_path = pathlib.Path(__file__).parents[1] / "data" / "transformer.pt"
 
 def test_validation_function(data_path=data_path, dataset_name="odd_output_new_5", model_path=model_path):
 
-    cfg = SeedConfig()
-
-    dataset, transformer = config_model_dataset(
+    cfg, dataset, transformer = config_model_dataset(
         path=data_path,
         dataset_name=dataset_name,
         model_name=model_path,
@@ -21,4 +19,4 @@ def test_validation_function(data_path=data_path, dataset_name="odd_output_new_5
 
     result = validate_function(model=transformer, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg)
 
-    assert round(result) == 878
+    assert round(result) == 1005

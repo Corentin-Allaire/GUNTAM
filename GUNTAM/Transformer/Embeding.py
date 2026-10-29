@@ -5,27 +5,42 @@ import math
 
 
 class FourierPositionalEncoding(nn.Module):
-    """Fourier positional encoding module.
+    """Fourier positional encoding module (frequency-blocked layout).
 
     Applies Fourier feature encoding to coordinates of the form::
 
-        E(x) = [sin(2π B x), cos(2π B x)]
+        E(x) = [sin(2π 2^0 x_d), cos(2π 2^0 x_d),
+                sin(2π 2^1 x_d), cos(2π 2^1 x_d), ...]
 
-    where ``x`` is a vector of length ``input_dim`` and ``B`` uses powers
-    of 2: ``[2^0, 2^1, 2^2, ..., 2^(num_frequencies-1)]``. Each input
-    coordinate is first normalized by ``dim_max`` before the Fourier
-    features are computed.
+    where ``x`` is a vector of length ``input_dim`` and frequencies are
+    powers of 2: ``[2^0, 2^1, 2^2, ..., 2^(num_frequencies-1)]``. Each
+    input coordinate is first shifted by ``shift`` and normalized by
+    ``dim_max`` (``(x + shift) / dim_max``) before the Fourier features
+    are computed.
+
+    The output is laid out in blocks, one per frequency level
+    ``k = 0 .. max(num_frequencies) - 1``: for each level, the sin of
+    all active dimensions is followed by the cos of all active
+    dimensions. A level-``k`` block only contains dimension ``d`` when
+    ``num_frequencies[d] > k``, so dimensions may have different
+    numbers of frequencies. The block order is deterministic, so the
+    output width is always ``sum(num_frequencies) * 2 + high_level_dim``.
 
     The resulting Fourier features are then concatenated with an
     additional high-level feature tensor provided at call time.
 
     Args:
         input_dim: Dimension of the coordinate vector in ``x_sampled``
-            (for example 3 for x, y, z).
+        high_level_dim: Dimension of the ``x_high_level`` feature vector
+            appended after the Fourier features.
         num_frequencies: Number of frequency components per coordinate.
-            Must be a list of ints (one per dimension, length must match ``input_dim``).
+            Must be a list of ints (one per dimension, length must match
+            ``input_dim``); values may differ across dimensions.
         dim_max: Per-dimension maximum values used to normalize
-            ``x_sampled`` (length must be ``input_dim``).
+            ``x_sampled`` (length must be ``input_dim``, all > 0).
+        shift: Per-dimension offset added to ``x_sampled`` before
+            normalization (length must be ``input_dim``).
+        device_acc: Device for buffers``input_dim``).
         device_acc: Device for computation ("cpu" or "cuda").
 
     Forward inputs:
@@ -35,10 +50,13 @@ class FourierPositionalEncoding(nn.Module):
             containing additional high-level features to concatenate.
 
     Forward output:
-        Tensor of shape ``(batch_size, seq_len, input_dim *
-        num_frequencies * 2 + H)``, where the last dimension is the
-        concatenation of the Fourier features and ``x_high_level``.
+        Tensor of shape ``(batch_size, seq_len,
+        sum(num_frequencies) * 2 + H)``, where the last dimension is the
+        concatenation of the Fourier features (in the frequency-blocked
+        order described above) and ``x_high_level``.
     """
+
+    freq_levels: Tensor
 
     def __init__(
         self,
@@ -58,11 +76,14 @@ class FourierPositionalEncoding(nn.Module):
         self.register_buffer("shift", torch.tensor(shift, dtype=torch.float32, device=device_acc), persistent=False)
         self.device_acc = device_acc
 
-        # Create frequency lists for each dimension with powers of 2: [2^0, 2^1, 2^2, ..., 2^(num_frequencies-1)]
-        # Store as a list of tensors since each dimension can have different frequencies
-        for i, num_freq in enumerate(num_frequencies):
-            frequencies = 2.0 ** torch.arange(num_freq, dtype=torch.float32, device=device_acc)
-            self.register_buffer(f"freq_{i}", frequencies, persistent=False)
+        # One shared frequency-level tensor with powers of 2: [2^0, 2^1, ..., 2^(max-1)]
+        # (all dimensions share the same frequency scale schedule; ragged per-dim counts are handled in forward)
+        max_num_freq = max(num_frequencies)
+        self.register_buffer(
+            "freq_levels",
+            2.0 ** torch.arange(max_num_freq, dtype=torch.float32, device=device_acc),
+            persistent=False,
+        )
 
         if input_dim <= 0:
             raise ValueError("Input dimension must be greater than 0")
@@ -95,30 +116,29 @@ class FourierPositionalEncoding(nn.Module):
 
         coord = (x_sampled + self.shift) / self.dim_max  # type: ignore
 
-        # Process each dimension separately since they can have different number of frequencies
+        # Process by frequency level: for each level k, block = [sin(2π 2^k x_d), cos(2π 2^k x_d)]
+        # over all dimensions d with num_frequencies[d] > k (in dimension order)
         fourier_features_list = []
 
-        for dim_idx in range(self.input_dim):
-            # Extract coordinate for this dimension: (batch, seq_len)
-            coord_dim = coord[:, :, dim_idx]
+        for k in range(len(self.freq_levels)):
+            # Dimensions active at this frequency level
+            active_dims = [d for d, n in enumerate(self.num_frequencies) if n > k]
+            if not active_dims:
+                continue
 
-            # Get frequency tensor for this dimension
-            freq_tensor = getattr(self, f"freq_{dim_idx}")  # (num_freq_dim,)
+            # Coordinates of the active dimensions: (batch, seq_len, n_active)
+            coord_active = coord[:, :, active_dims]
 
-            # Broadcast and compute projection: (batch, seq_len, num_freq_dim)
-            proj = 2 * math.pi * coord_dim.unsqueeze(-1) * freq_tensor.unsqueeze(0).unsqueeze(0)
+            # Projection with the single frequency of this level: (batch, seq_len, n_active)
+            proj = 2 * math.pi * coord_active * self.freq_levels[k]
 
-            # Compute sin and cos
-            sin_features = torch.sin(proj)  # (batch, seq_len, num_freq_dim)
-            cos_features = torch.cos(proj)  # (batch, seq_len, num_freq_dim)
+            cos_features = torch.cos(proj)  # (batch, seq_len, n_active)
+            sin_features = torch.sin(proj)  # (batch, seq_len, n_active)
 
-            # Interleave sin and cos: [sin, cos, sin, cos, ...]
-            # Stack and flatten: (batch, seq_len, num_freq_dim, 2) -> (batch, seq_len, num_freq_dim * 2)
-            features_dim = torch.stack([sin_features, cos_features], dim=-1).flatten(start_dim=-2)
+            # Block for this level: [sin of all active dims, cos of all active dims]
+            fourier_features_list.append(torch.cat([sin_features, cos_features], dim=-1))
 
-            fourier_features_list.append(features_dim)
-
-        # Concatenate features from all dimensions: (batch, seq_len, sum(num_frequencies) * 2)
+        # Concatenate blocks: (batch, seq_len, sum(num_frequencies) * 2)
         fourier_features = torch.cat(fourier_features_list, dim=-1)
 
         if x_high_level is None or x_high_level.size(-1) == 0:
@@ -130,7 +150,7 @@ class FourierPositionalEncoding(nn.Module):
             output = x_high_level
 
         else:
-            # Concatenate: [Fourier features, cos(phi), sin(phi), eta]
+            # Concatenate: [Fourier features, x_high_level]
             output = torch.cat([fourier_features, x_high_level], dim=-1)
 
         return output

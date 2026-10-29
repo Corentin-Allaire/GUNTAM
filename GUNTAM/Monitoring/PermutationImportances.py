@@ -2,7 +2,7 @@
 # """"""""""""""""""""""""""""" PERMUTATION IMPORTANCES """""""""""""""""""""""""""""""""
 # '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-from typing import List
+from typing import List, Sequence, Tuple
 
 import torch
 import argparse
@@ -51,6 +51,7 @@ def config_model_dataset(path: str, dataset_name: str, model_name: str):
 
     Returns:
         tuple: A tuple containing:
+            - cfg (SeedConfig): Configuration used to load the dataset and model.
             - dataset (DataLoader): Loaded dataset object with the required tensors.
             - model (SeedTransformer): Initialised transformer model with loaded weights.
     """
@@ -89,7 +90,7 @@ def config_model_dataset(path: str, dataset_name: str, model_name: str):
     model.to(cfg.device_acc)
     model.load(path=model_name, device=cfg.device_acc)
 
-    return dataset, model
+    return cfg, dataset, model
 
 
 # ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -205,47 +206,109 @@ def perm_imp_featuress(features: List[int], method: str, dataset, model, cfg):
 # ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
 
-def plot_freq_loss(avg_loss_ref: float, avg_loss_total: list, feature: str, fourier_freq: int = 20):
+def feature_channel_indices(model, feature: str, hit_feature_names: List[str] | None = None) -> Sequence[int | Tuple[int, int]]:
+    """
+    Return the Fourier-embedding channel indices belonging to a physical feature,
+    following the frequency-blocked layout of FourierPositionalEncoding.
+
+    For a coordinate feature (in ``embedding_feature``), returns a list of
+    ``(sin_channel, cos_channel)`` tuples, one per frequency level at which the
+    feature is active, in level order (level 0 first). For a high-level feature
+    (in ``high_level_features``), returns a list with its single channel in the
+    tail of the embedding (cos/sin-expanded features get one channel each).
+
+    Args:
+        model: The SeedTransformer (provides ``fourier_encoding`` and the config).
+        feature: Feature name (e.g. "x", "y", "z", "r", "phi", "eta", or
+            "cos_phi"/"sin_phi" for cosine-expanded features).
+        hit_feature_names: Names of the raw hit columns, indexed by the
+            ``embedding_feature`` / ``high_level_features`` / ``cosine_processing``
+            indices in the config.
+
+    Returns:
+        List[Tuple[int, int]]: One (sin, cos) channel pair per frequency level
+            (coordinate features), or List[int] with the single channel index
+            (high-level features).
+    """
+    if hit_feature_names is None:
+        hit_feature_names = ["x", "y", "z", "r", "phi", "eta"]
+
+    cfg = model.cfg
+    fpe = model.fourier_encoding
+    num_freq = list(fpe.num_frequencies)
+
+    emb_cos = [i for i in cfg.embedding_feature if i in cfg.cosine_processing]
+    emb_plain = [i for i in cfg.embedding_feature if i not in cfg.cosine_processing]
+    high_cos = [i for i in cfg.high_level_features if i in cfg.cosine_processing]
+    high_plain = [i for i in cfg.high_level_features if i not in cfg.cosine_processing]
+
+    # Coordinate dimensions in embedding order: plain, then cos(φ), sin(φ)
+    coord_names = (
+        [hit_feature_names[i] for i in emb_plain]
+        + [f"cos_{hit_feature_names[i]}" for i in emb_cos]
+        + [f"sin_{hit_feature_names[i]}" for i in emb_cos]
+    )
+
+    if feature in coord_names:
+        d = coord_names.index(feature)
+        indices: List[Tuple[int, int]] = []
+        base = 0
+        for k in range(max(num_freq)):
+            active = [m for m, n in enumerate(num_freq) if n > k]
+            if d in active:
+                pos = active.index(d)
+                # (sin, cos) channel pair for this feature at level k
+                indices.append((base + pos, base + len(active) + pos))
+            base += 2 * len(active)
+        return indices
+
+    # High-level features live in the tail: [cos(φ), sin(φ), ..., plain]
+    high_names = (
+        [f"cos_{hit_feature_names[i]}" for i in high_cos]
+        + [f"sin_{hit_feature_names[i]}" for i in high_cos]
+        + [hit_feature_names[i] for i in high_plain]
+    )
+    if feature in high_names:
+        return [fpe.output_dim - len(high_names) + high_names.index(feature)]
+
+    raise ValueError(f"Unknown feature: {feature} (known: {coord_names + high_names})")
+
+
+def plot_freq_loss(avg_loss_ref: float, avg_loss_total: list, model, feature: str, hit_feature_names: List[str] | None = None):
     """
     Plot the variation in average loss for each Fourier frequency of a given feature.
 
-    This function selects the slice of the total loss vector corresponding to the
-    Fourier frequencies of the specified feature and plots the absolute deviation
-    from the reference loss for each frequency index.
+    Under the frequency-blocked embedding layout, the channels of a feature are
+    spread across the embedding (one sin/cos pair per frequency level), so this
+    function collects the feature's channels via feature_channel_indices and
+    plots the absolute deviation from the reference loss per frequency level.
+    For high-level (non-Fourier) features, one point per channel is plotted.
 
     Args:
         avg_loss_ref (float): Reference average loss (computed without any shuffling).
         avg_loss_total (list): List of average losses for each shuffled feature.
-        feature (str): The feature to analyse (one of "phi", "x", "y", "z", "r", "eta").
-        fourier_freq (int, optional): Number of Fourier frequencies used in the encoding. Defaults to 20.
+        model: The SeedTransformer used to derive the embedding channel layout.
+        feature (str): The feature to analyse (e.g. "x", "y", "z", "r", "phi", "eta").
+        hit_feature_names (List[str], optional): Names of the raw hit columns.
 
     Returns:
         None: This function generates and saves a matplotlib plot.
     """
+    if hit_feature_names is None:
+        hit_feature_names = ["x", "y", "z", "r", "phi", "eta"]
 
-    # Frequencies of the dataset (unique for each dataset)
-
-    if feature == "z":
-        avg_loss_total = avg_loss_total[(fourier_freq * 6) : (fourier_freq * 8)]
-    elif feature == "r":
-        avg_loss_total = avg_loss_total[(fourier_freq * 8) : (fourier_freq * 10)]
-    elif feature == "x":
-        avg_loss_total = avg_loss_total[(fourier_freq * 2) : (fourier_freq * 4)]
-    elif feature == "y":
-        avg_loss_total = avg_loss_total[(fourier_freq * 4) : (fourier_freq * 6)]
-    elif feature == "eta":
-        avg_loss_total = avg_loss_total[(fourier_freq * 10) : (fourier_freq * 12)]
-    elif feature == "phi":
-        avg_loss_total = avg_loss_total[0 : (fourier_freq * 2)]
-    else:
-        raise ValueError(f"shuffled feature: {feature}")
+    indices = feature_channel_indices(model, feature, hit_feature_names)
 
     plt.figure()
 
-    for j in range(0, int(len(avg_loss_total) / 2)):
-
-        plt.plot(abs(avg_loss_total[2 * j] - avg_loss_ref), j + 1, "o", color="red")
-        plt.plot(abs(avg_loss_total[2 * j + 1] - avg_loss_ref), j + 1, "o", color="blue")
+    for j, channel_indices in enumerate(indices):
+        if isinstance(channel_indices, tuple):
+            sin_idx, cos_idx = channel_indices
+            plt.plot(abs(avg_loss_total[sin_idx] - avg_loss_ref), j + 1, "o", color="red")
+            plt.plot(abs(avg_loss_total[cos_idx] - avg_loss_ref), j + 1, "o", color="blue")
+        else:
+            idx = channel_indices
+            plt.plot(abs(avg_loss_total[idx] - avg_loss_ref), j + 1, "o")
 
     plt.xlabel("delta_loss")
     plt.ylabel("k")
@@ -288,46 +351,40 @@ def plot_all_loss(avg_loss_ref: float, avg_loss_total: list):
     plt.close()
 
 
-def plot_freq_eff(seed_eff_total: list, feature: str, fourier_freq: int = 20):
+def plot_freq_eff(seed_eff_total: list, model, feature: str, hit_feature_names: List[str] | None = None):
     """
     Plot the seeding efficiency for each Fourier frequency of a given feature.
 
-    This function selects the slice of the total efficiency vector corresponding
-    to the Fourier frequencies of the specified feature and plots the efficiency
-    values for each frequency index.
+    Under the frequency-blocked embedding layout, the channels of a feature are
+    spread across the embedding (one sin/cos pair per frequency level), so this
+    function collects the feature's channels via feature_channel_indices and
+    plots the efficiency values per frequency level.
+    For high-level (non-Fourier) features, one point per channel is plotted.
 
     Args:
         seed_eff_total (list): List of seeding efficiencies for each shuffled feature.
-        feature (str): The feature to analyse (one of "phi", "x", "y", "z", "r", "eta").
-        fourier_freq (int, optional): Number of Fourier frequencies used in the encoding. Defaults to 20.
+        model: The SeedTransformer used to derive the embedding channel layout.
+        feature (str): The feature to analyse (e.g. "x", "y", "z", "r", "phi", "eta").
+        hit_feature_names (List[str], optional): Names of the raw hit columns.
 
     Returns:
         None: This function generates and saves a matplotlib plot.
     """
+    if hit_feature_names is None:
+        hit_feature_names = ["x", "y", "z", "r", "phi", "eta"]
 
-    # Frequencies of the dataset (unique for each dataset)
-
-    if feature == "z":
-        seed_eff_total = seed_eff_total[(fourier_freq * 6) : (fourier_freq * 8)]
-    elif feature == "r":
-        seed_eff_total = seed_eff_total[(fourier_freq * 8) : (fourier_freq * 10)]
-    elif feature == "x":
-        seed_eff_total = seed_eff_total[(fourier_freq * 2) : (fourier_freq * 4)]
-    elif feature == "y":
-        seed_eff_total = seed_eff_total[(fourier_freq * 4) : (fourier_freq * 6)]
-    elif feature == "eta":
-        seed_eff_total = seed_eff_total[(fourier_freq * 10) : (fourier_freq * 12)]
-    elif feature == "phi":
-        seed_eff_total = seed_eff_total[0 : (fourier_freq * 2)]
-    else:
-        raise ValueError(f"shuffled feature: {feature}")
+    indices = feature_channel_indices(model, feature, hit_feature_names)
 
     plt.figure()
 
-    for j in range(0, int(len(seed_eff_total) / 2)):
-
-        plt.plot(abs(seed_eff_total[2 * j]), j + 1, "o", color="red")
-        plt.plot(abs(seed_eff_total[2 * j + 1]), j + 1, "o", color="blue")
+    for j, channel_indices in enumerate(indices):
+        if isinstance(channel_indices, tuple):
+            sin_idx, cos_idx = channel_indices
+            plt.plot(abs(seed_eff_total[sin_idx]), j + 1, "o", color="red")
+            plt.plot(abs(seed_eff_total[cos_idx]), j + 1, "o", color="blue")
+        else:
+            idx = channel_indices
+            plt.plot(abs(seed_eff_total[idx]), j + 1, "o")
 
     plt.xlabel("seeding efficiency")
     plt.ylabel("k")
@@ -383,9 +440,12 @@ if __name__ == "__main__":
         model_name=args.model_name,
     )
 
+    # Number of channels in the Fourier embedding (derived from the model, not hardcoded)
+    enc_hits_shape = model.fourier_encoding.output_dim
+
     # Computing the average loss and the seeding efficiency for every feature we shuffle:
-    avg_loss_total = perm_imp_per_features_loss(enc_hits_shape=45, dataset=dataset, model=model, cfg=cfg)
-    seed_eff_total = perm_imp_per_features_eff(enc_hits_shape=45, dataset=dataset, model=model, cfg=cfg)
+    avg_loss_total = perm_imp_per_features_loss(enc_hits_shape=enc_hits_shape, dataset=dataset, model=model, cfg=cfg)
+    seed_eff_total = perm_imp_per_features_eff(enc_hits_shape=enc_hits_shape, dataset=dataset, model=model, cfg=cfg)
 
     # Computing the average loss without shuffling any feature (average loss of reference):
     avg_loss_ref = validate_function(model=model, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg)
@@ -394,9 +454,9 @@ if __name__ == "__main__":
     # Plotting every average loss for each feature we shuffle:
     plot_all_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total)
     # Plotting the average loss for each feature of Emb(x) we shuffle:
-    plot_freq_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total, feature="x")
+    plot_freq_loss(avg_loss_ref=avg_loss_ref, avg_loss_total=avg_loss_total, model=model, feature="x")
 
     # Plotting every seeding efficiency for each feature we shuffle:
     plot_all_eff(seed_eff_total=seed_eff_total)
     # Plotting the seeding efficiency for each feature of Emb(x) we shuffle:
-    plot_freq_eff(seed_eff_total=seed_eff_total, feature="x")
+    plot_freq_eff(seed_eff_total=seed_eff_total, model=model, feature="x")
