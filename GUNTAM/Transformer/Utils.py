@@ -33,6 +33,18 @@ def log_gradients(model, writer=None, step=None):
     return grad_stats
 
 
+def get_autocast_context(device: torch.device):
+    """Return an automatic mixed precision context appropriate for the device.
+
+    Uses float16 on CUDA and MPS. On CPU, defaults to float32 (a no-op precision).
+    """
+    if device.type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
+    if device.type == "mps":
+        return torch.autocast(device_type="mps", dtype=torch.float16)
+    return torch.autocast(device_type="cpu", dtype=torch.float32)
+
+
 def sync_device(dev: torch.device):
     """
     Synchronize CUDA if cfg.device_acc is CUDA; CPU is a no-op.
