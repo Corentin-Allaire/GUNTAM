@@ -18,6 +18,7 @@ from GUNTAM.Seed.SeedClassifier import SeedClassifier
 from GUNTAM.Seed.Reconstruction import build_seed_features_tensor
 import GUNTAM.Seed.Reconstruction as Reconstruction
 from GUNTAM.IO.OnnxRunTime_Interface import onnx_providers, run_onnx_iobinding
+from GUNTAM.Transformer.Utils import get_autocast_context
 
 
 class SeedReconstructionModel(nn.Module):
@@ -364,6 +365,7 @@ class SeedReconstructionModel(nn.Module):
         flat_hits_list: List[Tensor],
         per_event_chains_scores: List[Tuple[Tensor, Tensor]],
         classifier_fn,
+        autocast_ctx: bool = True,
     ) -> List[Tuple[Tensor, Tensor]]:
         """
         Classify candidate seeds for several events in a single classifier call.
@@ -390,7 +392,11 @@ class SeedReconstructionModel(nn.Module):
             seed_features_list.append(seed_features)
             seed_counts.append(seed_features.shape[0])
 
-        keep_mask, classifier_scores = classifier_fn(torch.cat(seed_features_list, dim=0))
+        if autocast_ctx:
+            with get_autocast_context(self.device_acc):
+                keep_mask, classifier_scores = classifier_fn(torch.cat(seed_features_list, dim=0))
+        else:
+            keep_mask, classifier_scores = classifier_fn(torch.cat(seed_features_list, dim=0))
 
         results: List[Tuple[Tensor, Tensor]] = []
         start = 0
@@ -430,7 +436,9 @@ class SeedReconstructionModel(nn.Module):
         """
         binned_hits, padding_mask, flat_hits_list, bins_per_event = self.bin_and_pad_batch(events)
         # padding_mask is [B, N, 1]; the transformer expects a 2D key-padding mask [B, N].
-        _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
+        # Run the transformer forward pass under automatic mixed precision.
+        with get_autocast_context(self.device_acc):
+            _, triplets = self.transformer(binned_hits[..., :6], padding_mask.squeeze(-1), self.width)
         chains_orig, scores = self.reconstruct_seed_triplets(
             binned_hits, padding_mask, triplets, max_chain_length=self.max_seed_length
         )
@@ -445,7 +453,10 @@ class SeedReconstructionModel(nn.Module):
             return per_event_chains_scores
 
         return self.classify_seeds(
-            flat_hits_list, per_event_chains_scores, lambda feats: self.classifier(feats, nb_hits_features=7)
+            flat_hits_list,
+            per_event_chains_scores,
+            lambda feats: self.classifier(feats, nb_hits_features=7),
+            autocast_ctx=True,
         )
 
     def run_onnx_inference(
@@ -548,4 +559,5 @@ class SeedReconstructionModel(nn.Module):
             )
             return keep_mask.to(seed_features.device).bool(), classifier_scores.to(seed_features.device)
 
-        return self.classify_seeds(flat_hits_list, per_event_chains_scores, _classifier_fn)
+        # ONNX Runtime handles its own precision; do not wrap the classifier call in autocast.
+        return self.classify_seeds(flat_hits_list, per_event_chains_scores, _classifier_fn, autocast_ctx=False)
