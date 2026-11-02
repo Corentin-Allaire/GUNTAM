@@ -180,7 +180,6 @@ def train_model(
 
                         batch_loss = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
 
-<<<<<<< HEAD
                         # Run the forward pass and loss computation under automatic mixed precision.
                         # The backward pass is intentionally left outside the autocast context.
                         with autocast_ctx:
@@ -188,12 +187,6 @@ def train_model(
                             with record_function("forward"):
                                 embedded_hits = model.embedding(batched_hits)
                                 encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
-=======
-                        # Perform the hit embedding for all bins in one forward pass
-                        with record_function("forward"):
-                            embedded_hits = model.embedding(batched_hits)
-                            encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
->>>>>>> origin
 
                             # Process each bin's results for pair-based losses
                             for idx_in_batch, bin_idx in enumerate(batch_bin_indices):
