@@ -94,9 +94,6 @@ def train_model(
 
     ts_print("Active loss components: " + ", ".join(active_losses))
 
-    # Automatic mixed precision context (fp16 on CUDA/MPS, bfloat16 on CPU)
-    autocast_ctx = Utils.get_autocast_context(cfg.device_acc)
-
     if optimiser and scheduler:
         scheduler.step()
         print(f"Initial learning rate: {scheduler.get_last_lr()}")
@@ -180,44 +177,39 @@ def train_model(
 
                         batch_loss = initialize_loss_dictionary(list(cfg.loss_config.keys()), cfg.device_acc)
 
-                        # Run the forward pass and loss computation under automatic mixed precision.
-                        # The backward pass is intentionally left outside the autocast context.
-                        with autocast_ctx:
-                            # Perform the hit embedding for all bins in one forward pass
-                            with record_function("forward"):
-                                embedded_hits = model.embedding(batched_hits)
-                                encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
+                        # Perform the hit embedding for all bins in one forward pass (full precision).
+                        with record_function("forward"):
+                            embedded_hits = model.embedding(batched_hits)
+                            encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
 
-                            # Process each bin's results for pair-based losses
-                            for idx_in_batch, bin_idx in enumerate(batch_bin_indices):
-                                pairs1, pairs2, target = batched_pairs[idx_in_batch].unbind(
-                                    dim=1
-                                )  # [num_pairs], [num_pairs], [num_pairs]
+                        # Process each bin's results for pair-based losses
+                        for idx_in_batch, bin_idx in enumerate(batch_bin_indices):
+                            pairs1, pairs2, target = batched_pairs[idx_in_batch].unbind(
+                                dim=1
+                            )  # [num_pairs], [num_pairs], [num_pairs]
 
-                                # Skip bins with no valid pairs (all zeros after orphan filtering)
-                                if target.sum() == 0:
-                                    print(
-                                        f"Skipping bin {bin_idx.item()} in event {entry} due to no valid pairs after filtering."
+                            # Skip bins with no valid pairs (all zeros after orphan filtering)
+                            if target.sum() == 0:
+                                print(f"Skipping bin {bin_idx.item()} in event {entry} due to no valid pairs after filtering.")
+                                continue
+
+                            # Extract this bin's attention map and squeeze batch dim -> [seq_len, seq_len]
+                            attention_map_bin = attention_maps[idx_in_batch].squeeze(0)
+
+                            # Compute the attention next loss (sequential pairs with cross-entropy)
+                            if cfg.has_loss_component("attention_next"):
+                                if attention_map_bin is not None:
+                                    batch_loss["attention_next"] += Losses.attention_next_loss(
+                                        attention_map_bin, pairs1, pairs2, target
                                     )
-                                    continue
+                            # Compute the attention backward loss (sequential pairs with cross-entropy)
+                            if cfg.has_loss_component("attention_back"):
+                                if attention_map_bin is not None:
+                                    batch_loss["attention_back"] += Losses.attention_backward_loss(
+                                        attention_map_bin, pairs1, pairs2, target
+                                    )
 
-                                # Extract this bin's attention map and squeeze batch dim -> [seq_len, seq_len]
-                                attention_map_bin = attention_maps[idx_in_batch].squeeze(0)
-
-                                # Compute the attention next loss (sequential pairs with cross-entropy)
-                                if cfg.has_loss_component("attention_next"):
-                                    if attention_map_bin is not None:
-                                        batch_loss["attention_next"] += Losses.attention_next_loss(
-                                            attention_map_bin, pairs1, pairs2, target
-                                        )
-                                # Compute the attention backward loss (sequential pairs with cross-entropy)
-                                if cfg.has_loss_component("attention_back"):
-                                    if attention_map_bin is not None:
-                                        batch_loss["attention_back"] += Losses.attention_backward_loss(
-                                            attention_map_bin, pairs1, pairs2, target
-                                        )
-
-                                num_valid_bins += 1
+                            num_valid_bins += 1
 
                         # Consolidate losses: sum into total, log components, and accumulate weighted grads
                         for key, value in batch_loss.items():
