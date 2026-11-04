@@ -365,8 +365,7 @@ def run_model(
         hits_tensor = hits_tensor.to(cfg.device_acc, dtype=cfg.transformer_config.dtype)
 
         # Obtain encoded embeddings and attention weights from the model (mixed precision)
-        with Utils.get_autocast_context(cfg.device_acc):
-            encoded_space_point, attention_edge = model(hits_tensor, padding_mask, reco_width)
+        encoded_space_point, attention_edge = model(hits_tensor, padding_mask, reco_width)
 
         if cfg.timing_enabled:
             Utils.sync_device(cfg.device_acc)
