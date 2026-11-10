@@ -58,8 +58,8 @@ def _normalize_state_dict_keys(state_dict: Dict[str, Any]) -> Dict[str, Any]:
     return state_dict
 
 
-def manual_attention(q: Tensor, k: Tensor, mask: Optional[Tensor] = None) -> Tensor:
-    """Compute the attention matrix manually
+def manual_attention_logits(q: Tensor, k: Tensor, mask: Optional[Tensor] = None) -> Tensor:
+    """Compute scaled dot-product attention logits before softmax.
 
     Args:
           q: Query tensor of shape (batch_size, num_heads, seq_len, d_k)
@@ -67,18 +67,16 @@ def manual_attention(q: Tensor, k: Tensor, mask: Optional[Tensor] = None) -> Ten
           mask: Optional mask tensor of shape (batch_size, num_heads, seq_len, seq_len)
 
     Returns:
-        Tuple of (output tensor, attention weights matrix on the last attention layer)
+        Raw scaled attention logits with shape (batch_size, num_heads, seq_len, seq_len).
     """
     d_k = q.size(-1)
     scores = torch.matmul(q, k.transpose(-2, -1))
-    scale = q.new_full((), d_k).sqrt()
-    scores = scores * scale.reciprocal()
+    scores = scores * (d_k**-0.5)
 
     if mask is not None:
         scores = scores.masked_fill(mask, float("-inf"))
-    score = F.softmax(scores, dim=-1)
 
-    return score
+    return scores
 
 
 def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
@@ -91,12 +89,13 @@ def manual_scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask: O
           mask: Optional mask tensor of shape (batch_size, num_heads, seq_len, seq_len)
 
     Returns:
-        Tuple of (output tensor, attention weights matrix on the last attention layer (after softmax))
+        Tuple of the attention output and raw scaled attention logits. Masked keys have logits of -inf.
     """
 
-    score = manual_attention(q, k, mask)
-    output = torch.matmul(score, v)
-    return output, score
+    attention_logits = manual_attention_logits(q, k, mask)
+    attention_probabilities = F.softmax(attention_logits, dim=-1)
+    output = torch.matmul(attention_probabilities, v)
+    return output, attention_logits
 
 
 class MultiHeadAttention(nn.Module):
@@ -143,16 +142,15 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.out_linear = nn.Linear(self.model_dim, self.input_dim, device=device)
 
-    def compute_attention(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
-        """Compute attention matrix for the last layer of transformer
+    def compute_attention_logits(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
+        """Compute raw matching-attention logits for the input sequence.
 
         Args:
             x: Input tensor of shape (batch_size, seq_len, d_model)
             mask: Optional mask tensor of shape (batch_size, seq_len, seq_len)
 
         Returns:
-            Attention weights of shape (batch_size, num_heads, seq_len, seq_len)
-                or None if use_pytorch=True
+            Raw attention logits of shape (batch_size, num_heads, seq_len, seq_len).
         """
         batch_size = x.size(0)
         if x.size(-1) != self.input_dim:
@@ -181,9 +179,11 @@ class MultiHeadAttention(nn.Module):
         # (batch_size, seq_len, num_heads, 3 * head_dim)
         q, k, _ = qkv.transpose(1, 2).chunk(3, dim=-1)
 
-        attn_weights = manual_attention(q, k, key_mask)
+        return manual_attention_logits(q, k, key_mask)
 
-        return attn_weights
+    def compute_attention(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
+        """Compute normalized matching-attention probabilities."""
+        return F.softmax(self.compute_attention_logits(x, mask), dim=-1)
 
     def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor | None]:
         """Forward pass through multi-head attention layer.
@@ -195,8 +195,8 @@ class MultiHeadAttention(nn.Module):
         Returns:
             Tuple of:
                 - Output tensor of shape (batch_size, seq_len, d_model)
-                - Attention weights of shape (batch_size, num_heads, seq_len, seq_len)
-                  or None if use_pytorch=True
+                                - Raw attention logits of shape (batch_size, num_heads, seq_len, seq_len)
+                                    for the manual path, or None if use_pytorch=True
         """
 
         batch_size = x.size(0)
@@ -237,7 +237,7 @@ class MultiHeadAttention(nn.Module):
                 attn_mask=key_mask,
                 dropout_p=self.dropout.p if self.training else 0.0,
             )
-            attn_weights = None  # no weights available
+            attn_logits = None  # no logits available from the PyTorch attention path
 
             # Concatenate heads: transpose back and reshape to combine heads
             output = (
@@ -251,18 +251,18 @@ class MultiHeadAttention(nn.Module):
             # (batch_size, seq_len, num_heads, 3 * head_dim)
             q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)
 
-            attn_output, attn_weights = manual_scaled_dot_product_attention(q, k, v, key_mask)
+            attn_output, attn_logits = manual_scaled_dot_product_attention(q, k, v, key_mask)
 
             # If multiple heads, extracting the attention weights doesn't make sense
             # if self.num_heads > 1:
-            #     attn_weights = attn_weights.mean(dim=1, keepdim=True)  # average over heads
+            #     attn_logits = attn_logits.mean(dim=1, keepdim=True)  # average over heads
 
             # Concatenate heads back: (batch_size, seq_len, model_dim)
             output = attn_output.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
 
         output = self.out_linear(output)
         output = self.dropout(output)
-        return output, attn_weights
+        return output, attn_logits
 
     def _init_weights(self) -> None:
         """Initialize weights using Xavier uniform initialization."""

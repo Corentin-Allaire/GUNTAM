@@ -174,37 +174,38 @@ class SeedTransformer(nn.Module):
         encoded_hits = self.feature_projection(encoded_hits)
         return encoded_hits
 
-    def compute_adjacency(self, encoded_hits: Tensor, mask: Tensor) -> Tuple[Tensor, Tensor]:
+    def compute_adjacency_logits(self, encoded_hits: Tensor, mask: Tensor) -> Tuple[Tensor, Tensor]:
         """
-        Compute the adjacency matrix using the matching attention layer.
+        Compute raw matching-attention logits for pair-based losses.
         Args:
             - encoded_hits (Tensor): The embedded hit features after Fourier encoding and projection.
             - mask (Tensor): The padding mask indicating valid hits.
         Returns:
             - transformer_output (Tensor): The output from the transformer encoder.
-            - attn_weights (Tensor): The attention weights from the matching attention layer, used as adjacency matrix.
+            - attention_logits (Tensor): Raw scaled matching-attention scores [B, N, N].
         """
         # Perform the transformer encoding
         transformer_output = self.transformer(x=encoded_hits, mask=mask)
-        # Extract the last attention matrix for use in the reconstruction
-        attn_weights = self.matching_attention.compute_attention(transformer_output, mask)
-        # The number of heads is 1 for matching attention, so we can squeeze that dimension
-        attn_weights = attn_weights.squeeze(1)
+        attention_logits = self.matching_attention.compute_attention_logits(transformer_output, mask)
+        return transformer_output, attention_logits.squeeze(1)
 
-        return transformer_output, attn_weights
+    def compute_adjacency(self, encoded_hits: Tensor, mask: Tensor) -> Tuple[Tensor, Tensor]:
+        """Compute normalized matching-attention probabilities for reconstruction."""
+        transformer_output, attention_logits = self.compute_adjacency_logits(encoded_hits, mask)
+        return transformer_output, torch.softmax(attention_logits, dim=-1)
 
-    def triplet_extraction(self, attention_weights: Tensor, width: int = 5) -> Tensor:
+    def triplet_extraction(self, attention_probabilities: Tensor, width: int = 5) -> Tensor:
         """
         For each source hit, keep only the top-k (source, target, score) triplets.
         Args:
-            - attention_weights (Tensor): Attention weights from the matching attention layer.
+            - attention_probabilities (Tensor): Row-normalized matching-attention probabilities.
             - width (int): Number of top-k connections to keep for each source hit.
         Returns:
             - triplets (Tensor): Tensor of shape [B, N, width, 3] containing (source, target, score) triplets.
         """
-        topk_scores, topk_targets = attention_weights.topk(width, dim=-1)  # [B, N, width]
+        topk_scores, topk_targets = attention_probabilities.topk(width, dim=-1)  # [B, N, width]
         B, N, k = topk_scores.shape
-        source_indices = torch.arange(N, device=attention_weights.device).view(1, N, 1).expand(B, N, k)
+        source_indices = torch.arange(N, device=attention_probabilities.device).view(1, N, 1).expand(B, N, k)
         triplets = torch.stack(
             [source_indices.float(), topk_targets.float(), topk_scores],
             dim=-1,
@@ -232,7 +233,6 @@ class SeedTransformer(nn.Module):
         encoded_hits = self.embedding(hits)
         # Compute the adjacency matrix using the matching attention layer
         transformer_output, attention_weights = self.compute_adjacency(encoded_hits, mask)
-
         # Extract triplets from the attention weights
         triplets = self.triplet_extraction(attention_weights, width=width)
 

@@ -180,7 +180,7 @@ def train_model(
                         # Perform the hit embedding for all bins in one forward pass (full precision).
                         with record_function("forward"):
                             embedded_hits = model.embedding(batched_hits)
-                            encoded_space_points, attention_maps = model.compute_adjacency(embedded_hits, batched_masks)
+                            encoded_space_points, attention_logits = model.compute_adjacency_logits(embedded_hits, batched_masks)
 
                         # Process each bin's results for pair-based losses
                         for idx_in_batch, bin_idx in enumerate(batch_bin_indices):
@@ -194,19 +194,19 @@ def train_model(
                                 continue
 
                             # Extract this bin's attention map and squeeze batch dim -> [seq_len, seq_len]
-                            attention_map_bin = attention_maps[idx_in_batch].squeeze(0)
+                            attention_logits_bin = attention_logits[idx_in_batch].squeeze(0)
 
                             # Compute the attention next loss (sequential pairs with cross-entropy)
                             if cfg.has_loss_component("attention_next"):
-                                if attention_map_bin is not None:
+                                if attention_logits_bin is not None:
                                     batch_loss["attention_next"] += Losses.attention_next_loss(
-                                        attention_map_bin, pairs1, pairs2, target
+                                        attention_logits_bin, pairs1, pairs2, target
                                     )
                             # Compute the attention backward loss (sequential pairs with cross-entropy)
                             if cfg.has_loss_component("attention_back"):
-                                if attention_map_bin is not None:
+                                if attention_logits_bin is not None:
                                     batch_loss["attention_back"] += Losses.attention_backward_loss(
-                                        attention_map_bin, pairs1, pairs2, target
+                                        attention_logits_bin, pairs1, pairs2, target
                                     )
 
                             num_valid_bins += 1

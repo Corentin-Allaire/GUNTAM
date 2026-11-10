@@ -40,6 +40,7 @@ def prepare_event_encoding(
     event_hits: torch.Tensor,
     event_mask: torch.Tensor,
     features: List[int],
+    return_logits: bool = False,
 ):
     """
     Shared preprocessing used by both the validation-loss and seeding-efficiency permutation-importance
@@ -51,6 +52,7 @@ def prepare_event_encoding(
         event_hits: Hits tensor for a single event.
         event_mask: Padding mask for the same event.
         features: Indices of the Fourier-embedding features to shuffle (independently) across hits.
+        return_logits: Return raw scores for loss evaluation instead of probabilities for reconstruction.
 
     Returns:
         Tuple of (encoded_hits, transformer_output, attention_maps).
@@ -64,7 +66,10 @@ def prepare_event_encoding(
         encoded_hits[:, :, feature] = encoded_hits[:, tensor_idx, feature]
     encoded_hits = model.feature_projection(encoded_hits)
 
-    transformer_output, attention_maps = model.compute_adjacency(encoded_hits=encoded_hits, mask=event_mask)
+    if return_logits:
+        transformer_output, attention_maps = model.compute_adjacency_logits(encoded_hits=encoded_hits, mask=event_mask)
+    else:
+        transformer_output, attention_maps = model.compute_adjacency(encoded_hits=encoded_hits, mask=event_mask)
 
     return encoded_hits, transformer_output, attention_maps
 
@@ -136,22 +141,22 @@ def efficiency_reconstructed_seeds(
                 event_particle_tensor = particles_tensor[event_idx]
 
                 # We shuffle the features in the Fourier embedding for the current event:
-                encoded_hits, _, attention_maps = prepare_event_encoding(
+                encoded_hits, _, attention_logits = prepare_event_encoding(
                     model=model, event_hits=event_hits_tensor, event_mask=event_padding_mask, features=features
                 )
-                _ = model.triplet_extraction(attention_maps, width=5)
+                attention_probabilities = torch.softmax(attention_logits, dim=-1)
 
                 if cfg.transformer_config.regression:
                     hits_score = encoded_hits
 
                 else:
                     # Compute hit score as the row-wise max of the attention weights [bins, hits, 1]
-                    hits_score = attention_maps.squeeze(1).max(dim=-1).values.unsqueeze(-1)
+                    hits_score = attention_probabilities.max(dim=-1).values.unsqueeze(-1)
 
                 # We reconstruct the hits:
 
                 chains, params, scores = batched_beam_search_seed_reconstruction(
-                    attention_edge=attention_maps,
+                    attention_edge=attention_probabilities,
                     valid_mask=~event_padding_mask.bool(),
                     att_threshold=0.0,
                     max_chain_length=5,
@@ -167,8 +172,7 @@ def efficiency_reconstructed_seeds(
                 hit_chains_all = chains.cpu().numpy().astype(np.int64)  # [B, N, ML]
                 scores_all = scores.cpu().numpy()  # [B, N]
                 params_all = params.cpu().numpy()  # [B, N, F]
-                attention_softmax = torch.softmax(attention_maps.squeeze(1), dim=-1)  # [B, N, N]
-                attention_softmax_cpu = attention_softmax.cpu().numpy()
+                attention_probabilities_cpu = attention_probabilities.cpu().numpy()
                 hit_score_all = hits_score.squeeze(-1).cpu().detach().float().numpy()  # [B, N]
 
                 for bin_idx in range(event_hits_tensor.shape[0]):
@@ -187,7 +191,7 @@ def efficiency_reconstructed_seeds(
                         seen_bs.add(key)
                         bin_seeds.append((chain_compact, params_np[i], scores_np[i]))
 
-                    event_attention_maps.append(attention_softmax_cpu[bin_idx])
+                    event_attention_maps.append(attention_probabilities_cpu[bin_idx])
                     event_seeds.append(bin_seeds)
                     event_hit_scores.append(hit_score_all[bin_idx])
 
@@ -318,7 +322,7 @@ def validate_function(
 
                 # We shuffle the features in the Fourier embedding for the current event:
                 encoded_hits, transformer_output, attention_maps = prepare_event_encoding(
-                    model=model, event_hits=event_hits, event_mask=event_masks, features=features
+                    model=model, event_hits=event_hits, event_mask=event_masks, features=features, return_logits=True
                 )
 
                 # We define which loss type we want to use:
