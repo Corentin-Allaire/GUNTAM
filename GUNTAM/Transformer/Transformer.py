@@ -195,8 +195,8 @@ class MultiHeadAttention(nn.Module):
         Returns:
             Tuple of:
                 - Output tensor of shape (batch_size, seq_len, d_model)
-                                - Raw attention logits of shape (batch_size, num_heads, seq_len, seq_len)
-                                    for the manual path, or None if use_pytorch=True
+                - Raw attention logits of shape (batch_size, num_heads, seq_len, seq_len)
+                    for the manual path, or None if use_pytorch=True
         """
 
         batch_size = x.size(0)
@@ -252,10 +252,6 @@ class MultiHeadAttention(nn.Module):
             q, k, v = qkv.transpose(1, 2).chunk(3, dim=-1)
 
             attn_output, attn_logits = manual_scaled_dot_product_attention(q, k, v, key_mask)
-
-            # If multiple heads, extracting the attention weights doesn't make sense
-            # if self.num_heads > 1:
-            #     attn_logits = attn_logits.mean(dim=1, keepdim=True)  # average over heads
 
             # Concatenate heads back: (batch_size, seq_len, model_dim)
             output = attn_output.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
