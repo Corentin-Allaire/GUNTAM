@@ -118,6 +118,20 @@ class TestSeedTransformerForward:
         assert not torch.isnan(output).any(), "Output contains NaN values"
         assert not torch.isnan(attn_weights).any(), "Attention weights contain NaN values"
 
+    def test_adjacency_logits_and_probabilities_have_distinct_contracts(self):
+        cfg = make_config(nb_layers_t=1, nb_heads=2, dim_embedding=32)
+        model = SeedTransformer(transformer_config=cfg)
+        model.eval()
+        hits, mask = self._make_inputs(batch_size=2, seq_len=6)
+        encoded_hits = model.embedding(hits)
+
+        _, logits = model.compute_adjacency_logits(encoded_hits, mask)
+        _, probabilities = model.compute_adjacency(encoded_hits, mask)
+
+        assert torch.any(logits < 0)
+        assert torch.allclose(probabilities, torch.softmax(logits, dim=-1))
+        assert torch.allclose(probabilities.sum(dim=-1), torch.ones(2, 6))
+
     def test_forward_with_mask(self):
         cfg = make_config(nb_layers_t=2, nb_heads=2, dim_embedding=32)
         model = SeedTransformer(transformer_config=cfg)

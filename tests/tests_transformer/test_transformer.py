@@ -109,7 +109,7 @@ class TestScaledDotProductAttention:
         k = torch.randn(batch_size, num_heads, seq_len, d_k)
         v = torch.randn(batch_size, num_heads, seq_len, d_k)
 
-        # Mask last 2 query positions (True = masked)
+        # Mask the last 2 key positions (True = masked)
         mask = torch.zeros(batch_size, num_heads, seq_len, seq_len, dtype=torch.bool)
         mask[:, :, :, -2:] = True
 
@@ -119,8 +119,8 @@ class TestScaledDotProductAttention:
         assert output.shape == (batch_size, num_heads, seq_len, d_k)
         assert logits.shape == (batch_size, num_heads, seq_len, seq_len)
 
-        # Masked query rows in logits should be -inf everywhere
-        assert (logits[:, :, :, -2:] == 0).all()
+        # Masked key columns should be -inf in the returned logits.
+        assert torch.isneginf(logits[:, :, :, -2:]).all()
 
         # Unmasked query rows should be finite
         assert torch.isfinite(logits[:, :, :, :-2]).all()
@@ -159,12 +159,11 @@ class TestScaledDotProductAttention:
         # Compare outputs
         assert torch.allclose(out_manual, out_torch, atol=1e-6)
 
-        # Recompute expected attention weights (post-softmax) to compare explicitly
+        # Recompute expected raw attention logits to compare explicitly.
         scale = 1.0 / math.sqrt(d_k)
         logits_expected = torch.matmul(q, k.transpose(-2, -1)) * scale
         logits_expected = logits_expected.masked_fill(mask, float("-inf"))
-        weights_expected = torch.softmax(logits_expected, dim=-1)
-        assert torch.allclose(logits_manual, weights_expected, atol=1e-6)
+        assert torch.allclose(logits_manual, logits_expected, atol=1e-6)
 
 
 class TestMultiHeadAttention:
@@ -186,6 +185,20 @@ class TestMultiHeadAttention:
         """Test that initialization raises error when model_dim not divisible by num_heads."""
         with pytest.raises(ValueError):
             MultiHeadAttention(512, 257, 8, use_pytorch=False)  # 257 is not divisible by 8
+
+    def test_compute_attention_returns_logits_and_compute_attention_returns_probabilities(self):
+        mha = MultiHeadAttention(input_dim=4, model_dim=4, num_heads=1, use_pytorch=False)
+        hits = torch.randn(2, 5, 4)
+        mask = torch.zeros(2, 5, dtype=torch.bool)
+        mask[:, -1] = True
+
+        logits = mha.compute_attention_logits(hits, mask)
+        probabilities = mha.compute_attention(hits, mask)
+
+        assert torch.isneginf(logits[..., -1]).all()
+        assert torch.any(logits[..., :-1] < 0)
+        assert torch.allclose(probabilities, torch.softmax(logits, dim=-1))
+        assert torch.allclose(probabilities.sum(dim=-1), torch.ones(2, 1, 5))
 
     @pytest.mark.parametrize("use_pytorch", [False, True])
     def test_forward_pass(self, use_pytorch):

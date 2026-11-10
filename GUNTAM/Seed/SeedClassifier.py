@@ -69,8 +69,8 @@ class SeedClassifier(nn.Module):
             - scores (Tensor): Classifier score (probability of the "true" class) per seed.
         """
         seed = self.prepare_seed_features(x, nb_hits_features)
-        proba = self.classifier(seed)
-        scores = proba[:, 1]
+        logits = self.classifier(seed)
+        scores = torch.softmax(logits, dim=1)[:, 1]
         keep_mask = scores >= self.threshold
         return keep_mask, scores
 

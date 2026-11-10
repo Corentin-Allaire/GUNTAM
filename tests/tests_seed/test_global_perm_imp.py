@@ -18,4 +18,8 @@ def test_validation_function(data_path=data_path, dataset_name="odd_output_new_5
 
     result = validate_function(model=transformer, file_indices=list(range(len(dataset.file_paths))), dataset=dataset, cfg=cfg)
 
+<<<<<<< HEAD
     assert round(result) == 1005
+=======
+    assert round(result) == 44
+>>>>>>> b4e1cc5 (fix issue with attention not return logit in training)
